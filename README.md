@@ -33,6 +33,7 @@ SaaS (OpenAI / Anthropic SDK, curl)          Nexus (Railway → Funnel → Caddy
    ├─ /v1/chat/completions   OpenAI, streaming, tools, images
    ├─ /v1/messages           Anthropic Messages, streaming, tool_use
    ├─ /v1/embeddings  /v1/rerank
+   ├─ /v1/audio/transcriptions  /v1/audio/speech   OpenAI audio: Whisper in, Piper (Danish) out
    ├─ /v1/systemone          Jev's System One (Laya / Clef / d3 / d1, or hosted Jev)
    ├─ keys · tenants · RPM/TPM · monthly budgets · max parallel
    ├─ router: routes (auto · fast · agent · smart · code · multilingual · vision · embed · rerank · systemone),
@@ -101,6 +102,11 @@ node deploy/migrate-nexus.mjs  # once: Nexus's Qwen3.6 + bge-m3 (linked), tenant
 ./deploy/cutover.sh          # stop Nexus's model servers; mux answers their ports (8090, 8094, 8099)
 ./deploy/rollback.sh         # give Nexus its servers back
 ```
+
+Speech: `./deploy/audio.sh` installs whisper.cpp (large-v3-turbo, `whisper` on route `transcribe`, :8310) and Piper
+with the Danish voice da_DK-talesyntese-medium (`piper-da` on route `speak`, :8311, `server/tts/piper_server.py`) as
+launchd agents com.mux.whisper and com.mux.tts, and registers them; the gateway gets them as `mac-studio/…` on its
+next sync. Callers use OpenAI's audio API on mux; audio is never logged.
 
 Logs: `~/.mux/logs/mux.log`, one per model in `~/.mux/logs/models/`. Data: `~/.mux/mux.db` (SQLite).
 Models: `~/.mux/models/` (downloads; `imported/` holds links to files elsewhere).
