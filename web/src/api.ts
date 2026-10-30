@@ -91,7 +91,7 @@ export interface SystemInfo {
   series: { ts: number; mem_total_gb: number; mem_used_gb: number; mem_free_gb: number; swap_gb: number; pressure: number; mux_gb: number; loaded: string; cpu: number; disk_free_gb: number }[];
   version: string; uptimeS: number; role?: "all" | "gateway" | "node"; name?: string;
 }
-export interface Settings { memoryBudgetGb: number; memoryHeadroomGb: number; diskReserveGb: number; keepAliveMin: number; maxLoaded: number; retentionDays: number; pressureGuard: boolean; logBodies: boolean }
+export interface Settings { memoryBudgetGb: number; memoryHeadroomGb: number; diskReserveGb: number; keepAliveMin: number; maxLoaded: number; retentionDays: number; pressureGuard: boolean; logBodies: boolean; assistantModel?: string }
 export interface MuxEvent { id: number; ts: number; level: "info" | "warn" | "error"; source: string; message: string; data: string | null }
 export interface Finding { title: string; kind: "needs-attention" | "pattern"; priority: "high" | "medium" | "low"; description: string; suggestion: string; evidence: { request_id: string; quote: string }[]; source: "rules" | "model" }
 export interface LensRun { id: string; ts: number; status: string; title: string; filters: Record<string, unknown>; criteria: string; model_id: string | null; coverage: { eligible: number; screened: number; errors: number } | null; findings: Finding[]; duration_ms: number | null; error: string | null }

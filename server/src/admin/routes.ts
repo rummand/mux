@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { advise, recommendStack, USE_CASES, type UseCase } from "../advisor.js";
@@ -19,6 +19,7 @@ import { systemStats } from "../runtime/system.js";
 import { createKey, deleteTenant, getTenant, listKeys, listTenants, revokeKey, upsertTenant } from "../tenants.js";
 import { overview, requestDetail, requestLog, systemSeries, traces } from "./stats.js";
 import { timingSafeEqual } from "node:crypto";
+import { registerAssistant } from "../assistant.js";
 
 const ok = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 
@@ -52,7 +53,7 @@ export function registerAdmin(app: FastifyInstance) {
     });
     api.get("/events", async (req) => {
       const q = req.query as { limit?: string; level?: string };
-      return db.prepare(`SELECT * FROM events ${q.level ? "WHERE level = ?" : ""} ORDER BY ts DESC LIMIT ?`).all(...(q.level ? [q.level] : []), Number(q.limit ?? 200));
+      return db.prepare(`SELECT * FROM events ${q.level ? "WHERE level = ?" : ""} ORDER BY ts DESC LIMIT ?`).all(...(q.level ? [q.level] : []), Math.min(Math.max(Math.floor(Number(q.limit)) || 200, 1), 1000));
     });
 
     // ── Models ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -252,7 +253,7 @@ export function registerAdmin(app: FastifyInstance) {
     // ── Requests, traces, benchmarks, Lens ─────────────────────────────────────────────────────────────────────
     api.get("/requests", async (req) => {
       const q = req.query as Record<string, string>;
-      return requestLog({ ...q, before: q.before ? Number(q.before) : undefined, limit: q.limit ? Number(q.limit) : undefined });
+      return requestLog({ ...q, before: q.before ? Number(q.before) : undefined, limit: Number(q.limit) > 0 ? Math.floor(Number(q.limit)) : undefined });
     });
     api.get("/requests/:id", async (req, reply) => requestDetail((req.params as { id: string }).id) ?? reply.code(404).send({ error: "no such request" }));
     api.get("/traces", async (req) => { const q = req.query as { range?: string; tenant?: string }; return traces(q.range, q.tenant); });
@@ -275,6 +276,17 @@ export function registerAdmin(app: FastifyInstance) {
       return settings();
     });
     api.get("/playground-key", async () => ({ key: playgroundKey() }));
+    registerAssistant(api, app);
+
+    // ── Logs: the end of mux's own log or a model server's, filtered ───────────────────────────────────────────
+    api.get("/logs", async (req, reply) => {
+      const q = req.query as { source?: string; model?: string; grep?: string; lines?: string };
+      if (q.source === "model" && !/^[a-z0-9][a-z0-9._/-]*$/i.test(q.model ?? "")) return reply.code(400).send({ error: "a model id is required" });
+      if (q.model?.includes("..")) return reply.code(400).send({ error: "a model id is required" });
+      const p = q.source === "model" ? join(config.logsDir, "models", `${q.model}.log`) : join(config.logsDir, "mux.log");
+      if (!existsSync(p)) return { log: "", note: q.source === "model" ? "this model has no log here (it has not run on this machine)" : "no mux.log on this machine: here mux logs to stdout (on Railway, see the service's logs); GET /events has what mux recorded" };
+      return { log: tail(p, Math.min(Number(q.lines) || 120, 400), q.grep), path: p };
+    });
 
     // ── Live: every finished request, download progress, benchmark and runtime events, as server-sent events ──
     api.get("/live", (req, reply) => {
@@ -295,6 +307,19 @@ function remoteInstance(m: Model, p: Provider | undefined) {
   if (m.backend !== "node" || !p?.info?.instances) return null;
   const i = p.info.instances.find((x) => x.id === m.upstream_model);
   return i ? { ...i, remote: true } : null;
+}
+
+/** The last `lines` lines of a file (from its last 4 MB), only those containing `grep` when given. */
+function tail(path: string, lines: number, grep?: string): string {
+  const size = statSync(path).size;
+  const start = Math.max(0, size - 4 * 1024 * 1024);
+  const fd = openSync(path, "r");
+  const buf = Buffer.alloc(size - start);
+  try { readSync(fd, buf, 0, buf.length, start); } finally { closeSync(fd); }
+  let all = buf.toString("utf8").split("\n");
+  if (start > 0) all = all.slice(1);
+  if (grep) { const g = grep.toLowerCase(); all = all.filter((l) => l.toLowerCase().includes(g)); }
+  return all.slice(-lines).join("\n");
 }
 
 /** The playground's own key, kept for the dashboard: requests from the playground are metered like anyone's. */

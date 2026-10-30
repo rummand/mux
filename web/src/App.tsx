@@ -3,7 +3,7 @@ import { BrowserRouter, NavLink, Navigate, Route, Routes } from "react-router-do
 import { api, getToken, setToken, setUnauthorizedHandler, type SystemInfo } from "./api";
 import { Button, cx, Input, Meter } from "./components/ui";
 import { fmtGb } from "./format";
-import { useApi, useLiveStatus } from "./hooks";
+import { useApi, useLiveStatus, usePersisted } from "./hooks";
 import OverviewPage from "./pages/Overview";
 import TenantsPage from "./pages/Tenants";
 import TenantDetailPage from "./pages/TenantDetail";
@@ -18,6 +18,7 @@ import SystemPage from "./pages/System";
 import PlaygroundPage from "./pages/Playground";
 import ProvidersPage from "./pages/Providers";
 import { Scoped } from "./components/Scope";
+import { AssistantPanel, sparkle } from "./components/Assistant";
 
 const icon = (d: string) => <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={d} /></svg>;
 const NAV: { to: string; label: string; icon: ReactNode; group?: string }[] = [
@@ -67,7 +68,7 @@ function Wordmark({ small }: { small?: boolean }) {
   );
 }
 
-function TopBar({ onMenu }: { onMenu: () => void }) {
+function TopBar({ onMenu, onAssistant }: { onMenu: () => void; onAssistant: () => void }) {
   const live = useLiveStatus();
   const { data } = useApi<SystemInfo>("/system", { range: "15m" }, 10_000, null);
   const loaded = data?.instances.filter((i) => i.state === "ready").length ?? 0;
@@ -90,6 +91,7 @@ function TopBar({ onMenu }: { onMenu: () => void }) {
           <Meter value={b.usedGb} max={b.budgetGb} tone={b.usedGb / b.budgetGb > 0.9 ? "bad" : b.usedGb / b.budgetGb > 0.7 ? "warn" : "accent"} height={5} />
         </div>
       )}
+      <Button size="sm" onClick={onAssistant} title="Assistant (⌘J)"><span className="inline-flex items-center gap-1.5"><span className="text-accent">{sparkle}</span>Assistant</span></Button>
       <Button size="sm" variant="ghost" onClick={() => { setToken(""); location.reload(); }}>Sign out</Button>
     </header>
   );
@@ -97,6 +99,12 @@ function TopBar({ onMenu }: { onMenu: () => void }) {
 
 function Shell() {
   const [open, setOpen] = useState(false);
+  const [assistant, setAssistant] = usePersisted("assistant.open", false);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "j") { e.preventDefault(); setAssistant(!assistant); } };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [assistant, setAssistant]);
   return (
     <div className="flex min-h-full">
       <aside className={cx("fixed inset-y-0 left-0 z-40 w-56 shrink-0 border-r border-line bg-s1 transition-transform lg:sticky lg:top-0 lg:h-screen lg:translate-x-0", open ? "translate-x-0" : "-translate-x-full")}>
@@ -117,8 +125,8 @@ function Shell() {
         </div>
       </aside>
       {open && <div className="fixed inset-0 z-30 bg-black/40 lg:hidden" onClick={() => setOpen(false)} />}
-      <div className="flex min-w-0 flex-1 flex-col">
-        <TopBar onMenu={() => setOpen(true)} />
+      <div className={cx("flex min-w-0 flex-1 flex-col transition-[padding]", assistant && "xl:pr-[460px]")}>
+        <TopBar onMenu={() => setOpen(true)} onAssistant={() => setAssistant(!assistant)} />
         <main className="mx-auto w-full max-w-[1500px] flex-1 p-4 md:p-6">
           <Routes>
             <Route path="/" element={<OverviewPage />} />
@@ -138,6 +146,7 @@ function Shell() {
           </Routes>
         </main>
       </div>
+      <AssistantPanel open={assistant} onClose={() => setAssistant(false)} />
     </div>
   );
 }

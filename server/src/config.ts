@@ -42,6 +42,8 @@ export const defaultSettings = {
   pressureGuard: true,
   /** Keep request/response bodies (truncated) for every request, not only failed ones. */
   logBodies: false,
+  /** The route or model the dashboard's assistant thinks with. */
+  assistantModel: "auto",
 };
 export type Settings = typeof defaultSettings;
 
