@@ -4,7 +4,7 @@ import fastifyStatic from "@fastify/static";
 import { existsSync } from "node:fs";
 import { config } from "./config.js";
 import { db, event, now, settings } from "./db.js";
-import { getModel, getRoute, listModels, listRoutes, upsertModel, upsertRoute } from "./models.js";
+import { getModel, getRoute, listModels, listRoutes, upsertModel, upsertRoute, type Kind } from "./models.js";
 import { registerGateway } from "./api/gateway.js";
 import { registerAdmin } from "./admin/routes.js";
 import { adoptDownloaded } from "./hf.js";
@@ -16,7 +16,7 @@ import { systemStats } from "./runtime/system.js";
 /** First boot: the routes every SaaS can name, and Laya for System One. Models are added by download or import. */
 function seed() {
   {
-    const routes: [string, string, "chat" | "embedding" | "rerank" | "systemone", "priority" | "auto" | "fastest" | "quality"][] = [
+    const routes: [string, string, Kind, "priority" | "auto" | "fastest" | "quality"][] = [
       ["auto", "mux picks per request: tools, code, reasoning, Danish, images, length — and what is already loaded", "chat", "auto"],
       ["fast", "Short answers, classification, extraction: the fastest model that can do it", "chat", "fastest"],
       ["agent", "Agents with tools: reliable tool calls first", "chat", "priority"],
@@ -27,6 +27,8 @@ function seed() {
       ["embed", "Embeddings for RAG and search", "embedding", "priority"],
       ["rerank", "Reranking for RAG: query + documents → relevance", "rerank", "priority"],
       ["systemone", "Jev's System One: fast closed decisions between agent moves (Laya here, Jev hosted)", "systemone", "priority"],
+      ["transcribe", "Speech to text: OpenAI's /v1/audio/transcriptions (Whisper)", "transcription", "priority"],
+      ["speak", "Text to speech: OpenAI's /v1/audio/speech", "speech", "priority"],
     ];
     // Any route missing (a first boot, or one added in a newer mux) is created empty; existing ones are left as they are.
     for (const [name, description, kind, strategy] of routes) if (!getRoute(name)) upsertRoute({ name, description, kind, strategy, candidates: [] });

@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { listModels, listRoutes } from "../models.js";
 import { runChat, type ChatBody } from "../router/chat.js";
+import { runAudio, type AudioKind } from "../router/audio.js";
 import { runEmbeddings } from "../router/embed.js";
 import { MuxError, toMuxError } from "../router/errors.js";
 import { check, enter, leave } from "../router/limits.js";
@@ -147,7 +148,35 @@ async function simple(req: FastifyRequest, reply: FastifyReply, endpoint: string
   }
 }
 
+/** Speech to text or text to speech: the upstream's audio or JSON goes back as it came. */
+async function audio(req: FastifyRequest, reply: FastifyReply, kind: AudioKind) {
+  const ctx = begin(req, reply, kind === "transcription" ? "openai.audio.transcriptions" : "openai.audio.speech", "openai");
+  if (!ctx) return reply;
+  ctx.bodyReq = null; // audio is never logged
+  const ac = abortOnClose(reply);
+  try {
+    const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.from(JSON.stringify(req.body ?? {}));
+    const query = (req.query ?? {}) as { model?: string };
+    const requested = query.model ?? (kind === "speech" ? (req.body as { model?: string } | undefined)?.model : undefined);
+    const res = await runAudio(ctx, kind, requested, raw, header(req, "content-type") ?? "application/json", ac.signal);
+    const out = Buffer.from(await res.arrayBuffer());
+    finish(ctx, 200);
+    reply.headers(muxHeaders(ctx));
+    return reply.type(res.headers.get("content-type") ?? "application/octet-stream").send(out);
+  } catch (e) {
+    const err = toMuxError(e);
+    finish(ctx, err.status, { type: err.type, message: err.message });
+    return sendError(reply, "openai", err);
+  } finally {
+    leave(ctx.tenant);
+  }
+}
+
 export function registerGateway(app: FastifyInstance) {
+  // Audio uploads are passed on untouched
+  app.addContentTypeParser("multipart/form-data", { parseAs: "buffer" }, (_req, body, done) => done(null, body));
+  app.post("/v1/audio/transcriptions", (req, reply) => audio(req, reply, "transcription"));
+  app.post("/v1/audio/speech", (req, reply) => audio(req, reply, "speech"));
   app.post("/v1/chat/completions", (req, reply) => chat(req, reply, "openai"));
   app.post("/v1/messages", (req, reply) => chat(req, reply, "anthropic"));
   app.post("/v1/embeddings", (req, reply) => simple(req, reply, "openai.embeddings", (ctx, s) => runEmbeddings(ctx, req.body as never, s)));
