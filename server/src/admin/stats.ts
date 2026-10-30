@@ -10,7 +10,7 @@ export const RANGES: Record<string, { ms: number; bucket: number }> = {
   "30d": { ms: 30 * 86400_000, bucket: 12 * 3600_000 },
 };
 
-interface R { ts: number; tenant_id: string; model_id: string | null; route: string | null; endpoint: string; status: number; error_type: string | null; latency_ms: number; ttft_ms: number | null; tps: number | null; prompt_tokens: number; completion_tokens: number; cached_tokens: number; overhead_ms: number | null; cold_start: number; fallbacks: number; agent: string | null; end_user: string | null; stream: number; tools: number }
+interface R { ts: number; tenant_id: string; model_id: string | null; route: string | null; endpoint: string; status: number; error_type: string | null; latency_ms: number; ttft_ms: number | null; tps: number | null; prompt_tokens: number; completion_tokens: number; cached_tokens: number; overhead_ms: number | null; cold_start: number; fallbacks: number; agent: string | null; end_user: string | null; stream: number; tools: number; provider_id: string | null; cost_usd: number }
 
 const pct = (xs: number[], p: number) => {
   if (!xs.length) return null;
@@ -29,7 +29,7 @@ function summarise(rows: R[]) {
   return {
     requests: rows.length, errors: rows.length - ok.length, errorRate: rows.length ? (rows.length - ok.length) / rows.length : 0,
     promptTokens: rows.reduce((a, r) => a + r.prompt_tokens, 0), completionTokens: rows.reduce((a, r) => a + r.completion_tokens, 0),
-    cachedTokens: rows.reduce((a, r) => a + r.cached_tokens, 0),
+    cachedTokens: rows.reduce((a, r) => a + r.cached_tokens, 0), costUsd: Math.round(rows.reduce((a, r) => a + (r.cost_usd ?? 0), 0) * 10000) / 10000,
     latencyP50: round(pct(lat, 50)), latencyP95: round(pct(lat, 95)), latencyP99: round(pct(lat, 99)), latencyAvg: round(avg(lat)),
     ttftP50: round(pct(ttft, 50)), ttftP95: round(pct(ttft, 95)), tpsAvg: round(avg(tps), 1), tpsP50: round(pct(tps, 50), 1),
     overheadP50: round(pct(over, 50), 2), overheadP99: round(pct(over, 99), 2),
@@ -55,7 +55,7 @@ export function overview(range = "24h", f: { tenant?: string; model?: string; ag
   if (f.tenant) { where.push("tenant_id = ?"); args.push(f.tenant); }
   if (f.model) { where.push("model_id = ?"); args.push(f.model); }
   if (f.agent) { where.push("agent = ?"); args.push(f.agent); }
-  const rows = db.prepare(`SELECT ts, tenant_id, model_id, route, endpoint, status, error_type, latency_ms, ttft_ms, tps, prompt_tokens, completion_tokens, cached_tokens, overhead_ms, cold_start, fallbacks, agent, end_user, stream, tools
+  const rows = db.prepare(`SELECT ts, tenant_id, model_id, route, endpoint, status, error_type, latency_ms, ttft_ms, tps, prompt_tokens, completion_tokens, cached_tokens, overhead_ms, cold_start, fallbacks, agent, end_user, stream, tools, provider_id, cost_usd
     FROM requests WHERE ${where.join(" AND ")} ORDER BY ts LIMIT 500000`).all(...args) as R[];
 
   const buckets = new Map<number, R[]>();
@@ -68,7 +68,7 @@ export function overview(range = "24h", f: { tenant?: string; model?: string; ag
     const point: Record<string, number | null> = {
       t, requests: s.requests, errors: s.errors, promptTokens: s.promptTokens, completionTokens: s.completionTokens,
       latencyP50: s.latencyP50, latencyP95: s.latencyP95, ttftP50: s.ttftP50, tps: s.tpsAvg, overheadP99: s.overheadP99,
-      rpm: s.requests / (r.bucket / 60_000),
+      rpm: s.requests / (r.bucket / 60_000), costUsd: s.costUsd,
     };
     for (const tn of tenants) point[`tenant:${tn}`] = rs.filter((x) => x.tenant_id === tn).length;
     for (const m of models) point[`model:${m}`] = rs.filter((x) => (x.model_id ?? "—") === m).length;
@@ -80,7 +80,7 @@ export function overview(range = "24h", f: { tenant?: string; model?: string; ag
   });
   return {
     range, bucketMs: r.bucket, since, totals: summarise(rows), series, latencyHistogram, tenants, models,
-    byTenant: groupBy(rows, (x) => x.tenant_id), byModel: groupBy(rows, (x) => x.model_id), byRoute: groupBy(rows, (x) => x.route),
+    byTenant: groupBy(rows, (x) => x.tenant_id), byProvider: groupBy(rows, (x) => x.provider_id ?? "local"), byModel: groupBy(rows, (x) => x.model_id), byRoute: groupBy(rows, (x) => x.route),
     byEndpoint: groupBy(rows, (x) => x.endpoint), byAgent: groupBy(rows, (x) => x.agent).slice(0, 20), byUser: groupBy(rows, (x) => x.end_user).slice(0, 20),
     byError: groupBy(rows.filter((x) => x.status >= 400), (x) => `${x.status} ${x.error_type ?? ""}`.trim()),
   };

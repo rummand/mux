@@ -30,6 +30,15 @@ function spent(col: "tenant_id" | "key_id", id: string): number {
   return row.n;
 }
 
+let usdCache: { at: number; byTenant: Map<string, number> } | null = null;
+function spentUsd(tenantId: string): number {
+  if (!usdCache || Date.now() - usdCache.at > 30_000) {
+    const rows = db.prepare("SELECT tenant_id, COALESCE(SUM(cost_usd), 0) usd FROM requests WHERE ts >= ? GROUP BY tenant_id").all(monthStart()) as { tenant_id: string; usd: number }[];
+    usdCache = { at: Date.now(), byTenant: new Map(rows.map((r) => [r.tenant_id, r.usd])) };
+  }
+  return usdCache.byTenant.get(tenantId) ?? 0;
+}
+
 export function check(tenant: Tenant, key: ApiKey) {
   if (tenant.status !== "active") throw new LimitError(`${tenant.name} is paused in mux`, 3600, "tenant_paused");
   hit(`t:${tenant.id}`, tenant.rpm_limit, tenant.name);
@@ -40,6 +49,8 @@ export function check(tenant: Tenant, key: ApiKey) {
   }
   if (tenant.monthly_token_budget && spent("tenant_id", tenant.id) >= tenant.monthly_token_budget)
     throw new LimitError(`${tenant.name} has used its ${tenant.monthly_token_budget.toLocaleString()} tokens for this month`, 86400, "budget_exceeded");
+  if (tenant.monthly_usd_budget && spentUsd(tenant.id) >= tenant.monthly_usd_budget)
+    throw new LimitError(`${tenant.name} has spent its $${tenant.monthly_usd_budget} on paid models this month`, 86400, "budget_exceeded");
   if (key.monthly_token_budget && spent("key_id", key.id) >= key.monthly_token_budget)
     throw new LimitError(`the key ${key.name} has used its ${key.monthly_token_budget.toLocaleString()} tokens for this month`, 86400, "budget_exceeded");
 }

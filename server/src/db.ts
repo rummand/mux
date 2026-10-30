@@ -103,12 +103,35 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS events_ts ON events(ts);
 
+-- Where compute comes from: mux nodes (a Mac running mux, reached over HTTPS) and cloud APIs (OpenAI-compatible).
+CREATE TABLE IF NOT EXISTS providers (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL,                 -- mux | openai | anthropic | openrouter | groq | together | gemini | mistral | deepseek | fireworks | cerebras | custom
+  base_url TEXT NOT NULL,
+  api_key TEXT,                       -- cloud: the provider's key; mux: the key this gateway holds as a tenant on the node
+  admin_token TEXT,                   -- mux: the node's admin token, for syncing and managing its models
+  enabled INTEGER DEFAULT 1,
+  status TEXT DEFAULT 'unknown',      -- online | offline | error | unknown
+  last_seen INTEGER, error TEXT, info TEXT,
+  created_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS system_samples (
   ts INTEGER PRIMARY KEY,
   mem_total_gb REAL, mem_used_gb REAL, mem_free_gb REAL, swap_gb REAL, pressure INTEGER,
   mux_gb REAL, loaded TEXT, cpu REAL, disk_free_gb REAL
 );
 `);
+
+/** Columns added after a table first shipped: created on databases that predate them. */
+function addColumns(table: string, cols: Record<string, string>) {
+  const have = new Set((db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name));
+  for (const [name, type] of Object.entries(cols)) if (!have.has(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`);
+}
+addColumns("models", { provider_id: "TEXT", cost_in: "REAL DEFAULT 0", cost_out: "REAL DEFAULT 0" });
+addColumns("requests", { provider_id: "TEXT", cost_usd: "REAL DEFAULT 0" });
+addColumns("tenants", { monthly_usd_budget: "REAL DEFAULT 0" });
 
 export const now = () => Date.now();
 export const json = <T>(s: string | null | undefined, fallback: T): T => {

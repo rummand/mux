@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { config } from "../config.js";
 import { event, settings } from "../db.js";
 import { getModel, listModels, type Model } from "../models.js";
+import { getProvider } from "../providers.js";
 import { rssGb, systemStats } from "./system.js";
 
 const GB = 1024 ** 3;
@@ -185,9 +186,16 @@ async function load(m: Model): Promise<Instance> {
 /** Load a model if it is not, and say where to reach it. Pair every call with `release`. */
 export async function acquire(m: Model): Promise<Upstream> {
   if (!m.enabled) throw new ModelUnavailable(`${m.id} is disabled`, 403, "model_disabled");
-  if (m.backend === "external" || m.backend === "jev") {
-    const headers: Record<string, string> = m.api_key ? { authorization: `Bearer ${m.api_key}` } : {};
-    return { baseUrl: (m.base_url ?? "").replace(/\/$/, ""), model: m.upstream_model || m.id, headers, coldStartMs: 0 };
+  if (m.backend === "external" || m.backend === "jev" || m.backend === "node") {
+    const p = m.provider_id ? getProvider(m.provider_id) : undefined;
+    if (p && !p.enabled) throw new ModelUnavailable(`provider ${p.name} is disabled`, 403, "provider_disabled");
+    if (p?.kind === "mux" && p.status !== "online") throw new ModelUnavailable(`node ${p.name} is offline${p.error ? `: ${p.error}` : ""}`, 503, "node_offline");
+    const key = m.api_key || p?.api_key;
+    const headers: Record<string, string> = key ? { authorization: `Bearer ${key}` } : {};
+    // A node is asked for exactly this model: the gateway does the falling back, across nodes and clouds.
+    if (m.backend === "node") headers["x-mux-no-fallback"] = "1";
+    const base = m.backend === "node" ? `${p?.base_url ?? ""}/v1` : m.base_url || p?.base_url || "";
+    return { baseUrl: base.replace(/\/$/, ""), model: m.upstream_model || m.id, headers, coldStartMs: 0 };
   }
   const t0 = Date.now();
   let inst = instances.get(m.id);
@@ -232,6 +240,7 @@ export async function warm(id: string) {
 }
 
 export const isLoaded = (id: string) => instances.get(id)?.state === "ready";
+export const instanceState = (id: string) => instances.get(id)?.state ?? null;
 export const loadedIds = () => [...instances.keys()];
 
 export interface InstanceStatus {

@@ -7,7 +7,11 @@ const home = env.MUX_HOME ?? join(homedir(), ".mux");
 
 export const config = {
   home,
-  port: Number(env.MUX_PORT ?? 7070),
+  /** all: gateway and models on this machine; gateway: routes only (Railway), no model processes; node: a provider for gateways. */
+  role: (env.MUX_ROLE ?? "all") as "all" | "gateway" | "node",
+  /** How this mux names itself to the nodes it joins. */
+  name: env.MUX_NAME ?? env.RAILWAY_SERVICE_NAME ?? "local",
+  port: Number(env.MUX_PORT ?? env.PORT ?? 7070),
   host: env.MUX_HOST ?? "0.0.0.0",
   /** The dashboard's bearer token. install.sh writes one into ~/.mux/mux.env; dev falls back to "dev". */
   adminToken: env.MUX_ADMIN_TOKEN ?? "dev",

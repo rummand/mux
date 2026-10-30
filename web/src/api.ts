@@ -9,7 +9,16 @@ export class ApiError extends Error { constructor(public status: number, message
 let onUnauthorized: () => void = () => undefined;
 export const setUnauthorizedHandler = (fn: () => void) => { onUnauthorized = fn; };
 
-export async function api<T = unknown>(path: string, opts: { method?: string; body?: unknown; query?: Record<string, string | number | boolean | undefined | null> } = {}): Promise<T> {
+/**
+ * Which machine the node-scoped pages (Models, Advisor, Benchmarks, System) are looking at: null is this mux; a node id
+ * sends the call through the gateway to that node's own admin API (/providers/<id>/proxy/...).
+ */
+let pageScope: string | null = null;
+export const setPageScope = (s: string | null) => { pageScope = s; };
+
+export async function api<T = unknown>(path: string, opts: { method?: string; body?: unknown; query?: Record<string, string | number | boolean | undefined | null>; scope?: string | null } = {}): Promise<T> {
+  const scope = opts.scope === undefined ? pageScope : opts.scope;
+  if (scope) path = `/providers/${encodeURIComponent(scope)}/proxy${path}`;
   const q = opts.query ? Object.entries(opts.query).filter(([, v]) => v !== undefined && v !== null && v !== "").map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`).join("&") : "";
   const res = await fetch(`/api/admin${path}${q ? `?${q}` : ""}`, {
     method: opts.method ?? (opts.body !== undefined ? "POST" : "GET"),
@@ -28,13 +37,13 @@ export interface Summary {
   requests: number; errors: number; errorRate: number; promptTokens: number; completionTokens: number; cachedTokens: number;
   latencyP50: number | null; latencyP95: number | null; latencyP99: number | null; latencyAvg: number | null;
   ttftP50: number | null; ttftP95: number | null; tpsAvg: number | null; tpsP50: number | null;
-  overheadP50: number | null; overheadP99: number | null; coldStarts: number; fallbacks: number; streamShare: number; toolShare: number;
+  overheadP50: number | null; overheadP99: number | null; coldStarts: number; fallbacks: number; streamShare: number; toolShare: number; costUsd?: number;
 }
 export type Group = Summary & { key: string };
 export interface Overview {
   range: string; bucketMs: number; since: number; totals: Summary; series: Record<string, number | null>[];
   latencyHistogram: { bucket: string; count: number }[]; tenants: string[]; models: string[];
-  byTenant: Group[]; byModel: Group[]; byRoute: Group[]; byEndpoint: Group[]; byAgent: Group[]; byUser: Group[]; byError: Group[];
+  byTenant: Group[]; byProvider?: Group[]; byModel: Group[]; byRoute: Group[]; byEndpoint: Group[]; byAgent: Group[]; byUser: Group[]; byError: Group[];
 }
 export interface Caps { quality?: number; speed?: number; tools?: number; code?: number; reasoning?: number; multilingual?: number; vision?: number; context?: number }
 export interface Instance {
@@ -43,15 +52,15 @@ export interface Instance {
 }
 export interface Bench { id: string; model_id: string; ts: number; status: string; results: { name: string; pass: boolean; ms: number; detail: string }[] | string; score: number | null; tps: number | null; prompt_tps: number | null; ttft_ms: number | null; load_ms: number | null; error: string | null }
 export interface Model {
-  id: string; display_name: string; kind: "chat" | "embedding" | "rerank" | "systemone"; backend: "llamacpp" | "mlx" | "external" | "laya" | "jev";
+  id: string; display_name: string; kind: "chat" | "embedding" | "rerank" | "systemone"; backend: "llamacpp" | "mlx" | "external" | "laya" | "jev" | "node";
   path: string | null; mmproj: string | null; base_url: string | null; api_key: string | null; upstream_model: string | null; catalog_id: string | null;
   size_bytes: number; ctx: number; parallel: number; extra_args: string[]; reasoning: "off" | "on" | "auto"; caps: Caps;
   keep_alive_min: number | null; pinned: boolean; enabled: boolean; notes: string; created_at: number; estimateGb: number;
-  instance?: Instance | null; bench?: Bench | null; usage24h?: { n: number; errors: number; tokens: number; tps: number | null } | null; onDisk?: boolean | null;
+  instance?: Instance | null; bench?: Bench | null; provider_id?: string | null; provider?: string | null; cost_in?: number; cost_out?: number; usage24h?: { n: number; errors: number; tokens: number; tps: number | null } | null; onDisk?: boolean | null;
 }
 export interface Route { name: string; description: string; kind: Model["kind"]; strategy: "priority" | "auto" | "fastest" | "quality"; candidates: string[]; created_at: number }
 export interface Tenant {
-  id: string; name: string; description: string; color: string; status: "active" | "paused"; rpm_limit: number; tpm_limit: number; monthly_token_budget: number;
+  id: string; name: string; description: string; color: string; status: "active" | "paused"; rpm_limit: number; tpm_limit: number; monthly_token_budget: number; monthly_usd_budget?: number;
   default_route: string; allowed: string[]; aliases: Record<string, string>; log_bodies: boolean; max_parallel: number; created_at: number;
   keys?: ApiKey[] | number; usage24h?: { n: number; errors: number; tokens: number; last: number } | null; monthTokens?: number;
 }
@@ -80,10 +89,22 @@ export interface SystemInfo {
   failures: Record<string, { at: number; error: string }>; inflight: Record<string, number>;
   budget: { budgetGb: number; usedGb: number; headroomGb: number; maxLoaded: number };
   series: { ts: number; mem_total_gb: number; mem_used_gb: number; mem_free_gb: number; swap_gb: number; pressure: number; mux_gb: number; loaded: string; cpu: number; disk_free_gb: number }[];
-  version: string; uptimeS: number;
+  version: string; uptimeS: number; role?: "all" | "gateway" | "node"; name?: string;
 }
 export interface Settings { memoryBudgetGb: number; memoryHeadroomGb: number; diskReserveGb: number; keepAliveMin: number; maxLoaded: number; retentionDays: number; pressureGuard: boolean; logBodies: boolean }
 export interface MuxEvent { id: number; ts: number; level: "info" | "warn" | "error"; source: string; message: string; data: string | null }
 export interface Finding { title: string; kind: "needs-attention" | "pattern"; priority: "high" | "medium" | "low"; description: string; suggestion: string; evidence: { request_id: string; quote: string }[]; source: "rules" | "model" }
 export interface LensRun { id: string; ts: number; status: string; title: string; filters: Record<string, unknown>; criteria: string; model_id: string | null; coverage: { eligible: number; screened: number; errors: number } | null; findings: Finding[]; duration_ms: number | null; error: string | null }
 export interface TraceRow { trace_id: string; tenant_id: string; agent: string | null; calls: number; started: number; ended: number; prompt_tokens: number; completion_tokens: number; errors: number; tool_calls: number; models: string | null; total_ms: number }
+
+export interface NodeInfo {
+  system?: { memTotalGb: number; memFreeGb: number; swapGb: number; pressure: number; diskFreeGb: number; chip: string; cores: number };
+  instances?: { id: string; state: string; estimateGb: number; inflight: number; rssGb: number | null }[];
+  budget?: { budgetGb: number; usedGb: number }; models?: number; latencyMs?: number; version?: string;
+}
+export interface Provider {
+  id: string; name: string; kind: string; base_url: string; api_key: string | null; admin_token: string | null; enabled: boolean;
+  status: "online" | "offline" | "error" | "unknown"; last_seen: number | null; error: string | null; info: NodeInfo | null; created_at: number;
+  models: string[]; usage24h: { n: number; errors: number; tokens: number; usd: number } | null;
+}
+export type Presets = Record<string, { name: string; base_url: string; keyUrl: string }>;

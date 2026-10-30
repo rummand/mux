@@ -27,3 +27,11 @@ Speech/voice (mlx-audio :8093), Caddy, LiveKit, CI and builds are untouched.
 **Memory guard:** the free-memory check uses macOS's own available figure (`memory_pressure -Q`), not free+inactive
 pages, which undercount on this busy Mac (26.9 GB "free" vs 48 GB available at cutover). The prompt cache is counted
 at half its ceiling.
+
+**Gateway on Railway, compute as providers (2026-10-30, the owner: "mux goes to railway and the Mac Studio is just one
+provider").** One codebase, three roles: `gateway` (no model processes), `all` (gateway and models on one machine:
+the Mac today), `node`. Nodes are reached over HTTPS and joined with their admin token; the gateway is a tenant on
+each node, so the node meters and limits it like any caller and the gateway does the falling back (it sends
+`x-mux-no-fallback: 1`). Cloud APIs go through their OpenAI-compatible endpoints (Anthropic and Gemini included), so one
+upstream shape covers every provider; the gateway's Anthropic Messages API still translates for callers. SQLite on a
+Railway volume, one replica: enough until the gateway needs to scale out, when Postgres replaces it.

@@ -1,7 +1,29 @@
 # mux
 
-The model router and control plane for the local LLMs our SaaS agents and assistants run on. A SaaS gets a mux API
-key and points its OpenAI or Anthropic SDK at mux; mux picks the model, runs it on the Mac Studio, and records every call.
+The model router and control plane for the LLMs our SaaS agents and assistants run on. A SaaS gets a mux API key and
+points its OpenAI or Anthropic SDK at mux; mux picks the model — on one of our machines or a paid cloud API — and
+records every call.
+
+## Topology
+
+```
+SaaS ──► mux gateway (Railway, MUX_ROLE=gateway)       keys · tenants · routing · metering · USD spend · dashboard
+             │
+             ├─► node: Mac Studio (mux, MUX_ROLE=all) ── llama-server per model (Qwen3.6, bge-m3, Laya, …)
+             │      reached over Tailscale Funnel https://lv426.tail134047.ts.net/mux
+             ├─► node: any other machine running mux
+             └─► cloud: OpenAI · Anthropic · OpenRouter · Groq · Together · Gemini · Mistral · DeepSeek · custom
+```
+
+- **Providers** (Providers page): a *node* is a machine running mux; the gateway becomes a tenant on it, syncs its
+  models every 15 s as `<node>/<model>` (with what is loaded and its memory), and manages it through its admin API
+  (pick the machine at the top of Models, Advisor, Benchmarks or System). A *cloud API* is an OpenAI-compatible base
+  URL with a key; its models are added with a price per million tokens.
+- **Routes mix them**: e.g. `agent` = `mac-studio/qwen3.6-35b-a3b`, then `openai/gpt-…`. A node that goes offline
+  leaves every route until it is back; `auto` prefers loaded local models and uses paid ones when nothing local fits.
+- **Spend**: every call records `cost_usd`; tenants can have a monthly USD budget beside their token budget.
+- A bare model name (`qwen3.6-35b-a3b`) finds the node model of that name, so callers need not know the node.
+- The Mac also answers directly (Nexus keeps its own path via Caddy and the compat ports).
 
 ```
 SaaS (OpenAI / Anthropic SDK, curl)          Nexus (Railway → Funnel → Caddy :8091)
@@ -65,6 +87,13 @@ to make room, after their keep-alive, and when macOS reports memory pressure. Wh
 considered (MLX/omlx, Ollama, llama-swap, LiteLLM, Rust gateways): `docs/research-local-llm.md` and `docs/decisions.md`.
 
 ## Running it
+
+Gateway on Railway (project `mux`, service `mux`, volume at `/data`): `railway up --service mux` builds the
+`Dockerfile` (role gateway). Its admin token and URL are in `~/.mux/railway.env` on the Mac Studio.
+Join a node to it: publish the node (`tailscale funnel --bg --https=443 --set-path=/mux http://127.0.0.1:7070`),
+then `./deploy/join-node.sh`.
+
+On a machine that runs models:
 
 ```
 ./deploy/install.sh          # build, ~/.mux/mux.env (admin token), launchd agent com.mux.server on :7070

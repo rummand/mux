@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, getToken } from "./api";
 
 /** GET an admin endpoint; `pollMs` refreshes it in the background. */
-export function useApi<T>(path: string | null, query?: Record<string, string | number | boolean | undefined | null>, pollMs?: number) {
+export function useApi<T>(path: string | null, query?: Record<string, string | number | boolean | undefined | null>, pollMs?: number, scope?: string | null) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -13,7 +13,7 @@ export function useApi<T>(path: string | null, query?: Record<string, string | n
     const n = ++seq.current;
     if (!quiet) setLoading(true);
     try {
-      const d = await api<T>(path, { query });
+      const d = await api<T>(path, { query, scope });
       if (n === seq.current) { setData(d); setError(null); }
     } catch (e) {
       if (n === seq.current) setError((e as Error).message);

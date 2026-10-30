@@ -12,7 +12,7 @@ export const RANGE_OPTIONS = ["15m", "1h", "6h", "24h", "7d", "30d"].map((r) => 
 /** KPIs, the time charts and the breakdowns for a range, optionally one tenant/model/agent. Shared by Overview and a tenant's page. */
 export function OverviewPanel({ range, tenant, model, agent, showTenants = true, nameOf }: { range: string; tenant?: string; model?: string; agent?: string; showTenants?: boolean; nameOf?: (id: string) => string }) {
   const { data, error } = useApi<Overview>("/overview", { range, tenant, model, agent }, 15_000);
-  const [breakdown, setBreakdown] = useState<"model" | "route" | "endpoint" | "agent" | "user" | "error">("model");
+  const [breakdown, setBreakdown] = useState<"provider" | "model" | "route" | "endpoint" | "agent" | "user" | "error">("provider");
   const colors = useMemo(() => slotMap(data?.tenants ?? []), [data?.tenants]);
   const modelColors = useMemo(() => slotMap(data?.models ?? []), [data?.models]);
   if (error) return <Empty>Could not load the overview: {error}</Empty>;
@@ -24,7 +24,7 @@ export function OverviewPanel({ range, tenant, model, agent, showTenants = true,
     ? data.tenants.slice().sort().map((tn) => ({ key: `tenant:${tn}`, label: label(tn), color: colors.get(tn) ?? OTHER }))
     : [{ key: "requests", label: "Requests", color: SERIES[0] }];
   const modelSeries: SeriesDef[] = data.models.slice().sort().map((m) => ({ key: `model:${m}`, label: m, color: modelColors.get(m) ?? OTHER }));
-  const groups: Record<typeof breakdown, Group[]> = { model: data.byModel, route: data.byRoute, endpoint: data.byEndpoint, agent: data.byAgent, user: data.byUser, error: data.byError };
+  const groups: Record<typeof breakdown, Group[]> = { provider: data.byProvider ?? [], model: data.byModel, route: data.byRoute, endpoint: data.byEndpoint, agent: data.byAgent, user: data.byUser, error: data.byError };
 
   return (
     <div className="min-w-0 space-y-4">
@@ -42,7 +42,7 @@ export function OverviewPanel({ range, tenant, model, agent, showTenants = true,
         <Stat label="Cold starts" value={fmtInt(t.coldStarts)} sub="waited for a model to load" tone={t.coldStarts > 10 ? "warn" : undefined} />
         <Stat label="Fallbacks" value={fmtInt(t.fallbacks)} sub="answered by a later candidate" tone={t.fallbacks > 0 ? "warn" : undefined} />
         <Stat label="Avg latency" value={fmtMs(t.latencyAvg)} sub="successful requests" />
-        <Stat label="Tenants active" value={fmtInt(data.byTenant.length)} sub={`${data.byModel.filter((m) => m.key !== "—").length} models used`} />
+        <Stat label="Cloud spend" value={`$${(t.costUsd ?? 0).toFixed(2)}`} sub={`${(data.byProvider ?? []).filter((p) => p.key !== "local").length} providers used · ${data.byTenant.length} tenants`} />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
@@ -81,6 +81,7 @@ export function OverviewPanel({ range, tenant, model, agent, showTenants = true,
 
       <Card title="Breakdown" pad={false} actions={
         <Segmented value={breakdown} onChange={setBreakdown} options={[
+          { value: "provider", label: "Provider" },
           { value: "model", label: "Model" }, { value: "route", label: "Route" }, { value: "endpoint", label: "Endpoint" },
           { value: "agent", label: "Agent" }, { value: "user", label: "End user" }, { value: "error", label: "Errors" },
         ]} />

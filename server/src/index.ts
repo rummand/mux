@@ -9,6 +9,7 @@ import { registerGateway } from "./api/gateway.js";
 import { registerAdmin } from "./admin/routes.js";
 import { adoptDownloaded } from "./hf.js";
 import { startCompat } from "./compat.js";
+import { startProviderSync } from "./providers.js";
 import { startRuntime, status, stopAll } from "./runtime/manager.js";
 import { systemStats } from "./runtime/system.js";
 
@@ -30,7 +31,7 @@ function seed() {
     // Any route missing (a first boot, or one added in a newer mux) is created empty; existing ones are left as they are.
     for (const [name, description, kind, strategy] of routes) if (!getRoute(name)) upsertRoute({ name, description, kind, strategy, candidates: [] });
   }
-  if (!getModel("laya")) {
+  if (config.role !== "gateway" && !getModel("laya")) {
     upsertModel({ id: "laya", display_name: "Laya (System One)", backend: "laya", kind: "systemone", caps: { speed: 9, quality: 4 },
       notes: "convaiinnovations/laya over ONNX on the CPU (~1.8 GB): Jev-compatible /v1/systemone. The base checkpoint is near chance on real questions until it is trained.", keep_alive_min: 60 });
     upsertRoute({ ...listRoutes().find((r) => r.name === "systemone")!, candidates: ["laya"] });
@@ -74,12 +75,13 @@ if (existsSync(config.webDir)) {
 }
 
 seed();
-adoptDownloaded();
-startRuntime();
+// A gateway holds no models of its own; everything it routes to is a provider's.
+if (config.role !== "gateway") { adoptDownloaded(); startRuntime(); }
+startProviderSync();
 samplers();
 await app.listen({ port: config.port, host: config.host });
-startCompat();
-event("info", "mux", `listening on ${config.host}:${config.port}; models in ${config.modelsDir}; dashboard ${existsSync(config.webDir) ? "served" : "not built"}`);
+if (config.role !== "gateway") startCompat();
+event("info", "mux", `${config.role} \"${config.name}\" listening on ${config.host}:${config.port}; models in ${config.modelsDir}; dashboard ${existsSync(config.webDir) ? "served" : "not built"}`);
 
 const stop = async (sig: string) => {
   event("info", "mux", `${sig}: stopping the model servers`);

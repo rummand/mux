@@ -67,7 +67,7 @@ function Settings({ tenant, onSaved }: { tenant: Detail; onSaved: () => void }) 
     await api(`/tenants/${tenant.id}`, { method: "DELETE" });
     nav("/tenants");
   };
-  const num = (k: "rpm_limit" | "tpm_limit" | "monthly_token_budget" | "max_parallel") => (
+  const num = (k: "rpm_limit" | "tpm_limit" | "monthly_token_budget" | "monthly_usd_budget" | "max_parallel") => (
     <Input type="number" min={0} value={t[k] || ""} placeholder="0 = no limit" onChange={(e) => set(k, Number(e.target.value) || 0)} className="num" />
   );
   return (
@@ -88,6 +88,7 @@ function Settings({ tenant, onSaved }: { tenant: Detail; onSaved: () => void }) 
           <Field label="Tokens per minute">{num("tpm_limit")}</Field>
           <Field label="Max requests in flight">{num("max_parallel")}</Field>
           <Field label="Monthly token budget">{num("monthly_token_budget")}</Field>
+          <Field label="Monthly USD budget" hint="paid cloud models only">{num("monthly_usd_budget")}</Field>
         </div>
         <div className="mt-4">
           <div className="mb-1 flex justify-between text-[12px] text-ink-2 num"><span>This month</span><span>{fmtCompact(month)}{t.monthly_token_budget ? ` of ${fmtCompact(t.monthly_token_budget)}` : " (no cap)"}</span></div>

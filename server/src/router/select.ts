@@ -2,6 +2,7 @@ import { getModel, getRoute, listModels, type Kind, type Model, type Route } fro
 import type { Tenant } from "../tenants.js";
 import { isLoaded } from "../runtime/manager.js";
 import { inCooldown, measuredTps } from "./health.js";
+import { loadedOnNode, providerUp } from "../providers.js";
 
 /** What a request needs, read from the request itself. */
 export interface Features {
@@ -60,6 +61,10 @@ export function resolve(tenant: Tenant, requested: string | undefined, kind: Kin
     if (!allowed(tenant, model.id)) throw new RouteError(`this key may not use model ${model.id}`, 403, "permission_denied");
     return { route: null, model, via };
   }
+  // A bare name of a model a provider has ("qwen3.6-35b-a3b" for "mac-studio/qwen3.6-35b-a3b"): the one that is up.
+  const remote = listModels().filter((m) => m.kind === kind && m.upstream_model === named && m.provider_id && allowed(tenant, m.id));
+  const pick = remote.find((m) => providerUp(m.provider_id)) ?? remote[0];
+  if (pick) return { route: null, model: pick, via: `${named} → ${pick.id}` };
   // Anything else — "gpt-4o", "claude-sonnet-4-5", "" — is the tenant's default for that kind, so a SaaS written for a
   // hosted API works by changing only its base URL and key.
   const fallback = kind === "embedding" ? "embed" : kind === "rerank" ? "rerank" : kind === "systemone" ? "systemone" : tenant.default_route || "auto";
@@ -68,11 +73,15 @@ export function resolve(tenant: Tenant, requested: string | undefined, kind: Kin
   return { route: def, model: null, via: asked ? `${asked} is not a mux route or model → ${tenant.id}'s default ${def.name}` : `default ${def.name}` };
 }
 
+/** In memory and ready: here, on its node, or a cloud API (always ready). */
+export const warm = (m: Model) => isLoaded(m.id) || m.backend === "external" || m.backend === "jev" || (m.backend === "node" && !!m.provider_id && loadedOnNode(m.provider_id, m.upstream_model ?? ""));
+
 const cap = (m: Model, k: keyof Model["caps"], d = 5) => m.caps[k] ?? d;
 
 /** Can this model take the request at all? The reason when not. */
 function unfit(m: Model, f: Features): string | null {
   if (!m.enabled) return "disabled";
+  if (!providerUp(m.provider_id)) return "provider offline";
   if (inCooldown(m.id)) return "cooling down after failures";
   if (f.vision && !(m.mmproj || cap(m, "vision", 0) > 0)) return "no vision";
   if (m.kind === "chat" && f.inputTokens + Math.min(f.maxTokens, 4096) > m.ctx) return `context ${m.ctx} too small for ~${f.inputTokens} tokens`;
@@ -88,8 +97,10 @@ function score(m: Model, f: Features): number {
   if (f.danish) s += cap(m, "multilingual") * 1.3;
   if (f.vision) s += cap(m, "vision", 0) * 1.5;
   if (f.inputTokens > 16000) s += cap(m, "context") * 0.8;
-  // A model already in memory answers now; a cold one pays its load first.
-  s += isLoaded(m.id) || m.backend === "external" ? 4 : -Math.min(4, m.size_bytes / 1024 ** 3 / 8);
+  // A model already in memory answers now; a cold one pays its load first. Paid models are the fallback, not the
+  // first choice, unless the request needs what only they have.
+  s += warm(m) ? 4 : -Math.min(4, m.size_bytes / 1024 ** 3 / 8);
+  if (m.cost_in || m.cost_out) s -= 3;
   return s;
 }
 
@@ -116,7 +127,7 @@ export function decide(tenant: Tenant, requested: string | undefined, kind: Kind
     ordered = scored.map((x) => x.m);
     how = `auto (${describe(feats)}) → ${scored.slice(0, 3).map((x) => `${x.m.id} ${x.s.toFixed(1)}`).join(", ")}`;
   } else if (r.strategy === "fastest") {
-    const tps = (m: Model) => (measuredTps(m.id) ?? cap(m, "speed") * 8) + (isLoaded(m.id) ? 1000 : 0);
+    const tps = (m: Model) => (measuredTps(m.id) ?? cap(m, "speed") * 8) + (warm(m) ? 1000 : 0);
     ordered = [...fit].sort((a, b) => tps(b) - tps(a));
   } else if (r.strategy === "quality") {
     ordered = [...fit].sort((a, b) => cap(b, "quality") - cap(a, "quality"));
