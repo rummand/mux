@@ -57,3 +57,38 @@ test("a route that lists no models does not take free ones into its pool", () =>
   const ids = decide(getTenant("open")!, "open-route", "chat", null).candidates.map((m) => m.id);
   assert.deepEqual(ids, ["local"]);
 });
+
+test("free tiers: OVH needs no key, others do; models arrive free, counted, with their catalog id", async () => {
+  const { addFreeTier, getProvider } = await import("../src/providers.js");
+  assert.throws(() => addFreeTier("groq", {}), /needs an API key/);
+  const p = addFreeTier("ovh", {});
+  assert.equal(p.plan, "free");
+  const q = getModel("ovh/Qwen3.8-27B")!;
+  assert.equal(q.catalog_id, "qwen3.8-27b");
+  assert.equal(q.cost_in, 0);
+  assert.equal(getProvider("ovh")!.api_key, null);
+  assert.ok(getModel("ovh/bge-m3") && getModel("ovh/whisper-large-v3"));
+});
+
+test("embeddings are rescued only by the same model: other vectors would not match the stored ones", async () => {
+  saveSettings({ freeRescue: true, freeRescueTraining: false });
+  upsertModel({ id: "bge-m3", backend: "llamacpp", kind: "embedding", ctx: 8192 });
+  upsertModel({ id: "qwen3-embedding-0.6b", backend: "llamacpp", kind: "embedding", ctx: 8192 });
+  upsertRoute({ name: "embed", kind: "embedding", strategy: "priority", candidates: ["bge-m3"] });
+  upsertRoute({ name: "embed-qwen", kind: "embedding", strategy: "priority", candidates: ["qwen3-embedding-0.6b"] });
+  const ids = (r: string) => decide(getTenant("open")!, r, "embedding", null).candidates.map((m) => m.id);
+  assert.deepEqual(ids("embed"), ["bge-m3", "ovh/bge-m3"]);
+  assert.deepEqual(ids("embed-qwen"), ["qwen3-embedding-0.6b"]); // OVH's Qwen3-Embedding-8B is another model
+});
+
+test("a model tested on a free tier informs the advisor, without counting as installed", async () => {
+  const { advise } = await import("../src/advisor.js");
+  const { db, now } = await import("../src/db.js");
+  const before = (await advise("reasoning")).ranked.find((a) => a.id === "qwen3.8-27b")!;
+  assert.equal(before.installed, false);
+  db.prepare("INSERT INTO benchmarks(id, model_id, ts, status, score) VALUES('cloud1', 'ovh/Qwen3.8-27B', ?, 'done', 0.5)").run(now());
+  const after = (await advise("reasoning")).ranked.find((a) => a.id === "qwen3.8-27b")!;
+  assert.equal(after.installed, false);
+  assert.equal(after.cloudTest!.modelId, "ovh/Qwen3.8-27B");
+  assert.ok(after.caps.quality! < before.caps.quality!); // 50% of the checks pulls its quality estimate down
+});

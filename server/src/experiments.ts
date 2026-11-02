@@ -8,6 +8,7 @@ import { startDownload } from "./hf.js";
 import { db, event, json, now, saveSettings, settings } from "./db.js";
 import { getModel, getRoute, listModels, listRoutes, upsertRoute, type Model } from "./models.js";
 import { getProvider } from "./providers.js";
+import { freePlan, quotaBlock } from "./quota.js";
 import { estimateGb } from "./runtime/manager.js";
 
 /**
@@ -255,7 +256,13 @@ export async function autopilot(): Promise<Pilot> {
     const fresh = ranked.find((a) => !a.installed && a.fit === "fits" && a.diskOk && !a.experimental && a.score >= base + 0.7);
     if (!fresh) continue;
     const together = fresh.needGb + estimateGb(champ);
-    if (together > settings().memoryBudgetGb) { out.blocked.push(`${r.name}: ${fresh.name} would rank ${fresh.score.toFixed(1)} against ${champ.id}'s ${base.toFixed(1)}, but the two need ~${together.toFixed(0)} GB together, over the ${settings().memoryBudgetGb} GB memory budget — raise it to ${Math.ceil(together)} GB to let mux try it`); continue; }
+    if (together > settings().memoryBudgetGb) {
+      // It cannot run beside the champion here — but a free tier may have it: test it there first, so the case for
+      // more memory rests on a measurement, not an estimate.
+      const inCloud = listModels().find((m) => m.catalog_id === fresh.id && m.enabled && freePlan(m) && !quotaBlock(m));
+      const tested = inCloud && db.prepare("SELECT 1 FROM benchmarks WHERE model_id = ? AND ts > ? AND status IN ('done', 'running')").get(inCloud.id, now() - 14 * 86400_000);
+      if (inCloud && !tested && !benchRunning()) { void runBenchmark(inCloud.id).catch(() => undefined); out.actions.push(`testing ${fresh.name} in the cloud on ${inCloud.provider_id} (free tier) — it cannot run beside ${champ.id} here yet`); }
+      out.blocked.push(`${r.name}: ${fresh.name} would rank ${fresh.score.toFixed(1)} against ${champ.id}'s ${base.toFixed(1)}, but the two need ~${together.toFixed(0)} GB together, over the ${settings().memoryBudgetGb} GB memory budget — raise it to ${Math.ceil(together)} GB to let mux try it`); continue; }
     if (downloading()) continue;
     try { await startDownload({ catalogId: fresh.id }); out.actions.push(`downloading ${fresh.name} (${fresh.sizeGb.toFixed(1)} GB) to try on ${r.name}: it would rank ${fresh.score.toFixed(1)} against ${base.toFixed(1)}`); }
     catch (e) { out.blocked.push(`${r.name}: download ${fresh.name} — ${(e as Error).message}`); }

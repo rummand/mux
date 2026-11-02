@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { api, type Presets, type Provider, type QuotaRow, type Settings } from "../api";
+import { api, type FreeTier, type Presets, type Provider, type QuotaRow, type Settings } from "../api";
 import { Badge, Button, Card, Empty, ErrorNote, Field, Input, Meter, Modal, PageHeader, Select, StatusDot, Table, Td, Th, Toggle } from "../components/ui";
 import { fmtAgo, fmtCompact, fmtGb, fmtInt } from "../format";
 import { useApi } from "../hooks";
@@ -55,6 +55,7 @@ export default function ProvidersPage() {
         )}
       </Card>
       <FreeTiers />
+      <AddFreeTier onAdded={() => reload(true)} />
       {adding && <AddProvider kind={adding} onClose={() => setAdding(null)} onDone={() => { setAdding(null); reload(true); }} />}
       {models && <CloudModels p={models} onClose={() => { setModels(null); reload(true); }} />}
     </>
@@ -217,6 +218,44 @@ function FreeTiers() {
           ))}</tbody>
         </Table>
       )}
+    </Card>
+  );
+}
+
+/** The free tiers mux knows (researched), each added with a key — or none, for OVHcloud — and one click. */
+function AddFreeTier({ onAdded }: { onAdded: () => void }) {
+  const { data, reload } = useApi<FreeTier[]>("/providers/free-tiers", undefined, undefined, null);
+  const [keys, setKeys] = useState<Record<string, { key?: string; account?: string }>>({});
+  const [err, setErr] = useState<string | null>(null);
+  const add = async (t: FreeTier) => {
+    setErr(null);
+    try { await api(`/providers/free-tiers/${t.id}`, { scope: null, body: { api_key: keys[t.id]?.key, account_id: keys[t.id]?.account } }); void reload(true); onAdded(); }
+    catch (e) { setErr((e as Error).message); }
+  };
+  return (
+    <Card className="mt-6" title="Add a free tier" subtitle="Free hosted models, researched against each provider's own pages. Those that do not train on free-tier prompts can rescue traffic; the others serve tests only, unless allowed above." pad={false}>
+      <ErrorNote error={err} />
+      {data?.map((t) => (
+        <div key={t.id} className="flex flex-wrap items-start gap-3 border-b border-line px-4 py-3 last:border-0">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-1.5 text-[13px] font-medium">{t.name}
+              {t.eu && <Badge tone="good">EU</Badge>}
+              {t.trainsOnData === false ? <Badge tone="good">no training</Badge> : t.trainsOnData ? <Badge tone="warn">trains on prompts</Badge> : <Badge tone="muted">training unclear</Badge>}
+              {t.keyless && <Badge tone="accent">no key needed</Badge>}{t.cardRequired && <Badge tone="muted">card</Badge>}{t.added && <Badge tone="accent">added</Badge>}
+            </div>
+            <div className="text-[12px] text-ink-2">{t.models.length} models: {t.models.slice(0, 6).map((m) => m.id).join(", ")}{t.models.length > 6 ? "…" : ""}{t.limits.default && Object.keys(t.limits.default).length ? ` · limits ${Object.entries(t.limits.default).map(([k, v]) => `${v} ${k}`).join(", ")}` : ""}</div>
+            {t.notes && <div className="text-[11.5px] text-ink-3">{t.notes}</div>}
+          </div>
+          {!t.added && (
+            <div className="flex shrink-0 items-center gap-1.5">
+              {t.needsAccountId && <Input className="w-36" placeholder="Account id" value={keys[t.id]?.account ?? ""} onChange={(e) => setKeys({ ...keys, [t.id]: { ...keys[t.id], account: e.target.value } })} />}
+              {!t.keyless && <Input className="w-48" type="password" placeholder="API key" value={keys[t.id]?.key ?? ""} onChange={(e) => setKeys({ ...keys, [t.id]: { ...keys[t.id], key: e.target.value } })} />}
+              {t.signup && !t.keyless && <a href={t.signup.split(" ")[0]} target="_blank" rel="noreferrer" className="text-[12px] text-accent hover:underline">get a key</a>}
+              <Button size="sm" variant="primary" onClick={() => void add(t)}>Add</Button>
+            </div>
+          )}
+        </div>
+      ))}
     </Card>
   );
 }

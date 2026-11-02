@@ -11,7 +11,7 @@ import { cancelDownload, downloadsBus, importLocal, listDownloads, repoFiles, sc
 import { registerLens } from "../lens.js";
 import { deleteModel, deleteRoute, getModel, listModels, listRoutes, upsertModel, upsertRoute, type Model } from "../models.js";
 import { snapshot } from "../router/health.js";
-import { addCloudModel, getProvider, joinNode, listProviders, PRESETS, remoteModels, removeProvider, saveProvider, syncNode, type Provider } from "../providers.js";
+import { addCloudModel, addFreeTier, getProvider, joinNode, listProviders, PRESETS, remoteModels, removeProvider, saveProvider, syncNode, type Provider } from "../providers.js";
 import { decide, features } from "../router/select.js";
 import { inflightNow } from "../router/limits.js";
 import { live } from "../router/metering.js";
@@ -26,6 +26,7 @@ import { registerBrain } from "../brain.js";
 import { presence, registerPresence } from "../presence.js";
 import { registerJoin } from "../join.js";
 import { registerExperiments } from "../experiments.js";
+import { FREE_TIERS } from "../free-tiers.js";
 import { quotaReport } from "../quota.js";
 import { BORDERS, type Border } from "../router/border.js";
 import { modelResources, providerResources, tenantResources } from "./resources.js";
@@ -132,6 +133,11 @@ export function registerAdmin(app: FastifyInstance) {
       return listProviders().map((p) => ({ ...publicProvider(p), models: models.filter((m) => m.provider_id === p.id).map((m) => m.id), usage24h: usage.find((u) => u.provider_id === p.id) ?? null }));
     });
     api.get("/providers/presets", async () => PRESETS);
+    api.get("/providers/free-tiers", async () => FREE_TIERS.map((t) => ({ ...t, added: !!getProvider(t.id) })));
+    api.post("/providers/free-tiers/:id", async (req, reply) => {
+      try { return addFreeTier((req.params as { id: string }).id, (req.body ?? {}) as { api_key?: string; account_id?: string; models?: string[] }); }
+      catch (e) { return reply.code(400).send({ error: (e as Error).message }); }
+    });
     api.put("/providers/:id", async (req, reply) => {
       const id = (req.params as { id: string }).id;
       if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) return reply.code(400).send({ error: "a provider id is lowercase letters, digits and dashes" });

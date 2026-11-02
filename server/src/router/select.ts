@@ -192,6 +192,11 @@ export function rescueModels(kind: Kind, f: Features, tenant: Tenant, already: M
     .filter((m) => m.kind === kind && !have.has(m.id))
     .filter((m) => { const p = freePlan(m); return !!p && (s.freeRescueTraining || p.trainsOnData === false); })
     .filter((m) => !unfit(m, f, tenant) && (!f.tools || cap(m, "tools") >= 5))
+    // Embeddings only from the same model: another model's vectors would not match the tenant's stored ones.
+    .filter((m) => kind !== "embedding" || (!!already[0] && baseName(m) === baseName(already[0])))
     .sort((a, b) => cap(b, "quality") - cap(a, "quality"))
     .slice(0, 3);
 }
+
+/** A model's own name, without its host's prefixes: "ovh/bge-m3", "@cf/baai/bge-m3" and "bge-m3" are one model. */
+const baseName = (m: Model) => (m.upstream_model || m.id).split("/").pop()!.toLowerCase().replace(/[-_.]?(gguf|q\d.*|f16|bf16)$/i, "");

@@ -2,6 +2,7 @@ import { CATALOG, type CatalogEntry } from "./catalog.js";
 import { db, now, settings } from "./db.js";
 import { getModel, listModels, listRoutes, type Caps, type Model } from "./models.js";
 import { signals, trendingNotInCatalog, type Signal } from "./signals.js";
+import { freePlan } from "./quota.js";
 import { systemStats } from "./runtime/system.js";
 
 /**
@@ -45,7 +46,14 @@ export function usageOf(ids: string[], days = 30): Usage | null {
 }
 
 /** Every model here that is this catalog entry: by catalog id, by id, or (a node's) by the model it runs upstream. */
-const instancesOf = (c: CatalogEntry, all: Model[]) => all.filter((m) => m.catalog_id === c.id || m.id === c.id || (m.backend === "node" && m.upstream_model === c.id));
+const instancesOf = (c: CatalogEntry, all: Model[]) => all.filter((m) => !freePlan(m) && (m.catalog_id === c.id || m.id === c.id || (m.backend === "node" && m.upstream_model === c.id)));
+
+/** The catalog model tested on a free tier (Qwen3.8 27B on OVH…): what it scored there — evidence of its quality, not its speed here. */
+export function cloudTest(c: CatalogEntry): { score: number; modelId: string; ts: number } | null {
+  const r = db.prepare(`SELECT b.model_id, b.score, b.ts FROM benchmarks b JOIN models m ON m.id = b.model_id JOIN providers p ON p.id = m.provider_id
+    WHERE m.catalog_id = ? AND p.plan = 'free' AND b.status = 'done' ORDER BY b.ts DESC LIMIT 1`).get(c.id) as { model_id: string; score: number; ts: number } | undefined;
+  return r ? { score: r.score, modelId: r.model_id, ts: r.ts } : null;
+}
 
 export interface Advice {
   id: string; name: string; family: string; kind: string; sizeGb: number; needGb: number; params: string; activeParams?: string; license: string;
@@ -54,6 +62,8 @@ export interface Advice {
   /** What mux saw it do over 30 days, and what the world makes of it. */
   usage: Usage | null; web: Signal | null;
   benchmarks: CatalogEntry["benchmarks"]; supersededBy: string | null; experimental: string | null; research: string | null;
+  /** Benchmarked on a free tier, not here: its pass rate there. */
+  cloudTest: { score: number; modelId: string; ts: number } | null;
   /** The routes it is a candidate on now, and where in each (1 = tried first). */
   onRoutes: { route: string; position: number }[];
 }
@@ -83,6 +93,9 @@ export async function advise(useCase: UseCase, priority: "quality" | "balanced" 
     // A benchmark on this Mac beats the catalog's estimate: speed from measured tokens a second, quality from the pass rate.
     if (bench?.tps) caps.speed = Math.min(10, Math.max(1, bench.tps / 10));
     if (bench?.score != null) caps.quality = (caps.quality ?? 5) * 0.5 + bench.score * 10 * 0.5;
+    // Not here, but tested on a free tier: the same checks, so the same evidence of quality (not of speed here).
+    const cloud = bench ? null : cloudTest(c);
+    if (cloud) caps.quality = (caps.quality ?? 5) * 0.5 + cloud.score * 10 * 0.5;
     // Real traffic beats a benchmark's few prompts: with 50+ answers, their speed is the model's speed here.
     if (usage && usage.requests - usage.errors >= 50 && usage.tps) caps.speed = Math.min(10, Math.max(1, usage.tps / 10));
     let score = Object.entries(w).reduce((a, [k, v]) => a + (caps[k as keyof Caps] ?? 0) * v, 0) / Object.values(w).reduce((a, v) => a + v, 0);
@@ -105,7 +118,8 @@ export async function advise(useCase: UseCase, priority: "quality" | "balanced" 
     // Superseded: the research found a newer model doing its job better — unless this one is measured here.
     if (c.supersededBy && !bench && !usage) { score -= 0.3; reasons.push(`superseded by ${c.supersededBy}`); }
     // Experimental: unverified here, or only its maker's numbers — it does not outrank checked models on claims alone.
-    if (c.experimental) { if (!bench && !usage) score -= 0.3; reasons.push(`experimental: ${c.experimental}`); }
+    if (c.experimental) { if (!bench && !usage && !cloud) score -= 0.3; reasons.push(`experimental: ${c.experimental}`); }
+    if (cloud) reasons.push(`tested in the cloud (${cloud.modelId}): ${(cloud.score * 100).toFixed(0)}% of checks`);
     const top = Object.entries(w).sort((a, b) => b[1] - a[1])[0][0] as keyof Caps;
     reasons.push(`${top} ${caps[top] ?? "?"}/10`);
     if (bench) reasons.push(`measured here: ${bench.tps?.toFixed(0)} tok/s, ${(bench.score * 100).toFixed(0)}% of checks passed`);
@@ -113,7 +127,7 @@ export async function advise(useCase: UseCase, priority: "quality" | "balanced" 
       id: c.id, name: c.name, family: c.family, kind: c.kind, sizeGb: c.sizeGb, needGb: need, params: c.params, activeParams: c.activeParams, license: c.license,
       installed: !!mine, modelId: mine?.id ?? null, fit, diskOk, score: Math.round(score * 100) / 100, caps,
       measured: bench ? { score: bench.score, tps: bench.tps, ttftMs: bench.ttft_ms } : null, reasons, notes: c.notes, routes: c.routes, repo: c.repo, file: c.file, released: c.released,
-      usage, web: sig, onRoutes, benchmarks: c.benchmarks, supersededBy: c.supersededBy ?? null, experimental: c.experimental ?? null, research: c.research ?? null,
+      usage, web: sig, onRoutes, cloudTest: cloud, benchmarks: c.benchmarks, supersededBy: c.supersededBy ?? null, experimental: c.experimental ?? null, research: c.research ?? null,
     };
   }).sort((a, b) => b.score - a.score);
   return { useCase: USE_CASES[useCase].label, budgetGb: s.memoryBudgetGb, diskFreeGb: sys.diskFreeGb, memTotalGb: sys.memTotalGb, ranked };

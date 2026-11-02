@@ -4,6 +4,7 @@ import { db, event, now } from "./db.js";
 import { getModel, type Model } from "./models.js";
 import { acquire, release } from "./runtime/manager.js";
 import { sse } from "./router/chat.js";
+import { countRequest, freePlan } from "./quota.js";
 
 /**
  * A benchmark run on this Mac: speed (time to first token, generation and prompt tokens a second) and a handful of
@@ -99,18 +100,27 @@ async function execute(id: string, m: Model) {
     const load = Math.round(performance.now() - t0);
     const results: Check[] = [];
     let tps = 0, ttft = 0, ptps: number | null = null;
+    // A free tier's model is benchmarked at its pace (under its per-minute limit), and every call counts on its quota.
+    const free = freePlan(m);
+    const rpm = free ? { ...free.limits.default, ...free.limits.per_model?.[m.upstream_model ?? ""] }.rpm : undefined;
+    const pace = async () => { if (!free) return; if (rpm) await new Promise((r) => setTimeout(r, Math.ceil(60_000 / rpm) + 500)); countRequest(m.id, 0); };
     if (m.kind === "embedding") {
+      await pace();
       const r = await benchEmbedding(up.baseUrl, up.model, up.headers);
       results.push(...r.checks);
       tps = r.tps; ttft = r.ttftMs;
     } else {
+      await pace();
       const s = await speed(up.baseUrl, up.model, up.headers);
       tps = s.tps; ttft = s.ttftMs;
       results.push({ name: "speed", pass: tps >= 15, ms: Math.round(ttft), detail: `${tps.toFixed(1)} tok/s, first token ${Math.round(ttft)} ms` });
-      ptps = await prefill(up.baseUrl, up.model, up.headers).catch(() => null);
+      ptps = free ? null : await prefill(up.baseUrl, up.model, up.headers).catch(() => null); // a cloud's prefill says nothing about ours
       for (const c of CHECKS) {
         try {
-          const { j, ms } = await complete(up.baseUrl, up.model, up.headers, c.body);
+          await pace();
+          // A hosted model may think before it answers (Qwen3.8 on a free tier does): room for that, the answer judged.
+          const body = free ? { ...c.body, max_tokens: Math.max(Number(c.body.max_tokens ?? 0) * 8, 1024) } : c.body;
+          const { j, ms } = await complete(up.baseUrl, up.model, up.headers, body);
           const msg = j.choices[0]?.message ?? {};
           const [pass, detail] = c.judge(msg.content ?? "", msg.tool_calls);
           results.push({ name: c.name, pass, ms: Math.round(ms), detail });

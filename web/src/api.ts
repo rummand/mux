@@ -79,6 +79,7 @@ export interface Advice {
   installed: boolean; modelId: string | null; fit: "fits" | "tight" | "too-big"; diskOk: boolean; score: number; caps: Caps;
   measured: { score: number; tps: number; ttftMs: number } | null; reasons: string[]; notes: string; routes: string[]; repo: string; file: string; released: string;
   usage?: ModelUsage | null; web?: WebSignal | null; onRoutes?: { route: string; position: number }[];
+  cloudTest?: { score: number; modelId: string; ts: number } | null;
   benchmarks?: { name: string; value: string | number; url?: string }[]; supersededBy?: string | null; experimental?: string | null; research?: string | null;
 }
 /** A model's own traffic over 30 days (server/src/advisor.ts usageOf). */
@@ -130,6 +131,11 @@ export interface Provider {
   models: string[]; usage24h: { n: number; errors: number; tokens: number; usd: number } | null;
   /** A cloud API's plan; a free tier's limits (JSON) and whether it trains on free-tier prompts (1/0/null unknown). */
   plan?: "free" | "paid"; limits?: string; trains_on_data?: number | null;
+}
+export interface FreeTier {
+  id: string; name: string; base_url: string; endpoints: string[]; signup: string | null; cardRequired: boolean; keyless: boolean; needsAccountId: boolean;
+  trainsOnData: boolean | null; eu: boolean; policy: string; policyUrl: string | null; notes: string; added: boolean;
+  limits: { default?: Record<string, number> }; models: { id: string; kind: string; name: string; catalog: string | null; goodFor: string[] }[];
 }
 export interface QuotaRow { id: string; provider: string; limits: { rpm?: number; rpd?: number; tpm?: number; tpd?: number }; minute: number; day: number; tokensToday: number; blocked: string | null; trainsOnData: boolean | null }
 export type Presets = Record<string, { name: string; base_url: string; keyUrl: string }>;

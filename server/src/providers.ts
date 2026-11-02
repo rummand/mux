@@ -2,6 +2,8 @@ import { db, event, json, now } from "./db.js";
 import { sampleProvider } from "./admin/resources.js";
 import type { Presence } from "./presence.js";
 import { deleteModel, getModel, listModels, listRoutes, upsertModel, upsertRoute, type Caps, type Kind } from "./models.js";
+import { catalogEntry } from "./catalog.js";
+import { FREE_TIERS } from "./free-tiers.js";
 
 /**
  * Where compute comes from. A gateway (mux on Railway) holds no models of its own: it routes to providers.
@@ -180,4 +182,32 @@ export function startProviderSync() {
   setInterval(tick, 15_000).unref();
   setTimeout(tick, 1000);
   setInterval(() => { for (const p of nodes().filter((x) => x.status === "online")) void syncPresence(p); }, 5000).unref();
+}
+
+/* ── Free tiers ─────────────────────────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * Add a free tier (free-tiers.ts) as a provider on its free plan, with its free models: no cost, its limits, and
+ * whether it trains on free-tier prompts. A model that is a catalog model (Qwen3.8 27B on OVH…) carries the catalog's
+ * estimates and its id, so a benchmark there tells the advisor about that model without it running here.
+ */
+export function addFreeTier(id: string, o: { api_key?: string; account_id?: string; models?: string[] }): Provider {
+  const t = FREE_TIERS.find((x) => x.id === id);
+  if (!t) throw new Error(`no free tier ${id}`);
+  if (!t.keyless && !o.api_key) throw new Error(`${t.name} needs an API key: ${t.signup ?? "see its console"}`);
+  if (t.needsAccountId && !o.account_id) throw new Error(`${t.name} needs your account id (it is part of the URL)`);
+  const base_url = t.base_url.replace("{account_id}", o.account_id ?? "");
+  const p = saveProvider({ id: t.id, name: `${t.name} (free)`, kind: t.id in PRESETS ? t.id : "custom", base_url, api_key: o.api_key || null, enabled: true, status: "online",
+    plan: "free", limits: JSON.stringify(t.limits), trains_on_data: t.trainsOnData == null ? null : t.trainsOnData ? 1 : 0 });
+  for (const m of t.models.filter((x) => !o.models || o.models.includes(x.id))) {
+    const c = m.catalog ? catalogEntry(m.catalog) : undefined;
+    upsertModel({
+      id: `${t.id}/${m.id}`, display_name: `${m.name} · ${t.name} (free)`, backend: "external", kind: m.kind, provider_id: t.id, upstream_model: m.id, base_url,
+      ctx: m.ctx ?? c?.ctx ?? 32768, cost_in: 0, cost_out: 0, catalog_id: c?.id ?? null,
+      caps: c?.caps ?? { quality: 7, speed: 8, tools: m.goodFor.includes("tools") ? 7 : 5, code: m.goodFor.includes("code") ? 7 : 5, multilingual: m.goodFor.includes("danish") ? 7 : 6, context: 7 },
+      notes: `Free tier on ${t.name}${t.eu ? " (EU)" : ""}${t.trainsOnData === false ? ", does not train on prompts" : t.trainsOnData ? ", MAY TRAIN on prompts" : ""}. ${t.notes}`.slice(0, 600),
+    });
+  }
+  event("info", "providers", `added the free tier ${t.name} with ${t.models.length} models`);
+  return getProvider(t.id)!;
 }
