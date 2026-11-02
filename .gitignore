@@ -4,3 +4,5 @@ web/dist/
 *.log
 .env
 data/
+mac/.build/
+mac/build/
