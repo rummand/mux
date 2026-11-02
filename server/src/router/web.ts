@@ -3,6 +3,7 @@ import { isIP } from "node:net";
 import { config } from "../config.js";
 import { MuxError } from "./errors.js";
 import type { Ctx } from "./metering.js";
+import { noteCall } from "../services.js";
 
 /**
  * Search and read the web for every product (mux's shared services, the owner 2026-11-02: "SearXNG on mux, a
@@ -50,6 +51,22 @@ export function resultsFromHtml(html: string, limit: number): WebResult[] {
     raw.push({ url: decode(link[1]), title: strip(link[2]), content: strip(content) });
   }
   return resultsFrom({ results: raw }, limit);
+}
+
+export type EngineReport = { answered: { name: string; s: number | null }[]; failed: { name: string; reason: string }[] };
+
+/** SearXNG's results page lists every engine it asked, with its response time or why it failed ("CAPTCHA", "Suspended: …"). */
+export function enginesFromHtml(html: string): EngineReport {
+  const out: EngineReport = { answered: [], failed: [] };
+  const table = /<table class="engine-stats"[\s\S]*?<\/table>/.exec(html)?.[0] ?? "";
+  for (const row of table.split(/<tr>/).slice(1)) {
+    const name = decode(/<td class="engine-name">[\s\S]*?<a [^>]*>([\s\S]*?)<\/a>/.exec(row)?.[1]?.trim() ?? "");
+    if (!name) continue;
+    const err = /<td class="response-error">([\s\S]*?)<\/td>/.exec(row)?.[1];
+    if (err != null) out.failed.push({ name, reason: decode(err.replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim() || "error" });
+    else out.answered.push({ name, s: Number(/<div class="bar-chart-value">([\d.]+)<\/div>/.exec(row)?.[1] ?? NaN) || null });
+  }
+  return out;
 }
 
 const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", aelig: "æ", oslash: "ø", aring: "å", AElig: "Æ", Oslash: "Ø", Aring: "Å", ndash: "–", mdash: "—", hellip: "…", laquo: "«", raquo: "»" };
@@ -116,6 +133,8 @@ async function publicUrl(raw: string): Promise<URL> {
 }
 
 export async function runSearch(ctx: Ctx, body: { query?: unknown; q?: unknown; limit?: unknown; language?: unknown }, signal: AbortSignal) {
+  ctx.modelId = "searxng";
+  ctx.route = "web.search";
   if (!config.searxngUrl) throw new MuxError(503, "search_unavailable", "web search is not set up on this mux (MUX_SEARXNG_URL)");
   const query = String(body.query ?? body.q ?? "").replace(/\s+/g, " ").trim().slice(0, 400);
   if (!query) throw new MuxError(400, "invalid_request_error", "query is required");
@@ -131,19 +150,29 @@ export async function runSearch(ctx: Ctx, body: { query?: unknown; q?: unknown; 
     });
   };
   const json = await ask("json");
-  if (json.ok) return { object: "search", query, results: resultsFrom(await json.json().catch(() => null), limit) };
+  if (json.ok) {
+    const data = (await json.json().catch(() => null)) as { results?: { engines?: unknown; engine?: unknown }[]; unresponsive_engines?: unknown[][] } | null;
+    const results = resultsFrom(data, limit);
+    // Which engines found something, and which did not answer – for the Services page (never the query)
+    const names = [...new Set((data?.results ?? []).flatMap((r) => (Array.isArray(r.engines) ? r.engines : [r.engine]).filter((e): e is string => typeof e === "string")))];
+    noteCall(ctx, { service: "web.search", results: results.length, engines: { answered: names.map((name) => ({ name, s: null })), failed: (data?.unresponsive_engines ?? []).map((u) => ({ name: String(u?.[0] ?? ""), reason: String(u?.[1] ?? "no answer") })).filter((u) => u.name) } });
+    return { object: "search", query, results };
+  }
   // JSON not switched on in this instance's settings (it answers 403): its results page says the same
   if (json.status !== 403) throw new MuxError(502, "upstream_error", `the search engine answered ${json.status}`);
   const html = await ask("html");
   if (!html.ok) throw new MuxError(502, "upstream_error", `the search engine answered ${html.status}`);
-  return { object: "search", query, results: resultsFromHtml(await html.text(), limit) };
+  const page = await html.text();
+  const results = resultsFromHtml(page, limit);
+  noteCall(ctx, { service: "web.search", results: results.length, engines: enginesFromHtml(page) });
+  return { object: "search", query, results };
 }
 
 export async function runRead(ctx: Ctx, body: { url?: unknown; max_chars?: unknown }, signal: AbortSignal) {
-  const url = await publicUrl(String(body.url ?? ""));
-  const max = Math.min(Math.max(Number(body.max_chars) || 20_000, 1000), 100_000);
   ctx.modelId = "reader";
   ctx.route = "web.read";
+  const url = await publicUrl(String(body.url ?? ""));
+  const max = Math.min(Math.max(Number(body.max_chars) || 20_000, 1000), 100_000);
   const res = await fetch(url, {
     redirect: "manual",
     headers: { accept: "text/html,application/xhtml+xml,text/plain;q=0.9", "user-agent": "Mozilla/5.0 (compatible; mux-reader/1.0; +https://github.com/rummand/mux)", "accept-language": "da,en;q=0.8" },
@@ -161,5 +190,6 @@ export async function runRead(ctx: Ctx, body: { url?: unknown; max_chars?: unkno
   const buf = await res.arrayBuffer();
   const html = new TextDecoder(/charset=([\w-]+)/i.exec(type)?.[1] ?? "utf-8").decode(buf.slice(0, 3_000_000));
   const page = type.includes("text/plain") ? { title: "", text: html.slice(0, max) } : pageText(html, max);
+  noteCall(ctx, { service: "web.read", host: url.hostname.replace(/^www\./, ""), chars: page.text.length });
   return { object: "page", url: res.url || url.toString(), title: page.title, text: page.text };
 }

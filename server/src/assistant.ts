@@ -154,6 +154,8 @@ const TOOLS = [
 export const API_REFERENCE = `Admin API (paths under /api/admin). Tenants, routes and providers are created and updated with the same PUT to their id (there is no POST /tenants, /routes or /providers):
 - GET /overview?range=15m|1h|6h|24h|7d|30d&tenant=&model=&agent= — totals, latency/ttft/tps percentiles, cost, breakdowns by tenant/provider/model/route/endpoint/agent/user/error
 - GET /system?range= — memory, swap, pressure, disk, loaded instances, model health and cooldowns, failures, in-flight, memory budget, role and name
+- GET /system/live — every core's load (performance/efficiency), GPU %, memory split, network, disk, top processes, now and the last 5 minutes
+- GET /services?range= — shared services (not models): web search via SearXNG (/v1/search) and the page reader (/v1/read): health and uptime, calls, errors, latency, tenants, per search engine how often it answered, how fast, and why it failed
 - GET /events?limit=&level=info|warn|error — mux's event log (loads, unloads, failures, settings, providers)
 - GET /models — every model with its instance, provider, last benchmark, 24h usage
 - POST /models {id, backend, kind, path|base_url, upstream_model, ctx, caps…}; PATCH /models/:id {fields} (ctx, parallel, extra_args, reasoning, keep_alive_min, pinned, enabled, caps, cost_in, cost_out, notes…; server flags unload it to take effect); DELETE /models/:id?files=1

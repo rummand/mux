@@ -8,7 +8,7 @@ const dir = mkdtempSync(join(tmpdir(), "mux-web-"));
 process.env.MUX_HOME = dir;
 process.env.MUX_DB = join(dir, "mux.db");
 process.env.MUX_PORT = "1";
-const { pageText, privateAddress, resultsFrom } = await import("../src/router/web.js");
+const { enginesFromHtml, pageText, privateAddress, resultsFrom } = await import("../src/router/web.js");
 
 test("search results from SearXNG: links only, no doubles, capped", () => {
   const r = resultsFrom({ results: [
@@ -55,4 +55,16 @@ test("search results from SearXNG's own results page, when its JSON is off", asy
     ["https://a.example/stay", "Where to stay in Val d'Orcia", "Seven agriturismi with a pool & a view"],
     ["https://b.example/?a=1&b=2", "Second", ""],
   ]);
+});
+
+test("which engines SearXNG asked: response times, and why the others failed", () => {
+  const html = `<table class="engine-stats" id="engines_msg-table"><tr>
+    <td class="engine-name"><a href="/stats?engine=duckduckgo" title="View error logs">duckduckgo</a></td>
+    <td class="response-error">CAPTCHA</td>
+  </tr><tr>
+    <td class="engine-name"><a href="/stats?engine=google+cse">google cse</a></td>
+    <td class="response-time"><div class="bar-chart-value">0.3</div><div class="bar-chart-graph"></div></td>
+  </tr></table>`;
+  assert.deepEqual(enginesFromHtml(html), { answered: [{ name: "google cse", s: 0.3 }], failed: [{ name: "duckduckgo", reason: "CAPTCHA" }] });
+  assert.deepEqual(enginesFromHtml("<p>no table</p>"), { answered: [], failed: [] });
 });

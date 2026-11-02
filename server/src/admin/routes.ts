@@ -34,6 +34,7 @@ import { BORDERS, type Border } from "../router/border.js";
 import { modelResources, providerResources, tenantResources } from "./resources.js";
 import { entries, journal } from "../journal.js";
 import { registerKeeper } from "../keeper.js";
+import { registerServices } from "../services.js";
 
 const ok = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 
@@ -322,6 +323,7 @@ export function registerAdmin(app: FastifyInstance) {
     registerHealer(api);
     registerBrain(api);
     registerKeeper(api);
+    registerServices(api);
     registerPresence(api);
     registerJoin(api);
     registerExperiments(api);
