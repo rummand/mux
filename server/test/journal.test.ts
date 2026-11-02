@@ -26,3 +26,12 @@ test("an actor carries through async work, and brain writes say who wrote them",
   assert.equal(entries({ kind: "x" }).length, 0);
   assert.equal(entries({ actor: "brain-keeper" }).length, 1);
 });
+
+test("the owner's own pages are not rewritten or forgotten by mux", async () => {
+  const { forgetPage } = await import("../src/brain.js");
+  const own = await writePage({ title: "It will always be my mux", kind: "decision", body: "The owner's words.", source: "user" });
+  await assert.rejects(asActor("brain-keeper", () => writePage({ id: own.id, title: "It will always be my mux", kind: "decision", body: "Rewritten.", source: "brain-keeper" })), /owner's own page/);
+  await assert.rejects(asActor("brain-keeper", () => writePage({ title: "It will always be my mux", kind: "decision", body: "Same title.", source: "brain-keeper" })), /owner's own page/);
+  await assert.rejects(asActor("brain-keeper", () => forgetPage(own.id)), /does not forget/);
+  assert.equal(await forgetPage(own.id), true); // the owner may
+});

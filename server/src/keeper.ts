@@ -8,7 +8,7 @@ import { asActor, journal } from "./journal.js";
 
 /**
  * The brain keeper: the part of mux that looks after its memory, on its own — the owner gave mux its brain to run.
- * Every 6 hours (or when asked) it reads what happened since it last ran — the assistant's conversations, incidents the
+ * Every 15 minutes (or when asked) it reads what happened since it last ran — the assistant's conversations, incidents the
  * doctor diagnosed, Lens's new findings — and keeps the brain: writes down what will matter later, updates pages
  * instead of adding near-copies, records facts about tenants, models and machines, merges duplicates and forgets what
  * is no longer true. It changes nothing else about mux: it reads mux, and writes only its brain. What it changes is in
@@ -17,7 +17,8 @@ import { asActor, journal } from "./journal.js";
  * Every mux keeps its own material (a gateway holds its own conversations); all of them write into the one brain.
  * Tidying the whole brain is done where the brain lives.
  */
-db.exec("CREATE TABLE IF NOT EXISTS keeper_runs (id TEXT PRIMARY KEY, ts INTEGER NOT NULL, status TEXT NOT NULL, since INTEGER NOT NULL, read TEXT, report TEXT, error TEXT, duration_ms INTEGER)");
+db.exec("CREATE TABLE IF NOT EXISTS keeper_runs (id TEXT PRIMARY KEY, ts INTEGER NOT NULL, status TEXT NOT NULL, since INTEGER NOT NULL, read TEXT, report TEXT, error TEXT, duration_ms INTEGER, tidied INTEGER DEFAULT 0)");
+try { db.exec("ALTER TABLE keeper_runs ADD COLUMN tidied INTEGER DEFAULT 0"); } catch { /* there already */ }
 
 export interface KeeperRun { id: string; ts: number; status: "running" | "done" | "error"; since: number; read: { conversations: number; incidents: number; findings: number } | null; report: string | null; error: string | null; duration_ms: number | null }
 const fromRow = (r: Record<string, unknown>): KeeperRun => ({ ...(r as unknown as KeeperRun), read: json(r.read as string, null) });
@@ -55,7 +56,8 @@ export async function runKeeper(trigger = "schedule"): Promise<KeeperRun> {
     const m = material(since);
     const read = { conversations: m.convs.length, incidents: m.incidents.length, findings: m.findings.length };
     const index = await search("", { limit: 100 }).catch(() => []);
-    const local = !brainNode();
+    const lastTidy = (db.prepare("SELECT MAX(ts) t FROM keeper_runs WHERE status = 'done' AND tidied = 1").get() as { t: number | null }).t ?? 0;
+    const local = !brainNode() && (trigger === "owner" || now() - lastTidy > 6 * 3600_000);
     if (!m.convs.length && !m.incidents.length && !m.findings.length && !(local && index.length > 1)) {
       const report = "Nothing new to remember since the last run.";
       db.prepare("UPDATE keeper_runs SET status = 'done', read = ?, report = ?, duration_ms = ? WHERE id = ?").run(JSON.stringify(read), report, Date.now() - t0, id);
@@ -65,6 +67,8 @@ export async function runKeeper(trigger = "schedule"): Promise<KeeperRun> {
 
 Your job now: read what happened since your last run (below) and keep the brain so the assistant and the doctor start from what matters.
 - Write down what will matter later and is not visible in mux's API: why something is set up as it is, decisions and their reasons, what the owner wants and prefers, what worked and what did not, the cause and fix of problems (as runbooks: symptom, cause, fix, how to check). Short, concrete pages.
+- The list below shows titles only, not the pages' text: read a page (brain_search) before you update it — never assume one is empty.
+- Pages marked "by the owner" are the owner's own words: never rewrite or forget them (the brain refuses); write another page that refers to one if needed.
 - Update a page that already covers it (brain_write with its id) rather than adding a near-copy. Facts about one tenant, model or machine: brain_remember with the entity.
 - Do not write chit-chat, secrets, or what the API already shows (model lists, current settings).
 ${local ? "- Tidy the whole brain: merge pages that say the same (write the merged one, then brain_forget the others), fix or forget what is no longer true (check it against mux's API with GET calls)." : "- The brain lives on another machine; tidying it is done there. Only add and update from what you read here."}
@@ -74,7 +78,7 @@ Finish with a short report for the owner, in Markdown: what you wrote, updated, 
 ${API_REFERENCE.split("\n").filter((l) => l.startsWith("- GET") || l.startsWith("Admin API")).join("\n")}
 
 ## The brain now (${index.length} pages)
-${index.map((p) => `- ${p.id}: ${p.title} (${p.kind})`).join("\n") || "(empty)"}`;
+${index.map((p) => `- ${p.id}: ${p.title} (${p.kind}${p.source === "user" ? ", by the owner" : ""})`).join("\n") || "(empty)"}`;
     const user = [m.convs.length ? `## Conversations\n${m.convs.join("\n\n")}` : "", m.incidents.length ? `## Incidents the doctor diagnosed\n${m.incidents.join("\n\n")}` : "", m.findings.length ? `## New Lens findings\n${m.findings.join("\n")}` : ""].filter(Boolean).join("\n\n") || "Nothing new happened; tidy the brain.";
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), 10 * 60_000);
@@ -87,7 +91,7 @@ ${index.map((p) => `- ${p.id}: ${p.title} (${p.kind})`).join("\n") || "(empty)"}
       }));
     } finally { clearTimeout(timer); }
     const report = [...out].reverse().find((x) => x.role === "assistant" && x.content)?.content ?? "(no report)";
-    db.prepare("UPDATE keeper_runs SET status = 'done', read = ?, report = ?, duration_ms = ? WHERE id = ?").run(JSON.stringify(read), report, Date.now() - t0, id);
+    db.prepare("UPDATE keeper_runs SET status = 'done', read = ?, report = ?, duration_ms = ?, tidied = ? WHERE id = ?").run(JSON.stringify(read), report, Date.now() - t0, local ? 1 : 0, id);
     journal({ who: "brain-keeper", kind: "keeper", ref: id, title: `Brain keeper read ${read.conversations} conversation(s), ${read.incidents} incident(s), ${read.findings} finding(s)`, detail: report });
     event("info", "brain", `keeper ${id} (${trigger}): done`);
     return keeperRuns(1)[0];
@@ -101,8 +105,10 @@ ${index.map((p) => `- ${p.id}: ${p.title} (${p.kind})`).join("\n") || "(empty)"}
 export function startKeeper(server: FastifyInstance) {
   app = server;
   db.prepare("UPDATE keeper_runs SET status = 'error', error = 'mux restarted during the run' WHERE status = 'running'").run();
-  setTimeout(() => void runKeeper().catch(() => undefined), 10 * 60_000).unref();
-  setInterval(() => void runKeeper().catch(() => undefined), 6 * 3600_000).unref();
+  // Every 15 minutes, as the owner asked: what happened since. The model works only when something did, and tidies the
+  // whole brain at most every 6 hours.
+  setTimeout(() => void runKeeper().catch(() => undefined), 5 * 60_000).unref();
+  setInterval(() => void runKeeper().catch(() => undefined), 15 * 60_000).unref();
 }
 
 export function registerKeeper(api: FastifyInstance) {

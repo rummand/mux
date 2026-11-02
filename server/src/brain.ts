@@ -4,7 +4,7 @@ import { config } from "./config.js";
 import { gbrainOn, gbrainState, gcall, unwrap } from "./gbrain.js";
 import { listProviders, nodeApi, type Provider } from "./providers.js";
 import { assistantKey, gateway } from "./self.js";
-import { journal } from "./journal.js";
+import { actor, journal } from "./journal.js";
 
 /**
  * mux's brain (after Garry Tan's GBrain): pages of memory the assistant and the doctor write as they work — how mux is
@@ -162,6 +162,14 @@ const slug = (s: string) => s.toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g
 
 /** Write a page: the same id, or else the same title, updates it rather than adding a near-copy. */
 export async function writePage(p: { id?: string; title: string; body: string; kind?: string; subject?: string; tags?: string[]; source?: string }): Promise<Page> {
+  // The owner's own pages are their words: an agent (keeper, assistant, doctor) may refer to them, never rewrite them.
+  if (p.source !== "user") {
+    const kind = (KINDS as readonly string[]).includes(String(p.kind)) ? String(p.kind) : "note";
+    for (const id of [p.id, gbrainOn() || brainNode() ? gslug(kind, String(p.title ?? "")) : slug(String(p.title ?? ""))].filter((x): x is string => !!x)) {
+      const existing = await getPage(id).catch(() => undefined);
+      if (existing?.source === "user") throw new Error(`“${existing.title}” (${existing.id}) is the owner's own page: it is not rewritten by mux. Write another page that refers to it instead.`);
+    }
+  }
   const page = await writePageRaw(p);
   journal({ kind: "brain", ref: page.id, title: `Brain: ${p.id ? "updated" : "wrote"} “${page.title}”`, detail: page.body.slice(0, 600), after: { kind: page.kind, subject: page.subject } });
   return page;
@@ -189,6 +197,7 @@ async function writePageRaw(p: { id?: string; title: string; body: string; kind?
 const fromRowMaybe = (r: Row | undefined) => (r ? fromRow(r) : undefined);
 
 export const forgetPage = async (id: string): Promise<boolean> => {
+  if (actor() && (await getPage(id).catch(() => undefined))?.source === "user") throw new Error(`${id} is the owner's own page: mux does not forget it`);
   const ok = await forgetRaw(id);
   if (ok) journal({ kind: "brain", ref: id, title: `Brain: forgot ${id}` });
   return ok;
