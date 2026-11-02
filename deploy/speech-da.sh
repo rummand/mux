@@ -3,7 +3,8 @@
 # Institute's Edda v0.2 (large and turbo), served on this Mac by Record's speech-da service (com.record.speech-da,
 # 127.0.0.1:8798; record repo ops/mac-studio/speech-da).
 #   ./deploy/speech-da.sh      register the models and the route transcribe-da (again: it updates them)
-# Route transcribe-da tries Røst first, then Hviske, Whisper turbo and whisper.cpp's Whisper. A gateway with this Mac
+# Route transcribe-da tries Edda duo first, then Hviske, Røst, Whisper turbo and whisper.cpp's Whisper: best first on
+# Record's yardstick, CoRal's conversation test (2026-11-02: Edda duo 9.2 %, Hviske 11.1 %, Røst 14.6 % words wrong). A gateway with this Mac
 # as a node gets them as mac-studio/roest-v3, … on its next sync. speech-da's key is read from Record's settings on
 # this Mac and kept in mux's database as the models' key; it is never printed. Audio is never logged.
 set -eu
@@ -35,5 +36,5 @@ model whisper-turbo "Whisper large-v3-turbo, held to Danish (speech to text)" 8 
 model edda-large "Edda v0.2 large, Danish Whisper large-v3 (speech to text)" 10 6 "danish-foundation-models/edda-v0.2-large on Record's speech-da; words timed. Apache-2.0"
 model edda "Edda v0.2, Danish Whisper large-v3-turbo (speech to text)" 9 9 "danish-foundation-models/edda-v0.2 on Record's speech-da; words timed. Apache-2.0"
 model edda-duo "Edda v0.2 duo, both Eddas in one beam search (speech to text)" 10 5 "danish-foundation-models/edda-v0.2-duo on Record's speech-da (its own code from the Hub, approved by the owner 2026-11-02); text only. Apache-2.0"
-printf '%s' '{"kind":"transcription","strategy":"priority","description":"Danish speech: Record'"'"'s engines, Røst first","candidates":["roest-v3","hviske-v5","whisper-turbo","whisper"]}' | api PUT /routes/transcribe-da
-echo "✓ transcribe-da: roest-v3, hviske-v5, whisper-turbo, whisper — POST /v1/audio/transcriptions with model=transcribe-da (or an engine)"
+printf '%s' '{"kind":"transcription","strategy":"priority","description":"Danish speech: Record'"'"'s engines, best first","candidates":["edda-duo","hviske-v5","roest-v3","whisper-turbo","whisper"]}' | api PUT /routes/transcribe-da
+echo "✓ transcribe-da: edda-duo, hviske-v5, roest-v3, whisper-turbo, whisper — POST /v1/audio/transcriptions with model=transcribe-da (or an engine)"
