@@ -12,6 +12,25 @@ import { decide } from "./select.js";
  */
 export type AudioKind = "transcription" | "speech";
 
+/**
+ * A plain field of a multipart form, read from the raw body without parsing the file: OpenAI's clients name the
+ * transcription model there (`model=whisper-1`), not in the address. Only the first 64 KB are looked at, where the
+ * fields before the file are; undefined when it is not there.
+ */
+export function formField(body: Buffer, contentType: string, name: string): string | undefined {
+  const boundary = /boundary=(?:"([^"]+)"|([^;\s]+))/i.exec(contentType);
+  if (!boundary) return undefined;
+  const sep = `--${boundary[1] ?? boundary[2]}`;
+  for (const part of body.subarray(0, 65536).toString("latin1").split(sep)) {
+    const end = part.indexOf("\r\n\r\n");
+    if (end < 0) continue;
+    const head = part.slice(0, end);
+    if (!new RegExp(`content-disposition:[^\\r\\n]*\\bname="${name}"`, "i").test(head) || /filename=/i.test(head)) continue;
+    return Buffer.from(part.slice(end + 4).replace(/\r\n$/, ""), "latin1").toString("utf8").trim() || undefined;
+  }
+  return undefined;
+}
+
 export async function runAudio(ctx: Ctx, kind: AudioKind, requested: string | undefined, body: Buffer, contentType: string, signal: AbortSignal): Promise<Response> {
   const d = decide(ctx.tenant, requested, kind, null);
   ctx.route = d.route?.name ?? null;

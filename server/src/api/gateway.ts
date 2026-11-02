@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { listModels, listRoutes } from "../models.js";
 import { runChat, type ChatBody } from "../router/chat.js";
-import { runAudio, type AudioKind } from "../router/audio.js";
+import { formField, runAudio, type AudioKind } from "../router/audio.js";
 import { runEmbeddings } from "../router/embed.js";
 import { MuxError, toMuxError } from "../router/errors.js";
 import { check, enter, leave } from "../router/limits.js";
@@ -157,7 +157,7 @@ async function audio(req: FastifyRequest, reply: FastifyReply, kind: AudioKind) 
   try {
     const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.from(JSON.stringify(req.body ?? {}));
     const query = (req.query ?? {}) as { model?: string };
-    const requested = query.model ?? (kind === "speech" ? (req.body as { model?: string } | undefined)?.model : undefined);
+    const requested = query.model ?? (kind === "speech" ? (req.body as { model?: string } | undefined)?.model : formField(raw, header(req, "content-type") ?? "", "model"));
     const res = await runAudio(ctx, kind, requested, raw, header(req, "content-type") ?? "application/json", ac.signal);
     const out = Buffer.from(await res.arrayBuffer());
     finish(ctx, 200);

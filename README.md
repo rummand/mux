@@ -108,6 +108,11 @@ with the Danish voice da_DK-talesyntese-medium (`piper-da` on route `speak`, :83
 launchd agents com.mux.whisper and com.mux.tts, and registers them; the gateway gets them as `mac-studio/…` on its
 next sync. Callers use OpenAI's audio API on mux; audio is never logged.
 
+Danish speech: `./deploy/speech-da.sh` registers Record's Danish engines on this Mac (Record's `speech-da` service,
+:8798) as `roest-v3` (CoRal's Røst v3, a Danish Whisper large-v3), `hviske-v5` and `whisper-turbo`, and the route
+`transcribe-da` (Røst first, whisper.cpp last). The model is read from `?model=` or, as OpenAI's clients send it, from
+the form's `model` field.
+
 Logs: `~/.mux/logs/mux.log`, one per model in `~/.mux/logs/models/`. Data: `~/.mux/mux.db` (SQLite).
 Models: `~/.mux/models/` (downloads; `imported/` holds links to files elsewhere).
 
