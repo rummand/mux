@@ -139,6 +139,27 @@ CREATE TABLE IF NOT EXISTS incidents (
   attempts INTEGER NOT NULL DEFAULT 0, diagnosis TEXT, resolved_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS incidents_open ON incidents(status, kind, subject);
+-- Lens watches: investigations that repeat on a schedule. Mutes: findings someone has seen and does not want again.
+CREATE TABLE IF NOT EXISTS lens_watches (
+  id TEXT PRIMARY KEY, title TEXT NOT NULL, filters TEXT NOT NULL DEFAULT '{}', criteria TEXT DEFAULT '', every_hours REAL NOT NULL DEFAULT 6,
+  use_model INTEGER DEFAULT 1, model_id TEXT, enabled INTEGER DEFAULT 1, last_run INTEGER, last_run_id TEXT, created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS lens_mutes (key TEXT PRIMARY KEY, title TEXT NOT NULL, until INTEGER, created_at INTEGER NOT NULL);
+-- The brain: what the assistant and the doctor remember across conversations, one page per thing worth knowing.
+CREATE TABLE IF NOT EXISTS brain_pages (
+  id TEXT PRIMARY KEY, title TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'note',  -- fact | runbook | decision | preference | incident | note
+  subject TEXT DEFAULT '',            -- what it is about: a model, tenant, provider or route id
+  body TEXT NOT NULL DEFAULT '', tags TEXT DEFAULT '[]',
+  source TEXT DEFAULT 'assistant',    -- assistant | doctor | user
+  embedding BLOB, embed_model TEXT,   -- through mux's own embed route, normalised
+  recalls INTEGER DEFAULT 0, recalled_at INTEGER,
+  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+);
+-- The assistant's conversations, kept on the server so every device sees them.
+CREATE TABLE IF NOT EXISTS assistant_conversations (
+  id TEXT PRIMARY KEY, title TEXT NOT NULL, messages TEXT NOT NULL, page TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+);
 `);
 
 /** Columns added after a table first shipped: created on databases that predate them. */
@@ -149,6 +170,7 @@ function addColumns(table: string, cols: Record<string, string>) {
 addColumns("models", { provider_id: "TEXT", cost_in: "REAL DEFAULT 0", cost_out: "REAL DEFAULT 0" });
 addColumns("requests", { provider_id: "TEXT", cost_usd: "REAL DEFAULT 0" });
 addColumns("tenants", { monthly_usd_budget: "REAL DEFAULT 0" });
+addColumns("lens_runs", { scope: "TEXT", watch_id: "TEXT", baseline: "TEXT", resolved: "TEXT DEFAULT '[]'", muted: "INTEGER DEFAULT 0" });
 
 export const now = () => Date.now();
 export const json = <T>(s: string | null | undefined, fallback: T): T => {

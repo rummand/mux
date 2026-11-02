@@ -1,22 +1,25 @@
 import { randomBytes } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { config } from "./config.js";
-import { db, now, settings } from "./db.js";
+import { db, json, now, settings } from "./db.js";
 import { listModels, listRoutes } from "./models.js";
 import { listProviders } from "./providers.js";
 import { status } from "./runtime/manager.js";
-import { createKey, getTenant, upsertTenant } from "./tenants.js";
+import { forgetPage, KINDS, recall, search, writePage } from "./brain.js";
+import { assistantKey, gateway } from "./self.js";
 
 /**
  * The dashboard's assistant: a chat that runs mux with mux. A model (through mux's own gateway, metered as the
  * Assistant tenant) gets the whole admin API as a tool, the logs, a test request and the dashboard's pages. Reading runs
  * on its own; anything that changes mux waits for the person to approve it in the dashboard.
  *
- * The conversation lives in the browser: each call sends the transcript and, after a pause, which pending calls were
- * approved; the reply streams as server-sent events and ends with the transcript as it now is.
+ * It has a brain (brain.ts): pages it recalls before each answer and writes as it learns, shared with the doctor.
+ *
+ * Each call sends the transcript and, after a pause, which pending calls were approved; the reply streams as
+ * server-sent events and ends with the transcript as it now is, which is also kept as a conversation on the server.
  */
 export interface Call { id: string; type: "function"; function: { name: string; arguments: string } }
-export interface Msg { role: "user" | "assistant" | "tool"; content: string | null; tool_calls?: Call[]; tool_call_id?: string; reasoning_content?: string; model?: string }
+export interface Msg { role: "user" | "assistant" | "tool"; content: string | null; tool_calls?: Call[]; tool_call_id?: string; reasoning_content?: string; model?: string; recalled?: { id: string; title: string }[] }
 
 const MAX_STEPS = 16;
 const RESULT_CHARS = 14_000;
@@ -81,9 +84,52 @@ const TOOLS = [
       description: "Open a page of the dashboard for the user, to show them what you are talking about.",
       parameters: {
         type: "object",
-        properties: { path: { type: "string", enum: ["/", "/tenants", "/tenants/<id>", "/requests", "/traces", "/lens", "/providers", "/models", "/advisor", "/routes", "/benchmarks", "/playground", "/system"], description: "A page; /tenants/<id> with a real tenant id" } },
+        properties: { path: { type: "string", enum: ["/", "/tenants", "/tenants/<id>", "/requests", "/traces", "/lens", "/providers", "/models", "/advisor", "/routes", "/benchmarks", "/playground", "/system", "/overview", "/health", "/brain"], description: "A page; /tenants/<id> with a real tenant id" } },
         required: ["path"],
       },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "brain_search",
+      description: "Search mux's brain: the memory you and mux's doctor keep across conversations (how mux is set up and why, decisions, the user's preferences, runbooks for problems solved before). Searches by meaning and by words.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string" },
+          kind: { type: "string", enum: [...KINDS] },
+          limit: { type: "number", description: "At most this many pages (default 6)" },
+        },
+        required: ["query"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "brain_write",
+      description: "Write a page in mux's brain, at once, so you (and the doctor) know it next time. Write what will matter later, briefly and concretely: a fact about this mux and why it is so, a decision and its reason, what the user prefers, or a runbook (symptom, cause, fix, how to check). Give the id of a page you recalled to update it instead of writing a near-copy. Never write secrets.",
+      parameters: {
+        type: "object",
+        properties: {
+          id: { type: "string", description: "An existing page's id, to update it" },
+          title: { type: "string", description: "Short and specific, e.g. \"qwen3.6-35b-a3b crashes with ctx 131072 on the Mac Studio\"" },
+          kind: { type: "string", enum: [...KINDS] },
+          subject: { type: "string", description: "What it is about: a model, tenant, provider or route id" },
+          body: { type: "string", description: "Markdown" },
+          tags: { type: "array", items: { type: "string" } },
+        },
+        required: ["title", "kind", "body"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "brain_forget",
+      description: "Delete a page from mux's brain that is wrong or no longer true (waits for the user's approval). Prefer updating it with brain_write.",
+      parameters: { type: "object", properties: { id: { type: "string" }, why: { type: "string" } }, required: ["id", "why"] },
     },
   },
 ];
@@ -106,18 +152,25 @@ export const API_REFERENCE = `Admin API (paths under /api/admin). Tenants, route
 - GET /tenants; GET /tenants/:id; PUT /tenants/:id (create or update) {name, description, color, status: active|paused, rpm_limit, tpm_limit, monthly_token_budget, monthly_usd_budget, max_parallel, default_route, allowed, aliases, log_bodies}; DELETE /tenants/:id
 - POST /tenants/:id/keys {name, expiresInDays?, rpmLimit?, monthlyTokenBudget?} — returns the key once; DELETE /keys/:id revokes
 - GET /requests?tenant=&model=&status=ok|error&agent=&trace=&q=&limit=; GET /requests/:id (with bodies and route reason); GET /traces?range=&tenant=
-- GET /benchmarks?model=; POST /benchmarks {model}; GET /lens; POST /lens {title, filters: {range, tenant?, model?, status?}, criteria?, useModel?}
+- GET /benchmarks?model=; POST /benchmarks {model}
+- Lens, investigations of the traffic (they only read, so they run without approval): GET /lens?watch= (runs, newest first: findings each new or ongoing, resolved since the last run, baseline metrics against the window before); GET /lens/runs/:id; POST /lens {title, filters: {tenantId?, agent?, model?, hours?, sample?}, criteria?, useModel?, modelId?} — returns {id}, done in seconds to a few minutes
+- GET /lens/watches; PUT /lens/watches/:id {title, filters, criteria, every_hours, use_model, model_id, enabled}; DELETE /lens/watches/:id; POST /lens/watches/:id/run; GET /lens/mutes; POST /lens/mutes {key, title, days?}; DELETE /lens/mutes/:key
 - GET /settings; PATCH /settings {memoryBudgetGb, memoryHeadroomGb, diskReserveGb, keepAliveMin, maxLoaded, retentionDays, pressureGuard, logBodies, assistantModel}`;
 
-function systemPrompt(snapshot: string, page: string | undefined) {
+function systemPrompt(snapshot: string, page: string | undefined, memory: string) {
   return `You are the mux assistant, inside mux's dashboard. mux is a model router and control plane: SaaS products call it with an API key through an OpenAI-style (/v1/chat/completions, /v1/embeddings, /v1/audio/*) or Anthropic-style (/v1/messages) API, and mux routes each request to a model — local models on mux nodes (llama.cpp llama-server, MLX, Laya for Jev's System One) or paid cloud APIs. A gateway (mux on Railway) runs no models; nodes (the Mac Studio) do. Tenants are the SaaS products, each with keys, limits, budgets, aliases and a default route. Routes are named model lists with a strategy. Every request is metered (tokens, latency, time to first token, speed, cost, fallbacks), and Lens looks for problems in the traffic.
 
 Your job: help the user run and fix mux — find out why something fails, explain what mux is doing, and set up models, routes, tenants, keys, providers and settings. Look before you answer: read the state with your tools instead of guessing, and quote what you saw (numbers, ids, errors). When something is broken, find the cause in the events, the logs, the request detail and the system state, then propose the fix. For a change, call mux_api with a short "why"; the user approves it in the dashboard, so ask nothing first — propose the call itself. Make one change at a time and check its effect. Never ask for or repeat secrets (API keys, admin tokens): the user enters those in the dashboard. Answer in the user's language, briefly, in Markdown.
 
+You have a brain: pages of memory that you and mux's doctor keep across conversations. The pages that match the user's message are below; search it (brain_search) when the question touches something you may have learned before. When you learn something that will matter in a later conversation — why something is set up as it is, a decision and its reason, what the user prefers, the cause and fix of a problem — write it (brain_write) without asking, short and concrete, updating a page you recalled rather than adding a near-copy. Do not write what mux's API already shows (the list of models, the current settings), only what it does not: the why, the history, the lessons. When the brain and what you read now disagree, trust what you read and fix the page.
+
 ${API_REFERENCE}
 
 Now: ${new Date().toISOString()}. This mux: role ${config.role}, name "${config.name}".${page ? ` The user is on the dashboard page ${page}.` : ""}
-${snapshot}`;
+${snapshot}
+
+## From your brain
+${memory}`;
 }
 
 /** A short picture of mux now, so the first answer starts from facts. */
@@ -139,7 +192,7 @@ export async function snapshot(): Promise<string> {
 }
 
 export const isChange = (name: string, args: Record<string, unknown>) =>
-  name === "mux_api" && String(args.method ?? "GET").toUpperCase() !== "GET" && !/\/routes\/explain$/.test(String(args.path ?? ""));
+  name === "brain_forget" || name === "mux_api" && String(args.method ?? "GET").toUpperCase() !== "GET" && !/\/routes\/explain$|^\/?lens(\/watches\/[^/]+\/run)?$/.test(String(args.path ?? "").replace(/^\/api\/admin/, ""));
 
 export const parse = (s: string): Record<string, unknown> => { try { const v = JSON.parse(s || "{}"); return v && typeof v === "object" ? v : {}; } catch { return {}; } };
 
@@ -171,19 +224,7 @@ async function admin(app: FastifyInstance, method: string, path: string, query?:
   return { status: res.statusCode, data };
 }
 
-/** The Assistant tenant's own key: what the assistant sends through the gateway is metered like anyone's. */
-function assistantKey(): string {
-  const row = db.prepare("SELECT value FROM settings WHERE key = 'assistant_key'").get() as { value: string } | undefined;
-  if (row && getTenant("assistant")) return JSON.parse(row.value);
-  if (!getTenant("assistant")) upsertTenant({ id: "assistant", name: "Assistant", description: "The dashboard's assistant and its test requests", color: "#a855f7" });
-  const { key } = createKey("assistant", "dashboard");
-  db.prepare("INSERT INTO settings(key, value) VALUES('assistant_key', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify(key));
-  return key;
-}
-
-const gateway = `http://127.0.0.1:${config.port}`;
-
-export async function runTool(app: FastifyInstance, call: Call, emit: (type: string, data: unknown) => void): Promise<string> {
+export async function runTool(app: FastifyInstance, call: Call, emit: (type: string, data: unknown) => void, source = "assistant"): Promise<string> {
   const a = parse(call.function.arguments);
   try {
     switch (call.function.name) {
@@ -211,6 +252,17 @@ export async function runTool(app: FastifyInstance, call: Call, emit: (type: str
           requestId: h("x-mux-request-id"), answer: j.choices?.[0]?.message?.content ?? null, usage: j.usage, error: j.error,
         }));
       }
+      case "brain_search": {
+        const pages = await search(String(a.query ?? ""), { kind: a.kind ? String(a.kind) : undefined, limit: Math.min(Number(a.limit) || 6, 20), touch: true });
+        return clip(JSON.stringify(pages.length ? pages.map((p) => ({ id: p.id, title: p.title, kind: p.kind, subject: p.subject, updated: new Date(p.updated_at).toISOString().slice(0, 10), score: Number(p.score.toFixed(2)), body: p.body.slice(0, 2500) })) : { pages: [], note: "nothing in the brain matches" }));
+      }
+      case "brain_write": {
+        const p = await writePage({ id: a.id ? String(a.id) : undefined, title: String(a.title ?? ""), body: String(a.body ?? ""), kind: String(a.kind ?? "note"), subject: a.subject ? String(a.subject) : undefined, tags: a.tags as string[] | undefined, source });
+        emit("brain", { id: p.id, title: p.title });
+        return JSON.stringify({ ok: true, id: p.id, title: p.title, embedded: p.embedded });
+      }
+      case "brain_forget":
+        return JSON.stringify(forgetPage(String(a.id ?? "")) ? { ok: true, forgotten: a.id } : { error: `no page ${a.id}` });
       case "open_page":
         emit("navigate", { path: String(a.path ?? "/") });
         return JSON.stringify({ ok: true, opened: a.path });
@@ -306,7 +358,7 @@ export async function converse(app: FastifyInstance, o: { msgs: Msg[]; sys: stri
       const d = o.decide(c);
       o.emit("call", { id: c.id, name: c.function.name, args: parse(c.function.arguments), change: d === "pause" });
       if (d === "pause") { pending.push(c); continue; }
-      const content = d === "run" ? await runTool(app, c, o.emit) : JSON.stringify({ error: d.skip });
+      const content = d === "run" ? await runTool(app, c, o.emit, o.agent) : JSON.stringify({ error: d.skip });
       o.emit("result", { id: c.id, content });
       msgs.push({ role: "tool", tool_call_id: c.id, content });
     }
@@ -316,7 +368,27 @@ export async function converse(app: FastifyInstance, o: { msgs: Msg[]; sys: stri
   return msgs;
 }
 
+/** Keep a conversation on the server, named after its first question. */
+function saveConversation(id: string, msgs: Msg[], page?: string) {
+  const first = msgs.find((m) => m.role === "user" && m.content)?.content;
+  if (!first) return;
+  const title = first.replace(/\s+/g, " ").trim().slice(0, 80);
+  db.prepare(`INSERT INTO assistant_conversations(id, title, messages, page, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET messages = excluded.messages, page = excluded.page, updated_at = excluded.updated_at`)
+    .run(id, title, JSON.stringify(msgs), page ?? null, now(), now());
+}
+
 export function registerAssistant(api: FastifyInstance, app: FastifyInstance) {
+  api.get("/assistant/conversations", async (req) => {
+    const q = req.query as { limit?: string };
+    return db.prepare("SELECT id, title, page, created_at, updated_at, json_array_length(messages) messages FROM assistant_conversations ORDER BY updated_at DESC LIMIT ?").all(Math.min(Number(q.limit) || 50, 200));
+  });
+  api.get("/assistant/conversations/:id", async (req, reply) => {
+    const r = db.prepare("SELECT * FROM assistant_conversations WHERE id = ?").get((req.params as { id: string }).id) as { messages: string } | undefined;
+    return r ? { ...r, messages: json<Msg[]>(r.messages, []) } : reply.code(404).send({ error: "no such conversation" });
+  });
+  api.delete("/assistant/conversations/:id", async (req) => ({ ok: db.prepare("DELETE FROM assistant_conversations WHERE id = ?").run((req.params as { id: string }).id).changes > 0 }));
+
   api.post("/assistant", async (req: FastifyRequest, reply: FastifyReply) => {
     const b = (req.body ?? {}) as { messages?: Msg[]; approvals?: Record<string, boolean>; page?: string; model?: string; conversation?: string };
     let msgs: Msg[] = Array.isArray(b.messages) ? b.messages.filter((m) => m && ["user", "assistant", "tool"].includes(m.role)) : [];
@@ -344,12 +416,20 @@ export function registerAssistant(api: FastifyInstance, app: FastifyInstance) {
         }
       }
       msgs = repair(msgs);
-      const sys = systemPrompt(await snapshot(), b.page);
+      // What the brain knows about the latest question, recalled once per question.
+      const asked = [...msgs].reverse().find((m) => m.role === "user");
+      const mem = await recall(asked?.content ?? "");
+      if (asked && !asked.recalled) {
+        asked.recalled = mem.pages.map((p) => ({ id: p.id, title: p.title }));
+        emit("recall", { pages: asked.recalled });
+      }
+      const sys = systemPrompt(await snapshot(), b.page, mem.block);
       msgs = await converse(app, { msgs, sys, model, convo, signal: ac.signal, emit, decide: (c) => (isChange(c.function.name, parse(c.function.arguments)) ? "pause" : "run") });
     } catch (e) {
       if (!ac.signal.aborted) emit("error", { message: (e as Error).message });
     } finally {
       clearInterval(ping);
+      try { saveConversation(convo, msgs, b.page); } catch { /* a conversation that cannot be kept is still answered */ }
       emit("messages", { messages: msgs, conversation: convo });
       emit("done", {});
       reply.raw.end();

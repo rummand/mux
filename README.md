@@ -87,6 +87,44 @@ memory budget (default 48 GB) and leave the headroom macOS reports as available;
 to make room, after their keep-alive, and when macOS reports memory pressure. Why these choices, and what else was
 considered (MLX/omlx, Ollama, llama-swap, LiteLLM, Rust gateways): `docs/research-local-llm.md` and `docs/decisions.md`.
 
+## The assistant and its brain
+
+The dashboard opens on the **assistant**: a chat that runs mux with mux. It reads the admin API, the logs and the
+system on its own, sends test requests, and proposes changes that run only when you approve them. On every other page
+it is a panel (⌘J) in the same conversation; conversations are kept on the server, so every device sees them.
+
+The **brain** (after Garry Tan's GBrain) is its memory across conversations: pages of how this mux is set up and why,
+decisions, preferences and runbooks (`server/src/brain.ts`, the Brain page, `/api/admin/brain`). Before each answer the
+assistant recalls the pages that match the question; it writes new ones (`brain_write`) as it learns, and the doctor
+(self-healing) recalls them for an incident and writes a runbook once it knows a cause. Pages are embedded through
+mux's own `embed` route, metered as the Assistant tenant; without it, search goes by words.
+
+**Lens** investigates the traffic: rules count what fails, what is slow and what costs (error clusters, retry storms,
+truncated and empty answers, full contexts, fallbacks, cold starts, runaway traces, repeats, slow first tokens, spend
+hot spots, budgets on pace to run out), and a local model reads samples against the investigation's criteria and the
+brain — a tenant on a provider the brain says it must not use is a finding. Each run is compared with the window
+before it and with the last run of its scope (new, ongoing, resolved). Watches repeat an investigation on a schedule
+(one, every 6 hours, ships enabled) and log a warning for a new serious finding; findings go to the assistant, into the
+brain, or are muted.
+
+The dashboard is installable as an app (Chrome/Edge "Install mux", Safari "Add to Dock", iOS "Add to Home Screen"),
+which opens straight on the assistant.
+
+## In the menu bar
+
+`mac/` is Mux.app, a native menu bar app for any Mac: an M in the top bar whose dot says how mux is (red: a problem
+or unreachable, orange: something wants a look or a change waits for approval, blue: working, purple: the agent is
+thinking). Its panel opens on the **agent** — the same assistant as the dashboard's, conversations shared — with the
+machines (memory, pressure, loaded models with Unload; on a gateway, every node) and what needs attention (incidents,
+new Lens findings, nodes down, each with Ask). It notifies about new incidents, Lens findings and nodes going down.
+
+It finds this Mac's mux (`~/.mux/mux.env`) and the gateway (`~/.mux/railway.env`) on its own; any other mux — another
+Mac in the house, over Tailscale or the internet — is added by URL and admin token (kept in the keychain).
+
+```sh
+./mac/build.sh --install     # builds mac/build/Mux.app, copies it to ~/Applications and opens it
+```
+
 ## Running it
 
 Gateway on Railway (project `mux`, service `mux`, volume at `/data`): `railway up --service mux` builds the

@@ -7,7 +7,7 @@ import { CATALOG } from "../catalog.js";
 import { config } from "../config.js";
 import { db, event, json, now, saveSettings, settings } from "../db.js";
 import { cancelDownload, downloadsBus, importLocal, listDownloads, repoFiles, scanLocal, searchHf, startDownload } from "../hf.js";
-import { listInvestigations, startInvestigation } from "../lens.js";
+import { registerLens } from "../lens.js";
 import { deleteModel, deleteRoute, getModel, listModels, listRoutes, upsertModel, upsertRoute, type Model } from "../models.js";
 import { snapshot } from "../router/health.js";
 import { addCloudModel, getProvider, joinNode, listProviders, PRESETS, remoteModels, removeProvider, saveProvider, syncNode, type Provider } from "../providers.js";
@@ -21,6 +21,7 @@ import { overview, requestDetail, requestLog, systemSeries, traces } from "./sta
 import { timingSafeEqual } from "node:crypto";
 import { registerAssistant } from "../assistant.js";
 import { registerHealer } from "../healer.js";
+import { registerBrain } from "../brain.js";
 import { modelResources, providerResources, tenantResources } from "./resources.js";
 
 const ok = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
@@ -266,8 +267,7 @@ export function registerAdmin(app: FastifyInstance) {
     api.post("/benchmarks", async (req, reply) => {
       try { return { id: await runBenchmark((req.body as { model: string }).model) }; } catch (e) { return reply.code(400).send({ error: (e as Error).message }); }
     });
-    api.get("/lens", async () => listInvestigations());
-    api.post("/lens", async (req) => ({ id: startInvestigation(req.body as never) }));
+    registerLens(api);
 
     // ── Settings & playground ──────────────────────────────────────────────────────────────────────────────────
     api.get("/settings", async () => settings());
@@ -280,6 +280,7 @@ export function registerAdmin(app: FastifyInstance) {
     api.get("/playground-key", async () => ({ key: playgroundKey() }));
     registerAssistant(api, app);
     registerHealer(api);
+    registerBrain(api);
 
     // ── Resource data per tenant, provider and model (ids may hold a slash: a node's model is <node>/<model>) ────
     const stat = (fn: (id: string, range?: string) => unknown) => async (req: FastifyRequest, reply: FastifyReply) =>

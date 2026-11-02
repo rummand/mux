@@ -1,9 +1,11 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { BrowserRouter, NavLink, Navigate, Route, Routes } from "react-router-dom";
+import { BrowserRouter, NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { api, getToken, setToken, setUnauthorizedHandler, type SystemInfo } from "./api";
 import { Button, cx, Input, Meter } from "./components/ui";
 import { fmtGb } from "./format";
 import { useApi, useLiveStatus, usePersisted } from "./hooks";
+import HomePage from "./pages/Home";
+import BrainPage from "./pages/Brain";
 import OverviewPage from "./pages/Overview";
 import TenantsPage from "./pages/Tenants";
 import TenantDetailPage from "./pages/TenantDetail";
@@ -21,11 +23,13 @@ import HealthPage from "./pages/Health";
 import ModelDetailPage from "./pages/ModelDetail";
 import ProviderDetailPage from "./pages/ProviderDetail";
 import { Scoped } from "./components/Scope";
-import { AssistantPanel, sparkle } from "./components/Assistant";
+import { ASK_EVENT, AssistantPanel, brainIcon, sparkle } from "./components/Assistant";
 
 const icon = (d: string) => <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={d} /></svg>;
 const NAV: { to: string; label: string; icon: ReactNode; group?: string }[] = [
-  { to: "/", label: "Overview", icon: icon("M3 13h4v8H3zM10 9h4v12h-4zM17 4h4v17h-4z") },
+  { to: "/", label: "Assistant", icon: <span className="text-accent">{sparkle}</span> },
+  { to: "/brain", label: "Brain", icon: brainIcon },
+  { to: "/overview", label: "Overview", group: "Traffic", icon: icon("M3 13h4v8H3zM10 9h4v12h-4zM17 4h4v17h-4z") },
   { to: "/tenants", label: "Tenants", icon: icon("M4 20v-1a5 5 0 0 1 5-5h0a5 5 0 0 1 5 5v1M9 10a3 3 0 1 0 0-6 3 3 0 0 0 0 6M17 11a2.5 2.5 0 1 0 0-5M20 20v-1a4 4 0 0 0-3-3.9") },
   { to: "/requests", label: "Requests", icon: icon("M4 6h16M4 12h16M4 18h10") },
   { to: "/traces", label: "Traces", icon: icon("M4 5h6v4H4zM14 15h6v4h-6zM7 9v4a2 2 0 0 0 2 2h5") },
@@ -72,7 +76,7 @@ function Wordmark({ small }: { small?: boolean }) {
   );
 }
 
-function TopBar({ onMenu, onAssistant }: { onMenu: () => void; onAssistant: () => void }) {
+function TopBar({ onMenu, onAssistant, home }: { onMenu: () => void; onAssistant: () => void; home: boolean }) {
   const live = useLiveStatus();
   const { data } = useApi<SystemInfo>("/system", { range: "15m" }, 10_000, null);
   const loaded = data?.instances.filter((i) => i.state === "ready").length ?? 0;
@@ -95,7 +99,7 @@ function TopBar({ onMenu, onAssistant }: { onMenu: () => void; onAssistant: () =
           <Meter value={b.usedGb} max={b.budgetGb} tone={b.usedGb / b.budgetGb > 0.9 ? "bad" : b.usedGb / b.budgetGb > 0.7 ? "warn" : "accent"} height={5} />
         </div>
       )}
-      <Button size="sm" onClick={onAssistant} title="Assistant (⌘J)"><span className="inline-flex items-center gap-1.5"><span className="text-accent">{sparkle}</span>Assistant</span></Button>
+      {!home && <Button size="sm" onClick={onAssistant} title="Assistant (⌘J)"><span className="inline-flex items-center gap-1.5"><span className="text-accent">{sparkle}</span>Assistant</span></Button>}
       <Button size="sm" variant="ghost" onClick={() => { setToken(""); location.reload(); }}>Sign out</Button>
     </header>
   );
@@ -104,11 +108,16 @@ function TopBar({ onMenu, onAssistant }: { onMenu: () => void; onAssistant: () =
 function Shell() {
   const [open, setOpen] = useState(false);
   const [assistant, setAssistant] = usePersisted("assistant.open", false);
+  // The assistant is the home page; everywhere else it is a panel beside the page, in the same conversation.
+  const home = useLocation().pathname === "/";
+  const panel = assistant && !home;
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "j") { e.preventDefault(); setAssistant(!assistant); } };
+    const onKey = (e: KeyboardEvent) => { if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "j" && !home) { e.preventDefault(); setAssistant(!assistant); } };
+    const onAsk = () => { if (!home) setAssistant(true); };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [assistant, setAssistant]);
+    window.addEventListener(ASK_EVENT, onAsk);
+    return () => { window.removeEventListener("keydown", onKey); window.removeEventListener(ASK_EVENT, onAsk); };
+  }, [assistant, setAssistant, home]);
   return (
     <div className="flex min-h-full">
       <aside className={cx("fixed inset-y-0 left-0 z-40 w-56 shrink-0 border-r border-line bg-s1 transition-transform lg:sticky lg:top-0 lg:h-screen lg:translate-x-0", open ? "translate-x-0" : "-translate-x-full")}>
@@ -129,11 +138,13 @@ function Shell() {
         </div>
       </aside>
       {open && <div className="fixed inset-0 z-30 bg-black/40 lg:hidden" onClick={() => setOpen(false)} />}
-      <div className={cx("flex min-w-0 flex-1 flex-col transition-[padding]", assistant && "xl:pr-[460px]")}>
-        <TopBar onMenu={() => setOpen(true)} onAssistant={() => setAssistant(!assistant)} />
+      <div className={cx("flex min-w-0 flex-1 flex-col transition-[padding]", panel && "xl:pr-[460px]")}>
+        <TopBar onMenu={() => setOpen(true)} onAssistant={() => setAssistant(!assistant)} home={home} />
         <main className="mx-auto w-full max-w-[1500px] flex-1 p-4 md:p-6">
           <Routes>
-            <Route path="/" element={<OverviewPage />} />
+            <Route path="/" element={<HomePage />} />
+            <Route path="/brain" element={<BrainPage />} />
+            <Route path="/overview" element={<OverviewPage />} />
             <Route path="/tenants" element={<TenantsPage />} />
             <Route path="/tenants/:id" element={<TenantDetailPage />} />
             <Route path="/requests" element={<RequestsPage />} />
@@ -153,7 +164,7 @@ function Shell() {
           </Routes>
         </main>
       </div>
-      <AssistantPanel open={assistant} onClose={() => setAssistant(false)} />
+      {!home && <AssistantPanel open={panel} onClose={() => setAssistant(false)} />}
     </div>
   );
 }

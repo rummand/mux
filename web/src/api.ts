@@ -94,8 +94,15 @@ export interface SystemInfo {
 }
 export interface Settings { memoryBudgetGb: number; memoryHeadroomGb: number; diskReserveGb: number; keepAliveMin: number; maxLoaded: number; retentionDays: number; pressureGuard: boolean; logBodies: boolean; assistantModel?: string; selfHeal?: boolean; selfHealAi?: boolean }
 export interface MuxEvent { id: number; ts: number; level: "info" | "warn" | "error"; source: string; message: string; data: string | null }
-export interface Finding { title: string; kind: "needs-attention" | "pattern"; priority: "high" | "medium" | "low"; description: string; suggestion: string; evidence: { request_id: string; quote: string }[]; source: "rules" | "model" }
-export interface LensRun { id: string; ts: number; status: string; title: string; filters: Record<string, unknown>; criteria: string; model_id: string | null; coverage: { eligible: number; screened: number; errors: number } | null; findings: Finding[]; duration_ms: number | null; error: string | null }
+export interface Finding { key: string; title: string; kind: "needs-attention" | "pattern"; priority: "high" | "medium" | "low"; description: string; suggestion: string; evidence: { request_id: string; quote: string }[]; source: "rules" | "model"; status?: "new" | "ongoing" }
+export interface LensMetrics { requests: number; errorRate: number; latencyP95: number | null; ttftP50: number | null; tokensPerRequest: number; costUsd: number }
+export interface LensFilters { tenantId?: string; agent?: string; model?: string; hours?: number; sample?: number }
+export interface LensRun {
+  id: string; ts: number; status: string; title: string; filters: LensFilters; criteria: string; model_id: string | null; coverage: { eligible: number; screened: number; errors: number } | null;
+  findings: Finding[]; duration_ms: number | null; error: string | null; watch_id: string | null; resolved: { key: string; title: string }[]; baseline: { now: LensMetrics; before: LensMetrics } | null; muted: number | null;
+}
+export interface LensWatch { id: string; title: string; filters: LensFilters; criteria: string; every_hours: number; use_model: boolean; model_id: string | null; enabled: boolean; last_run: number | null; last_run_id: string | null; next_run: number | null }
+export interface LensMute { key: string; title: string; until: number | null; created_at: number }
 export interface TraceRow { trace_id: string; tenant_id: string; agent: string | null; calls: number; started: number; ended: number; prompt_tokens: number; completion_tokens: number; errors: number; tool_calls: number; models: string | null; total_ms: number }
 
 export interface NodeInfo {
@@ -138,3 +145,12 @@ export interface TenantStats {
   rateLimited: { type: string; n: number }[];
   keys: { id: string; name: string; prefix: string; revoked: boolean; expires_at: number | null; rpm_limit: number; usage: { n: number; tokens: number; errors: number; last: number } | null }[];
 }
+
+/* ── The assistant's brain and conversations ──────────────────────────────────────────────────────────────── */
+export type BrainKind = "fact" | "runbook" | "decision" | "preference" | "incident" | "note";
+export interface BrainPage {
+  id: string; title: string; kind: BrainKind; subject: string; body: string; tags: string[]; source: string;
+  recalls: number; recalled_at: number | null; created_at: number; updated_at: number; embedded: boolean; score?: number;
+}
+export interface BrainStats { pages: number; embedded: number; updated: number | null; kinds: Record<string, number>; models: { model: string; n: number }[]; embedding: boolean }
+export interface Conversation { id: string; title: string; page: string | null; created_at: number; updated_at: number; messages: number }

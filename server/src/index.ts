@@ -9,6 +9,7 @@ import { registerGateway } from "./api/gateway.js";
 import { registerAdmin } from "./admin/routes.js";
 import { pruneSamples, sampleModels } from "./admin/resources.js";
 import { startHealer } from "./healer.js";
+import { startLens } from "./lens.js";
 import { adoptDownloaded } from "./hf.js";
 import { startCompat } from "./compat.js";
 import { startProviderSync } from "./providers.js";
@@ -86,6 +87,7 @@ startProviderSync();
 samplers();
 await app.listen({ port: config.port, host: config.host });
 startHealer(app);
+startLens();
 if (config.role !== "gateway") startCompat();
 event("info", "mux", `${config.role} \"${config.name}\" listening on ${config.host}:${config.port}; models in ${config.modelsDir}; dashboard ${existsSync(config.webDir) ? "served" : "not built"}`);
 

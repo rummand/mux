@@ -76,10 +76,22 @@ export function useLiveStatus() {
   return c;
 }
 
+/** State kept in localStorage; every component using the same key sees the same value (the assistant page and panel). */
+const persisted = new Map<string, Set<(v: unknown) => void>>();
 export function usePersisted<T>(key: string, initial: T): [T, (v: T) => void] {
   const [v, setV] = useState<T>(() => {
     try { const s = localStorage.getItem(`mux.${key}`); return s ? (JSON.parse(s) as T) : initial; } catch { return initial; }
   });
-  const set = useCallback((x: T) => { setV(x); try { localStorage.setItem(`mux.${key}`, JSON.stringify(x)); } catch { /* ignore */ } }, [key]);
+  useEffect(() => {
+    const l = (x: unknown) => setV(x as T);
+    if (!persisted.has(key)) persisted.set(key, new Set());
+    persisted.get(key)!.add(l);
+    return () => { persisted.get(key)!.delete(l); };
+  }, [key]);
+  const set = useCallback((x: T) => {
+    persisted.get(key)?.forEach((f) => f(x));
+    setV(x);
+    try { localStorage.setItem(`mux.${key}`, JSON.stringify(x)); } catch { /* ignore */ }
+  }, [key]);
   return [v, set];
 }

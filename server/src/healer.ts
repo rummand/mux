@@ -5,6 +5,7 @@ import { randomBytes } from "node:crypto";
 import { Worker } from "node:worker_threads";
 import type { FastifyInstance } from "fastify";
 import { API_REFERENCE, converse, isChange, parse, runTool, snapshot, type Call, type Msg } from "./assistant.js";
+import { recall } from "./brain.js";
 import { config } from "./config.js";
 import { db, event, json, now, settings } from "./db.js";
 import { getModel, listModels, listRoutes, upsertRoute } from "./models.js";
@@ -440,12 +441,15 @@ export async function doctor(id: string, force = false): Promise<Incident | unde
     act(inc, "doctor", "started a diagnosis", true);
     const sys = `You are mux's doctor: the self-healing part of mux, a model router and control plane (local models on mux nodes, cloud APIs, tenants, routes). mux's rule-based healer could not fix an incident on its own and hands it to you. Find the root cause with your tools — the events, the logs (read_log, also for model servers), the system state, the model's settings and recent failed requests — then fix it.
 
-You may make these changes yourself, and they run at once: load or unload a model, sync a provider, run a benchmark, and PATCH a model's ctx, parallel, reasoning, keep_alive_min or extra_args (e.g. a smaller context when memory is short, or removing a flag the server rejects). Any other change (settings, routes, tenants, deleting, disabling) is recorded as a proposal for a person to approve — call it anyway if it is the right fix, with a clear "why". Evidence first: change something only when the logs, events or requests show it is the cause, and quote that evidence. A single crash or kill (e.g. SIGKILL, SIGTERM) with no matching error in the model's log (out of memory, a Metal/GGML error, an assert) is not evidence of a cause — it may have been stopped from outside; if the incident is resolved and the model is healthy again, change nothing and say so. Never shrink a model's context or slots to "be safe": callers rely on them. Do not ask questions: nobody is reading until you are done. Verify your fix (the model loads, a test_request succeeds). Finish with a short report in Markdown: **Cause**, **What I did**, **What a person should do** (if anything).
+You may make these changes yourself, and they run at once: load or unload a model, sync a provider, run a benchmark, and PATCH a model's ctx, parallel, reasoning, keep_alive_min or extra_args (e.g. a smaller context when memory is short, or removing a flag the server rejects). Any other change (settings, routes, tenants, deleting, disabling) is recorded as a proposal for a person to approve — call it anyway if it is the right fix, with a clear "why". Evidence first: change something only when the logs, events or requests show it is the cause, and quote that evidence. A single crash or kill (e.g. SIGKILL, SIGTERM) with no matching error in the model's log (out of memory, a Metal/GGML error, an assert) is not evidence of a cause — it may have been stopped from outside; if the incident is resolved and the model is healthy again, change nothing and say so. Never shrink a model's context or slots to "be safe": callers rely on them. Do not ask questions: nobody is reading until you are done. Verify your fix (the model loads, a test_request succeeds). mux's brain holds what earlier diagnoses and the assistant learned; the pages that match this incident are below, and brain_search finds more. Once you know the cause, write or update a runbook page (brain_write, kind runbook, subject the model or provider: symptom, cause, fix, how to check) so the next diagnosis starts from it. Finish with a short report in Markdown: **Cause**, **What I did**, **What a person should do** (if anything).
 
 ${API_REFERENCE}
 
 Now: ${new Date().toISOString()}. This mux: role ${config.role}, name "${config.name}".
-${await snapshot()}`;
+${await snapshot()}
+
+## From the brain
+${(await recall(`${inc.title} ${inc.subject} ${inc.kind}`)).block}`;
     const user = `Incident ${inc.id} (${inc.kind} · ${inc.subject} · ${inc.severity} · ${inc.status}${inc.status === "resolved" ? ": the healer already fixed it — find out why it happened; change nothing unless the cause is clear and will recur" : ""}): ${inc.title}\n\nDetail:\n${(inc.detail ?? "").slice(0, 3000)}\n\nWhat the healer did:\n${inc.actions.map((a) => `- ${new Date(a.ts).toISOString()} ${a.by}: ${a.action}${a.ok ? "" : " (failed)"}${a.detail ? ` — ${a.detail.split("\n")[0].slice(0, 200)}` : ""}`).join("\n") || "- nothing yet"}`;
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), 8 * 60_000);
