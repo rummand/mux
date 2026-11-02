@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api, type BrainKind, type BrainPage, type BrainStats } from "../api";
 import { Markdown } from "../components/Assistant";
+import { Spinner } from "../components/ui";
 import { Badge, Button, Card, cx, Empty, ErrorNote, Field, Input, PageHeader, Select, Textarea } from "../components/ui";
 import { fmtAgo, fmtInt } from "../format";
 import { useApi } from "../hooks";
@@ -38,6 +39,7 @@ export default function BrainPage() {
         </p>
       )}
       <ErrorNote error={error} />
+      <Keeper onRan={() => void reload(true)} />
       <div className="grid gap-4 lg:grid-cols-[minmax(0,380px)_minmax(0,1fr)]">
         <Card pad={false}>
           <div className="flex gap-2 border-b border-line p-3">
@@ -119,6 +121,26 @@ function Editor({ id, onSaved, onDeleted }: { id: string; onSaved: (id: string) 
           {!isNew && <Button onClick={() => setEditing(false)}>Cancel</Button>}
         </div>
       </div>
+    </Card>
+  );
+}
+
+interface KeeperRun { id: string; ts: number; status: string; read: { conversations: number; incidents: number; findings: number } | null; report: string | null; error: string | null; duration_ms: number | null }
+
+/** The brain keeper: the agent that looks after mux's memory on its own, and what it did last. */
+function Keeper({ onRan }: { onRan: () => void }) {
+  const { data, reload } = useApi<{ busy: boolean; runs: KeeperRun[] }>("/brain/keeper", undefined, 10_000, null);
+  const last = data?.runs.find((r) => r.status !== "running");
+  const run = async () => { await api("/brain/keeper/run", { method: "POST", scope: null }); void reload(true); setTimeout(onRan, 60_000); };
+  return (
+    <Card className="mb-4" title="Brain keeper" subtitle="mux's agent for its own memory: every 6 hours it reads the conversations, the doctor's diagnoses and Lens's new findings, writes down what matters, updates and merges pages, and forgets what is no longer true. It changes nothing else about mux; what it changes is in “What mux changed”."
+      actions={data?.busy ? <span className="flex items-center gap-1.5 text-[12px] text-ink-2"><Spinner /> keeping…</span> : <Button size="sm" onClick={() => void run()}>Run now</Button>}>
+      {!last ? <p className="text-[12.5px] text-ink-3">It has not run yet; the first run is 10 minutes after mux starts.</p> : (
+        <div className="text-[12.5px]">
+          <div className="mb-1 text-ink-3">Last run {fmtAgo(last.ts)}{last.read ? ` · read ${last.read.conversations} conversation(s), ${last.read.incidents} incident(s), ${last.read.findings} finding(s)` : ""}</div>
+          {last.error ? <p className="text-bad">{last.error}</p> : <Markdown text={last.report ?? ""} />}
+        </div>
+      )}
     </Card>
   );
 }

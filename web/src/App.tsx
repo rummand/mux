@@ -12,6 +12,7 @@ import TenantDetailPage from "./pages/TenantDetail";
 import ModelsPage from "./pages/Models";
 import AdvisorPage from "./pages/Advisor";
 import ExperimentsPage from "./pages/Experiments";
+import JournalPage from "./pages/Journal";
 import RoutesPage from "./pages/RoutesPage";
 import RequestsPage from "./pages/Requests";
 import TracesPage from "./pages/Traces";
@@ -30,6 +31,7 @@ const icon = (d: string) => <svg viewBox="0 0 24 24" className="h-4 w-4" fill="n
 const NAV: { to: string; label: string; icon: ReactNode; group?: string }[] = [
   { to: "/", label: "Assistant", icon: <span className="text-accent">{sparkle}</span> },
   { to: "/brain", label: "Brain", icon: brainIcon },
+  { to: "/journal", label: "What mux changed", icon: icon("M12 8v4l3 2M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5") },
   { to: "/overview", label: "Overview", group: "Traffic", icon: icon("M3 13h4v8H3zM10 9h4v12h-4zM17 4h4v17h-4z") },
   { to: "/tenants", label: "Tenants", icon: icon("M4 20v-1a5 5 0 0 1 5-5h0a5 5 0 0 1 5 5v1M9 10a3 3 0 1 0 0-6 3 3 0 0 0 0 6M17 11a2.5 2.5 0 1 0 0-5M20 20v-1a4 4 0 0 0-3-3.9") },
   { to: "/requests", label: "Requests", icon: icon("M4 6h16M4 12h16M4 18h10") },
@@ -158,6 +160,7 @@ function Shell() {
             <Route path="/advisor" element={<Scoped page={AdvisorPage} />} />
             <Route path="/routes" element={<RoutesPage />} />
             <Route path="/experiments" element={<ExperimentsPage />} />
+            <Route path="/journal" element={<JournalPage />} />
             <Route path="/providers" element={<ProvidersPage />} />
             <Route path="/providers/*" element={<ProviderDetailPage />} />
             <Route path="/benchmarks" element={<Scoped page={BenchmarksPage} />} />

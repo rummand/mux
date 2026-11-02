@@ -5,6 +5,8 @@ import { AssistantChat, brainIcon, sparkle, SUGGESTIONS, useConversation } from 
 import { Button, cx } from "../components/ui";
 import { fmtAgo, fmtInt, fmtPct } from "../format";
 import { useApi } from "../hooks";
+import { ACTORS, actorTone, type JournalEntry } from "./Journal";
+import { Badge } from "../components/ui";
 
 /**
  * Home: the assistant in the middle of mux. Its conversations on the left; on the right, mux right now and what its brain
@@ -21,6 +23,7 @@ export default function HomePage() {
       </div>
       <aside className="hidden min-h-0 space-y-5 overflow-y-auto border-l border-line p-4 xl:block">
         <Now ask={put} />
+        <Changed />
         <Brain ask={put} />
       </aside>
     </div>
@@ -144,6 +147,28 @@ function Brain({ ask }: { ask: (q: string) => void }) {
         ))}
       </div>
       {!!s?.pages && <button onClick={() => ask("Look through your brain: is anything there out of date or wrong compared with how mux is now? Fix what is.")} className="mt-2 text-[11.5px] text-accent hover:underline">Ask it to tidy its brain</button>}
+    </section>
+  );
+}
+
+/** What mux changed about itself lately: the owner always sees it. */
+function Changed() {
+  const { data } = useApi<JournalEntry[]>("/journal", { limit: 6 }, 20_000, null);
+  return (
+    <section>
+      <div className="mb-2 flex items-center justify-between">
+        <h2 className="text-[10.5px] font-semibold uppercase tracking-wider text-ink-3">What mux changed</h2>
+        <Link to="/journal" className="text-[11px] text-accent hover:underline">All</Link>
+      </div>
+      {!data?.length && <p className="text-[12px] text-ink-3">Nothing yet. When mux changes something about itself — a route, its brain, an experiment — it shows here.</p>}
+      <div className="space-y-1">
+        {data?.map((e) => (
+          <Link key={e.id} to="/journal" className="block rounded-md border border-line px-2.5 py-1.5 hover:bg-s2">
+            <div className="flex items-center gap-1.5"><Badge tone={actorTone(e.actor)}>{(ACTORS[e.actor] ?? e.actor).replace(" (approved by you)", "")}</Badge><span className="text-[10.5px] text-ink-3">{fmtAgo(e.ts)}</span></div>
+            <div className="mt-0.5 line-clamp-2 text-[12px]">{e.title}</div>
+          </Link>
+        ))}
+      </div>
     </section>
   );
 }

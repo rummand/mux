@@ -7,6 +7,7 @@ import { listProviders } from "./providers.js";
 import { status } from "./runtime/manager.js";
 import { brainStats, forgetPage, KINDS, recall, rememberFact, search, writePage } from "./brain.js";
 import { assistantKey, gateway } from "./self.js";
+import { asActor } from "./journal.js";
 
 /**
  * The dashboard's assistant: a chat that runs mux with mux. A model (through mux's own gateway, metered as the
@@ -274,11 +275,13 @@ async function admin(app: FastifyInstance, method: string, path: string, query?:
 }
 
 export async function runTool(app: FastifyInstance, call: Call, emit: (type: string, data: unknown) => void, source = "assistant"): Promise<string> {
+  const who = source === "doctor" ? "doctor" : source === "brain-keeper" ? "brain-keeper" : "assistant";
   const a = parse(call.function.arguments);
   try {
     switch (call.function.name) {
       case "mux_api": {
-        const r = await admin(app, String(a.method ?? "GET"), String(a.path ?? "/"), a.query as Record<string, unknown>, a.body);
+        // A change runs as its agent: approved by the owner (the assistant) or within the doctor's safe set (the doctor).
+        const r = await asActor(who, () => admin(app, String(a.method ?? "GET"), String(a.path ?? "/"), a.query as Record<string, unknown>, a.body));
         return clip(JSON.stringify({ status: r.status, data: compact(r.data) }));
       }
       case "read_log": {
@@ -306,14 +309,14 @@ export async function runTool(app: FastifyInstance, call: Call, emit: (type: str
         return clip(JSON.stringify(pages.length ? pages.map((p) => ({ id: p.id, title: p.title, kind: p.kind, subject: p.subject, updated: new Date(p.updated_at).toISOString().slice(0, 10), score: Number(p.score.toFixed(2)), body: p.body.slice(0, 2500) })) : { pages: [], note: "nothing in the brain matches" }));
       }
       case "brain_write": {
-        const p = await writePage({ id: a.id ? String(a.id) : undefined, title: String(a.title ?? ""), body: String(a.body ?? ""), kind: String(a.kind ?? "note"), subject: a.subject ? String(a.subject) : undefined, tags: a.tags as string[] | undefined, source });
+        const p = await asActor(who, () => writePage({ id: a.id ? String(a.id) : undefined, title: String(a.title ?? ""), body: String(a.body ?? ""), kind: String(a.kind ?? "note"), subject: a.subject ? String(a.subject) : undefined, tags: a.tags as string[] | undefined, source }));
         emit("brain", { id: p.id, title: p.title });
         return JSON.stringify({ ok: true, id: p.id, title: p.title, embedded: p.embedded });
       }
       case "brain_forget":
-        return JSON.stringify((await forgetPage(String(a.id ?? ""))) ? { ok: true, forgotten: a.id } : { error: `no page ${a.id}` });
+        return JSON.stringify((await asActor(who, () => forgetPage(String(a.id ?? "")))) ? { ok: true, forgotten: a.id } : { error: `no page ${a.id}` });
       case "brain_remember":
-        return clip(JSON.stringify(await rememberFact({ fact: String(a.fact ?? ""), entity: a.entity ? String(a.entity) : undefined, kind: a.kind ? String(a.kind) : undefined, provenance: `mux ${source}` })));
+        return clip(JSON.stringify(await asActor(who, () => rememberFact({ fact: String(a.fact ?? ""), entity: a.entity ? String(a.entity) : undefined, kind: a.kind ? String(a.kind) : undefined, provenance: `mux ${source}` }))));
       case "open_page":
         emit("navigate", { path: String(a.path ?? "/") });
         return JSON.stringify({ ok: true, opened: a.path });

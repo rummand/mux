@@ -66,7 +66,7 @@ final class Monitor {
   func select(_ c: Connection) {
     current = c
     UserDefaults.standard.set(c.id, forKey: "connection")
-    system = nil; totals = nil; incidents = []; lens = nil; nodes = []; error = nil; seen = nil
+    system = nil; totals = nil; incidents = []; lens = nil; nodes = []; error = nil; seen = nil; journalSince = nil
     Task { await refresh() }
   }
 
@@ -93,6 +93,7 @@ final class Monitor {
       error = nil
       updated = Date()
       tell()
+      await journal(api)
     } catch {
       self.error = error.localizedDescription
     }
@@ -131,6 +132,20 @@ final class Monitor {
       let p = j?["provider"]
       return j?["ok"] == .bool(true) ? "✓ Joined as \(p?["id"]?.string ?? "?"): the gateway reaches this Mac" : "Joined, but the gateway says \(p?["status"]?.string ?? "?"): \(p?["error"]?.string ?? "")"
     } catch { return error.localizedDescription }
+  }
+
+  /// What mux changed about itself since the last look (the journal): a notification each — the owner sees it all.
+  private var journalSince: Double?
+  struct Change: Decodable { var ts: Double; var actor: String; var title: String }
+  private func journal(_ api: API) async {
+    guard let since = journalSince else {
+      let latest: [Change] = (try? await api.get("/journal", ["limit": "1"])) ?? []
+      journalSince = latest.first?.ts ?? Date().timeIntervalSince1970 * 1000
+      return
+    }
+    let fresh: [Change] = (try? await api.get("/journal", ["since": String(Int(since)), "limit": "10"])) ?? []
+    for c in fresh.reversed() { Notifier.post("mux changed itself · \(c.actor)", c.title) }
+    if let t = fresh.map(\.ts).max() { journalSince = t }
   }
 
   func unload(_ id: String) async {

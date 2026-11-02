@@ -12,6 +12,7 @@ import { getModel, listModels, listRoutes, upsertRoute } from "./models.js";
 import { joinNode, listProviders, syncNode } from "./providers.js";
 import { clearFailure, isLocal, probeTargets, runtimeBus, status, trackedPids, unload, warm } from "./runtime/manager.js";
 import { systemStats } from "./runtime/system.js";
+import { asActor, journal } from "./journal.js";
 
 /**
  * Self-healing. A watchdog looks at mux every 20 s and repairs what it can on its own: model servers that crash, hang
@@ -61,6 +62,7 @@ function act(i: Incident, by: Action["by"], action: string, ok: boolean, detail?
   fresh.actions.push({ ts: now(), by, action, ok, ...(detail ? { detail: detail.slice(0, 2000) } : {}), ...extra });
   if (by !== "user") fresh.attempts++;
   save(fresh);
+  if (by === "healer" || by === "doctor") journal({ who: by, kind: "repair", ref: i.id, title: `${by === "doctor" ? "Doctor" : "Healer"}: ${action}${ok ? "" : " (failed)"}`, detail: `${i.title}${detail ? `\n${detail.slice(0, 600)}` : ""}` });
   event(ok ? "info" : "warn", "healer", `${action}${ok ? "" : " — failed"}${detail ? `: ${detail.split("\n")[0].slice(0, 200)}` : ""}`, { incident: i.id });
   return fresh;
 }
@@ -455,7 +457,7 @@ ${(await recall(`${inc.title} ${inc.subject} ${inc.kind}`)).block}`;
     const timer = setTimeout(() => ac.abort(), 8 * 60_000);
     let msgs: Msg[] = [{ role: "user", content: user }];
     try {
-      msgs = await converse(doctorApp, {
+      msgs = await asActor("doctor", () => converse(doctorApp!, {
         msgs, sys, model: s.assistantModel || "auto", convo: `doctor_${inc.id}`, signal: ac.signal, agent: "doctor",
         emit: () => undefined,
         decide: (c) => {
@@ -470,7 +472,7 @@ ${(await recall(`${inc.title} ${inc.subject} ${inc.kind}`)).block}`;
           proposals.push(c);
           return { skip: `recorded as a proposal for a person to approve (${safe}); not run. Go on as if it is pending.` };
         },
-      });
+      }));
     } finally { clearTimeout(timer); }
     const report = [...msgs].reverse().find((m) => m.role === "assistant" && m.content)?.content ?? "(the doctor gave no report)";
     const fresh = getIncident(inc.id)!;

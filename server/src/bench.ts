@@ -5,6 +5,7 @@ import { getModel, type Model } from "./models.js";
 import { acquire, release } from "./runtime/manager.js";
 import { sse } from "./router/chat.js";
 import { countRequest, freePlan } from "./quota.js";
+import { journal } from "./journal.js";
 
 /**
  * A benchmark run on this Mac: speed (time to first token, generation and prompt tokens a second) and a handful of
@@ -87,6 +88,7 @@ export async function runBenchmark(modelId: string): Promise<string> {
   if (!m) throw new Error(`no model ${modelId}`);
   const id = randomBytes(6).toString("hex");
   db.prepare("INSERT INTO benchmarks(id, model_id, ts, status) VALUES(?, ?, ?, 'running')").run(id, modelId, now());
+  journal({ kind: "benchmark", ref: modelId, title: `Benchmark ${modelId}` });
   benchBus.emit("update", { id, modelId, status: "running" });
   void execute(id, m);
   return id;

@@ -1,4 +1,5 @@
 import { db, json, now } from "./db.js";
+import { journal } from "./journal.js";
 
 /** llamacpp, mlx, laya run on this machine; node is a model on another mux; external and jev are APIs elsewhere. */
 export type Backend = "llamacpp" | "mlx" | "external" | "laya" | "jev" | "node";
@@ -71,6 +72,9 @@ export function upsertRoute(r: Partial<Route> & { name: string }) {
   db.prepare(`INSERT INTO routes(name, description, kind, strategy, candidates, created_at) VALUES(@name, @description, @kind, @strategy, @candidates, @created_at)
     ON CONFLICT(name) DO UPDATE SET description=excluded.description, kind=excluded.kind, strategy=excluded.strategy, candidates=excluded.candidates`)
     .run({ ...next, candidates: JSON.stringify(next.candidates) });
+  if (JSON.stringify(prev?.candidates) !== JSON.stringify(next.candidates) || prev?.strategy !== next.strategy)
+    journal({ kind: "route", ref: next.name, title: prev ? `Route ${next.name}: ${next.candidates[0] ?? "nothing"} first` : `New route ${next.name}`,
+      detail: prev ? `${prev.candidates.join(" → ") || "(all)"}  ⇒  ${next.candidates.join(" → ") || "(all)"}` : undefined, before: prev ? { strategy: prev.strategy, candidates: prev.candidates } : null, after: { strategy: next.strategy, candidates: next.candidates } });
   return next;
 }
 export const deleteRoute = (name: string) => db.prepare("DELETE FROM routes WHERE name = ?").run(name);

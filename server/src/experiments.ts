@@ -10,6 +10,7 @@ import { getModel, getRoute, listModels, listRoutes, upsertRoute, type Model } f
 import { getProvider } from "./providers.js";
 import { freePlan, quotaBlock } from "./quota.js";
 import { estimateGb } from "./runtime/manager.js";
+import { asActor, journal } from "./journal.js";
 
 /**
  * Experiments: a change to a route tried on live traffic, A/B, with production always served. A share of the route's
@@ -152,11 +153,14 @@ export function startExperiment(o: { route: string; challenger: string; share?: 
   db.prepare("INSERT INTO experiments(id, route, champion, challenger, share, status, min_requests, max_hours, auto_promote, started_by, started_at) VALUES(?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?)")
     .run(ex.id, ex.route, ex.champion, ex.challenger, ex.share, ex.min_requests, ex.max_hours, ex.auto_promote ? 1 : 0, ex.started_by, ex.started_at);
   reload();
+  journal({ kind: "experiment", ref: ex.id, who: ex.started_by === "autopilot" ? "autopilot" : undefined, title: `Started an A/B test on ${ex.route}: ${ex.challenger} vs ${ex.champion}`, detail: `${Math.round(ex.share * 100)}% of ${ex.route}'s requests to ${ex.challenger}; each arm keeps the other model behind it.` });
   event("info", "experiments", `started ${ex.id} on ${ex.route}: ${ex.challenger} gets ${Math.round(ex.share * 100)}% against ${ex.champion}`);
   return ex;
 }
 
-async function end(ex: Experiment, status: Experiment["status"], why: string, stats: Stats) {
+async function end(ex: Experiment, status: Experiment["status"], why: string, stats: Stats) { return asActor("experiments", () => endAs(ex, status, why, stats)); }
+async function endAs(ex: Experiment, status: Experiment["status"], why: string, stats: Stats) {
+  journal({ kind: "experiment", ref: ex.id, title: `A/B test on ${ex.route}: ${status.replace("_", " ")} (${ex.challenger} vs ${ex.champion})`, detail: why });
   db.prepare("UPDATE experiments SET status = ?, reason = ?, verdict = ?, stats = ?, ended_at = ? WHERE id = ?").run(status, why, why, JSON.stringify(stats), now(), ex.id);
   reload();
   const r = getRoute(ex.route);
@@ -213,7 +217,8 @@ const downloading = () => !!db.prepare("SELECT 1 FROM downloads WHERE status IN 
  *      on a gateway); the next hours benchmark it and try it.
  * What it cannot do — most often, two models that do not fit in memory together — it records, with what would allow it.
  */
-export async function autopilot(): Promise<Pilot> {
+export async function autopilot(): Promise<Pilot> { return asActor("autopilot", autopilotAs); }
+async function autopilotAs(): Promise<Pilot> {
   const out: Pilot = { at: now(), actions: [], blocked: [] };
   if (!settings().autoExperiments) { pilot = out; return out; }
   const tryStart = (route: string, challenger: string, share: number, why: string) => {

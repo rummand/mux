@@ -30,6 +30,8 @@ import { FREE_TIERS } from "../free-tiers.js";
 import { quotaReport } from "../quota.js";
 import { BORDERS, type Border } from "../router/border.js";
 import { modelResources, providerResources, tenantResources } from "./resources.js";
+import { entries, journal } from "../journal.js";
+import { registerKeeper } from "../keeper.js";
 
 const ok = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 
@@ -89,6 +91,8 @@ export function registerAdmin(app: FastifyInstance) {
       const b = req.body as Partial<Model>;
       if (b.api_key === "••••") delete b.api_key;
       const next = upsertModel({ ...prev, ...b, id });
+      const changed = Object.keys(b).filter((k) => JSON.stringify((b as Record<string, unknown>)[k]) !== JSON.stringify((prev as unknown as Record<string, unknown>)[k]));
+      if (changed.length) journal({ kind: "model", ref: id, title: `Model ${id}: ${changed.join(", ")}`, before: Object.fromEntries(changed.map((k) => [k, (prev as unknown as Record<string, unknown>)[k]])), after: Object.fromEntries(changed.map((k) => [k, (b as Record<string, unknown>)[k]])) });
       // Flags that change how the server starts take effect on its next load.
       const restart = ["path", "mmproj", "ctx", "parallel", "extra_args", "reasoning", "backend"].some((k) => k in b && JSON.stringify((b as Record<string, unknown>)[k]) !== JSON.stringify((prev as unknown as Record<string, unknown>)[k]));
       if (restart) await unload(id);
@@ -295,6 +299,8 @@ export function registerAdmin(app: FastifyInstance) {
     api.get("/settings", async () => settings());
     api.patch("/settings", async (req) => {
       const b = req.body as Record<string, unknown>;
+      const before = settings() as unknown as Record<string, unknown>;
+      journal({ kind: "setting", title: `Settings: ${Object.keys(b).join(", ")}`, before: Object.fromEntries(Object.keys(b).map((k) => [k, before[k]])), after: b });
       saveSettings(b);
       event("info", "settings", `changed ${Object.keys(b).join(", ")}`);
       return settings();
@@ -303,10 +309,13 @@ export function registerAdmin(app: FastifyInstance) {
     registerAssistant(api, app);
     registerHealer(api);
     registerBrain(api);
+    registerKeeper(api);
     registerPresence(api);
     registerJoin(api);
     registerExperiments(api);
     api.get("/quota", async () => quotaReport());
+    // mux's own changes, newest first (journal.ts).
+    api.get("/journal", async (req) => { const q = req.query as { limit?: string; since?: string; actor?: string; kind?: string }; return entries({ limit: Number(q.limit) || 100, since: Number(q.since) || undefined, actor: q.actor, kind: q.kind }); });
 
     // ── Resource data per tenant, provider and model (ids may hold a slash: a node's model is <node>/<model>) ────
     const stat = (fn: (id: string, range?: string) => unknown) => async (req: FastifyRequest, reply: FastifyReply) =>

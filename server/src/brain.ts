@@ -4,6 +4,7 @@ import { config } from "./config.js";
 import { gbrainOn, gbrainState, gcall, unwrap } from "./gbrain.js";
 import { listProviders, nodeApi, type Provider } from "./providers.js";
 import { assistantKey, gateway } from "./self.js";
+import { journal } from "./journal.js";
 
 /**
  * mux's brain (after Garry Tan's GBrain): pages of memory the assistant and the doctor write as they work — how mux is
@@ -161,6 +162,11 @@ const slug = (s: string) => s.toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g
 
 /** Write a page: the same id, or else the same title, updates it rather than adding a near-copy. */
 export async function writePage(p: { id?: string; title: string; body: string; kind?: string; subject?: string; tags?: string[]; source?: string }): Promise<Page> {
+  const page = await writePageRaw(p);
+  journal({ kind: "brain", ref: page.id, title: `Brain: ${p.id ? "updated" : "wrote"} “${page.title}”`, detail: page.body.slice(0, 600), after: { kind: page.kind, subject: page.subject } });
+  return page;
+}
+async function writePageRaw(p: { id?: string; title: string; body: string; kind?: string; subject?: string; tags?: string[]; source?: string }): Promise<Page> {
   const title = String(p.title ?? "").trim().slice(0, 200);
   if (!title) throw new Error("a page needs a title");
   const body = String(p.body ?? "").slice(0, BODY_CHARS);
@@ -182,11 +188,17 @@ export async function writePage(p: { id?: string; title: string; body: string; k
 }
 const fromRowMaybe = (r: Row | undefined) => (r ? fromRow(r) : undefined);
 
-export const forgetPage = async (id: string): Promise<boolean> =>
+export const forgetPage = async (id: string): Promise<boolean> => {
+  const ok = await forgetRaw(id);
+  if (ok) journal({ kind: "brain", ref: id, title: `Brain: forgot ${id}` });
+  return ok;
+};
+const forgetRaw = async (id: string): Promise<boolean> =>
   brainNode() ? nodeApi(brainNode()!, "DELETE", `/brain/${enc(id)}`).then(() => true, () => false) : gbrainOn() ? gcall("delete_page", { slug: id, force: true }).then(() => true) : db.prepare("DELETE FROM brain_pages WHERE id = ?").run(id).changes > 0;
 
 /** A fact about something (GBrain's own memory verb; without GBrain, a fact page). */
 export async function rememberFact(f: { fact: string; entity?: string; kind?: string; provenance?: string }): Promise<unknown> {
+  journal({ kind: "brain", ref: f.entity, title: `Brain: remembered a fact${f.entity ? ` about ${f.entity}` : ""}`, detail: f.fact });
   const node = brainNode();
   if (node) return nodeApi(node, "POST", "/brain/remember", f);
   if (!gbrainOn()) return writePage({ title: f.fact.slice(0, 120), body: f.fact, kind: "fact", subject: f.entity, source: f.provenance });

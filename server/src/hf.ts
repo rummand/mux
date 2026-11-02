@@ -7,6 +7,7 @@ import { CATALOG, catalogEntry, type CatalogEntry } from "./catalog.js";
 import { db, event, now, settings } from "./db.js";
 import { getModel, listModels, upsertModel, type Kind } from "./models.js";
 import { systemStats } from "./runtime/system.js";
+import { journal } from "./journal.js";
 
 const HF = "https://huggingface.co";
 const GB = 1024 ** 3;
@@ -52,6 +53,7 @@ export interface DownloadRequest { catalogId?: string; repo?: string; file?: str
 /** Queue a download (one at a time); the model is registered when its files are on disk. */
 export async function startDownload(req: DownloadRequest): Promise<DownloadRow> {
   if (process.env.MUX_NO_DOWNLOADS) throw new Error("downloads are off here (MUX_NO_DOWNLOADS)");
+  journal({ kind: "download", ref: req.catalogId ?? req.repo, title: `Download ${req.catalogId ?? `${req.repo}/${req.file}`}` });
   const entry = req.catalogId ? catalogEntry(req.catalogId) : undefined;
   const repo = req.repo ?? entry?.repo;
   const file = req.file ?? entry?.file;
