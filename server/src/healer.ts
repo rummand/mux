@@ -197,7 +197,7 @@ async function keepPinned() {
 
 /** A burst of 5xx answers from one model: restart it if it is ours; tell the doctor if it goes on. */
 async function errorSpikes() {
-  const rows = db.prepare(`SELECT model_id, COUNT(*) n, SUM(CASE WHEN status >= 500 THEN 1 ELSE 0 END) e, MAX(error) err FROM requests WHERE ts >= ? AND model_id IS NOT NULL GROUP BY model_id`)
+  const rows = db.prepare(`SELECT model_id, COUNT(*) n, SUM(CASE WHEN status >= 500 THEN 1 ELSE 0 END) e, MAX(error) err FROM requests WHERE ts >= ? AND model_id IS NOT NULL AND COALESCE(error_type, '') != 'node_resting' GROUP BY model_id`)
     .all(now() - 5 * 60_000) as { model_id: string; n: number; e: number; err: string | null }[];
   const bad = rows.filter((r) => r.n >= 5 && r.e / r.n >= 0.5);
   let fixed = 0;

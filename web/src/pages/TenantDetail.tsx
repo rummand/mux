@@ -99,6 +99,9 @@ function Settings({ tenant, onSaved }: { tenant: Detail; onSaved: () => void }) 
       </Card>
       <Card title="Routing" subtitle="What a request naming no mux route or model goes to — so a SaaS written for gpt-4o or Claude works unchanged.">
         <div className="space-y-3">
+          <Field label="Data border" hint={t.data_border === "own" ? "Only our machines: this one, our nodes and model servers on our own network — never a cloud API, not even as a fallback." : t.data_border === "servers" ? "Only our always-on machines — not a desktop or laptop someone works at, and never a cloud API." : "Anywhere: our machines and paid cloud APIs."}>
+            <Segmented value={t.data_border ?? "any"} onChange={(v) => set("data_border", v)} options={[{ value: "any", label: "Anywhere" }, { value: "own", label: "Our machines" }, { value: "servers", label: "Our servers" }]} />
+          </Field>
           <Field label="Default route"><Select value={t.default_route} onChange={(e) => set("default_route", e.target.value)}>{chatRoutes.map((r) => <option key={r.name} value={r.name}>{r.name} — {r.strategy}</option>)}</Select></Field>
           <Field label="Allowed routes and models" hint="Empty: everything. Otherwise this key may use only these.">
             <div className="flex flex-wrap gap-1.5 rounded-md border border-line-strong bg-s2 p-2">

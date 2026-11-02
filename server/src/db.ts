@@ -169,7 +169,8 @@ function addColumns(table: string, cols: Record<string, string>) {
 }
 addColumns("models", { provider_id: "TEXT", cost_in: "REAL DEFAULT 0", cost_out: "REAL DEFAULT 0" });
 addColumns("requests", { provider_id: "TEXT", cost_usd: "REAL DEFAULT 0" });
-addColumns("tenants", { monthly_usd_budget: "REAL DEFAULT 0" });
+addColumns("tenants", { monthly_usd_budget: "REAL DEFAULT 0", data_border: "TEXT DEFAULT 'any'" });
+addColumns("requests", { experiment_id: "TEXT", arm: "TEXT" });
 addColumns("lens_runs", { scope: "TEXT", watch_id: "TEXT", baseline: "TEXT", resolved: "TEXT DEFAULT '[]'", muted: "INTEGER DEFAULT 0" });
 
 export const now = () => Date.now();

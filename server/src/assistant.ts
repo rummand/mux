@@ -5,7 +5,7 @@ import { db, json, now, settings } from "./db.js";
 import { listModels, listRoutes } from "./models.js";
 import { listProviders } from "./providers.js";
 import { status } from "./runtime/manager.js";
-import { forgetPage, KINDS, recall, search, writePage } from "./brain.js";
+import { brainStats, forgetPage, KINDS, recall, rememberFact, search, writePage } from "./brain.js";
 import { assistantKey, gateway } from "./self.js";
 
 /**
@@ -84,7 +84,7 @@ const TOOLS = [
       description: "Open a page of the dashboard for the user, to show them what you are talking about.",
       parameters: {
         type: "object",
-        properties: { path: { type: "string", enum: ["/", "/tenants", "/tenants/<id>", "/requests", "/traces", "/lens", "/providers", "/models", "/advisor", "/routes", "/benchmarks", "/playground", "/system", "/overview", "/health", "/brain"], description: "A page; /tenants/<id> with a real tenant id" } },
+        properties: { path: { type: "string", enum: ["/", "/tenants", "/tenants/<id>", "/requests", "/traces", "/lens", "/providers", "/models", "/advisor", "/routes", "/benchmarks", "/playground", "/system", "/overview", "/health", "/brain", "/experiments"], description: "A page; /tenants/<id> with a real tenant id" } },
         required: ["path"],
       },
     },
@@ -127,6 +127,22 @@ const TOOLS = [
   {
     type: "function",
     function: {
+      name: "brain_remember",
+      description: "Remember one fact about something (a tenant, a model, a machine, the user), at once: a short claim the brain recalls whenever that thing comes up. For a fact; a runbook or a decision with its reasons is a page (brain_write).",
+      parameters: {
+        type: "object",
+        properties: {
+          fact: { type: "string", description: "One claim, e.g. \"Nexus's customer data must stay on our machines\"" },
+          entity: { type: "string", description: "What it is about: a tenant, model or machine id, or a name" },
+          kind: { type: "string", enum: ["fact", "preference", "commitment", "event", "belief"] },
+        },
+        required: ["fact", "entity"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "brain_forget",
       description: "Delete a page from mux's brain that is wrong or no longer true (waits for the user's approval). Prefer updating it with brain_write.",
       parameters: { type: "object", properties: { id: { type: "string" }, why: { type: "string" } }, required: ["id", "why"] },
@@ -145,24 +161,42 @@ export const API_REFERENCE = `Admin API (paths under /api/admin). Tenants, route
 - GET /providers; GET /providers/presets; PUT /providers/:id (create or update) {name, kind: mux|openai|anthropic|openrouter|groq|together|fireworks|cerebras|gemini|mistral|deepseek|custom, base_url, api_key, admin_token, enabled}; DELETE /providers/:id; POST /providers/:id/sync
 - GET /providers/:id/remote-models; POST /providers/:id/models {model, kind, cost_in, cost_out, ctx, caps} — add a cloud model (USD per million tokens)
 - ANY /providers/:id/proxy/<path> — the same admin API on a mux node (its models, system, downloads, benchmarks, logs)
-- GET /catalog; GET /advisor?useCase=&priority=quality|balanced|speed; GET /advisor/use-cases; GET /advisor/stack
+- Presence (on a node, or a node through /providers/:id/proxy/presence): GET /presence — state free|polite|busy|away, why, class always-on|desktop|laptop, the owner's mode; PUT /presence {mode: available|away-only|off, using: bool, class?}. available: always takes work (a server); away-only: only while nobody is at the machine (someone there → polite: only loaded models, one at a time; fullscreen/call/game → busy); off: out of the cluster. The gateway routes by it. Set a person's machine only when they ask.
+- GET /join (on a node: how a gateway could reach it, and the gateways that joined it); POST /join {gatewayUrl, gatewayToken, nodeUrl, name} joins this node to a gateway
+- GET /catalog; GET /advisor?useCase=&priority=quality|balanced|speed (each model with its score, reasons, usage here over 30 days, Hugging Face downloads/likes, the routes it is on); GET /advisor/use-cases; GET /advisor/stack
+- GET /advisor/insights — what to do about models, each with the admin call that does it: promote (put a measured, better model first on a route), try (download a model that would beat what is here), measure (benchmark one in use but unmeasured), retire (disable one nothing uses); plus trending GGUF models not in the catalog. GET /advisor/trending; POST /advisor/signals re-reads Hugging Face (runs without approval)
 - GET /hf/search?q=; GET /hf/files?repo=; GET /downloads; POST /downloads {catalogId} or {repo, file}; DELETE /downloads/:id; GET /local; POST /local/import {path, id?, kind?}
 - GET /routes; PUT /routes/:name (create or update) {description, kind, strategy: priority|auto|fastest|quality, candidates: [model ids]}; DELETE /routes/:name
 - POST /routes/explain {tenant?, model?, messages, tools?, kind?} — what the router would do, without sending (runs without approval)
-- GET /tenants; GET /tenants/:id; PUT /tenants/:id (create or update) {name, description, color, status: active|paused, rpm_limit, tpm_limit, monthly_token_budget, monthly_usd_budget, max_parallel, default_route, allowed, aliases, log_bodies}; DELETE /tenants/:id
+- GET /tenants; GET /tenants/:id; PUT /tenants/:id (create or update) {name, description, color, status: active|paused, rpm_limit, tpm_limit, monthly_token_budget, monthly_usd_budget, max_parallel, default_route, allowed, aliases, log_bodies, data_border: any|own|servers} — data_border: own keeps a tenant on our machines (never a cloud API), servers on our always-on machines only; the router enforces it; DELETE /tenants/:id
 - POST /tenants/:id/keys {name, expiresInDays?, rpmLimit?, monthlyTokenBudget?} — returns the key once; DELETE /keys/:id revokes
 - GET /requests?tenant=&model=&status=ok|error&agent=&trace=&q=&limit=; GET /requests/:id (with bodies and route reason); GET /traces?range=&tenant=
 - GET /benchmarks?model=; POST /benchmarks {model}
 - Lens, investigations of the traffic (they only read, so they run without approval): GET /lens?watch= (runs, newest first: findings each new or ongoing, resolved since the last run, baseline metrics against the window before); GET /lens/runs/:id; POST /lens {title, filters: {tenantId?, agent?, model?, hours?, sample?}, criteria?, useModel?, modelId?} — returns {id}, done in seconds to a few minutes
 - GET /lens/watches; PUT /lens/watches/:id {title, filters, criteria, every_hours, use_model, model_id, enabled}; DELETE /lens/watches/:id; POST /lens/watches/:id/run; GET /lens/mutes; POST /lens/mutes {key, title, days?}; DELETE /lens/mutes/:key
+- Experiments, A/B tests on live traffic with production always served (each arm keeps the other model behind it as a fallback; guardrails roll back a worse challenger at once): GET /experiments (each with live arm stats); POST /experiments {route, challenger, share? 0.01–0.5, minRequests?, maxHours?, autoPromote?}; POST /experiments/:id/stop; GET /experiments/autopilot (what mux decided to try last, and what it could not and why); POST /experiments/autopilot/run. mux runs its own experiments (autoExperiments): suggest a change as an experiment, not a direct route switch.
 - GET /settings; PATCH /settings {memoryBudgetGb, memoryHeadroomGb, diskReserveGb, keepAliveMin, maxLoaded, retentionDays, pressureGuard, logBodies, assistantModel}`;
 
-function systemPrompt(snapshot: string, page: string | undefined, memory: string) {
-  return `You are the mux assistant, inside mux's dashboard. mux is a model router and control plane: SaaS products call it with an API key through an OpenAI-style (/v1/chat/completions, /v1/embeddings, /v1/audio/*) or Anthropic-style (/v1/messages) API, and mux routes each request to a model — local models on mux nodes (llama.cpp llama-server, MLX, Laya for Jev's System One) or paid cloud APIs. A gateway (mux on Railway) runs no models; nodes (the Mac Studio) do. Tenants are the SaaS products, each with keys, limits, budgets, aliases and a default route. Routes are named model lists with a strategy. Every request is metered (tokens, latency, time to first token, speed, cost, fallbacks), and Lens looks for problems in the traffic.
+/** One line on the brain, for the prompt: where it is and how much it holds — so the assistant knows it has one. */
+export async function brainLine(): Promise<string> {
+  try {
+    const s = await brainStats();
+    const where = s.node ? `on the node ${(s.node as { name: string }).name}, shared with every mux` : s.backend === "gbrain" ? "on this machine" : "in mux's own database";
+    const what = s.backend === "gbrain" ? `GBrain${(s.gbrain as { version?: string } | undefined)?.version ? ` ${(s.gbrain as { version: string }).version}` : ""}` : s.backend === "unreachable" ? "the node's brain" : "mux's own brain";
+    return s.backend === "unreachable" ? `Your brain is ${where}, but it does not answer right now (${String(s.error ?? "").slice(0, 120)}): say so if memory matters to the answer.` : `Your brain is ${what}, ${where}: ${s.pages}${s.morePages ? "+" : ""} page${s.pages === 1 ? "" : "s"} so far.`;
+  } catch (e) { return `Your brain did not answer just now (${(e as Error).message.slice(0, 120)}).`; }
+}
+
+function systemPrompt(snapshot: string, page: string | undefined, memory: string, brain = "") {
+  return `You are mux's own assistant — mux thinking about itself — inside mux's dashboard. This mux belongs to its owner, the person talking to you, and always will: you look after it for them. You may learn and optimise whatever you want — read anything, remember anything worth keeping, work out and propose any improvement — but every change to mux waits for the owner's approval in the dashboard. It is their mux.
+
+You have a brain: memory that lasts between conversations. ${brain} You recall from it before every answer (what matched is at the end of this prompt), search it (brain_search), and write to it as you learn (brain_write for pages, brain_remember for facts about a tenant, model or machine). So you do remember across sessions: never say you have no memory or start fresh; if the brain holds nothing on a subject yet, say that, and remember it now if it matters.
+
+mux is a model router and control plane: SaaS products call it with an API key through an OpenAI-style (/v1/chat/completions, /v1/embeddings, /v1/audio/*) or Anthropic-style (/v1/messages) API, and mux routes each request to a model — local models on mux nodes (llama.cpp llama-server, MLX, Laya for Jev's System One) or paid cloud APIs. A gateway (mux on Railway) runs no models; nodes (the Mac Studio) do. Tenants are the SaaS products, each with keys, limits, budgets, aliases and a default route. Routes are named model lists with a strategy. Every request is metered (tokens, latency, time to first token, speed, cost, fallbacks), and Lens looks for problems in the traffic.
 
 Your job: help the user run and fix mux — find out why something fails, explain what mux is doing, and set up models, routes, tenants, keys, providers and settings. Look before you answer: read the state with your tools instead of guessing, and quote what you saw (numbers, ids, errors). When something is broken, find the cause in the events, the logs, the request detail and the system state, then propose the fix. For a change, call mux_api with a short "why"; the user approves it in the dashboard, so ask nothing first — propose the call itself. Make one change at a time and check its effect. Never ask for or repeat secrets (API keys, admin tokens): the user enters those in the dashboard. Answer in the user's language, briefly, in Markdown.
 
-You have a brain: pages of memory that you and mux's doctor keep across conversations. The pages that match the user's message are below; search it (brain_search) when the question touches something you may have learned before. When you learn something that will matter in a later conversation — why something is set up as it is, a decision and its reason, what the user prefers, the cause and fix of a problem — write it (brain_write) without asking, short and concrete, updating a page you recalled rather than adding a near-copy. Do not write what mux's API already shows (the list of models, the current settings), only what it does not: the why, the history, the lessons. When the brain and what you read now disagree, trust what you read and fix the page.
+About the brain: pages and facts that you and mux's doctor keep across conversations. The pages that match the user's message are below; search it (brain_search) when the question touches something you may have learned before. When you learn something that will matter in a later conversation — why something is set up as it is, a decision and its reason, what the user prefers, the cause and fix of a problem — write it (brain_write) without asking, short and concrete, updating a page you recalled rather than adding a near-copy. Do not write what mux's API already shows (the list of models, the current settings), only what it does not: the why, the history, the lessons. When the brain and what you read now disagree, trust what you read and fix the page. When the brain says where a tenant's data may go ("stays local", "never to the cloud"), check that tenant's data_border matches, and propose setting it if not.
 
 ${API_REFERENCE}
 
@@ -176,7 +210,7 @@ ${memory}`;
 /** A short picture of mux now, so the first answer starts from facts. */
 export async function snapshot(): Promise<string> {
   const inst = await status().catch(() => []);
-  const providers = listProviders().map((p) => `${p.id} (${p.kind}, ${p.enabled ? p.status : "disabled"}${p.error ? `: ${p.error.slice(0, 120)}` : ""})`);
+  const providers = listProviders().map((p) => `${p.id} (${p.kind}, ${p.enabled ? p.status : "disabled"}${p.info?.presence && p.status === "online" ? `, ${p.info.presence.state} ${p.info.presence.class}${p.info.presence.state !== "free" ? `: ${p.info.presence.reasons.join(", ")}` : ""}` : ""}${p.error ? `: ${p.error.slice(0, 120)}` : ""})`);
   const models = listModels();
   const routes = listRoutes().map((r) => `${r.name}[${r.strategy}: ${r.candidates.join(", ") || "all fitting"}]`);
   const problems = db.prepare("SELECT ts, level, source, message FROM events WHERE level != 'info' AND ts >= ? ORDER BY ts DESC LIMIT 6").all(now() - 6 * 3600_000) as { ts: number; level: string; source: string; message: string }[];
@@ -192,7 +226,7 @@ export async function snapshot(): Promise<string> {
 }
 
 export const isChange = (name: string, args: Record<string, unknown>) =>
-  name === "brain_forget" || name === "mux_api" && String(args.method ?? "GET").toUpperCase() !== "GET" && !/\/routes\/explain$|^\/?lens(\/watches\/[^/]+\/run)?$/.test(String(args.path ?? "").replace(/^\/api\/admin/, ""));
+  name === "brain_forget" || name === "mux_api" && String(args.method ?? "GET").toUpperCase() !== "GET" && !/\/routes\/explain$|^\/?lens(\/watches\/[^/]+\/run)?$|^\/?advisor\/signals$/.test(String(args.path ?? "").replace(/^\/api\/admin/, ""));
 
 export const parse = (s: string): Record<string, unknown> => { try { const v = JSON.parse(s || "{}"); return v && typeof v === "object" ? v : {}; } catch { return {}; } };
 
@@ -262,7 +296,9 @@ export async function runTool(app: FastifyInstance, call: Call, emit: (type: str
         return JSON.stringify({ ok: true, id: p.id, title: p.title, embedded: p.embedded });
       }
       case "brain_forget":
-        return JSON.stringify(forgetPage(String(a.id ?? "")) ? { ok: true, forgotten: a.id } : { error: `no page ${a.id}` });
+        return JSON.stringify((await forgetPage(String(a.id ?? ""))) ? { ok: true, forgotten: a.id } : { error: `no page ${a.id}` });
+      case "brain_remember":
+        return clip(JSON.stringify(await rememberFact({ fact: String(a.fact ?? ""), entity: a.entity ? String(a.entity) : undefined, kind: a.kind ? String(a.kind) : undefined, provenance: `mux ${source}` })));
       case "open_page":
         emit("navigate", { path: String(a.path ?? "/") });
         return JSON.stringify({ ok: true, opened: a.path });
@@ -423,7 +459,7 @@ export function registerAssistant(api: FastifyInstance, app: FastifyInstance) {
         asked.recalled = mem.pages.map((p) => ({ id: p.id, title: p.title }));
         emit("recall", { pages: asked.recalled });
       }
-      const sys = systemPrompt(await snapshot(), b.page, mem.block);
+      const sys = systemPrompt(await snapshot(), b.page, mem.block, await brainLine());
       msgs = await converse(app, { msgs, sys, model, convo, signal: ac.signal, emit, decide: (c) => (isChange(c.function.name, parse(c.function.arguments)) ? "pause" : "run") });
     } catch (e) {
       if (!ac.signal.aborted) emit("error", { message: (e as Error).message });

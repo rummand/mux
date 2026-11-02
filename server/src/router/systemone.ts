@@ -42,6 +42,7 @@ export async function runSystemOne(ctx: Ctx, body: { model?: string; state: unkn
   if (wrong) throw new MuxError(400, "invalid_request", wrong);
   ctx.requested = body.model;
   const d = decide(ctx.tenant, body.model, "systemone", null);
+  ctx.experiment = d.experiment ?? null;
   ctx.route = d.route?.name ?? null;
   ctx.reason = d.reason;
   let last = "";

@@ -25,7 +25,13 @@ export default function BrainPage() {
     <>
       <PageHeader title="Brain" subtitle="What the assistant and the doctor remember across conversations: how this mux is set up and why, decisions, preferences, and runbooks for problems already solved."
         actions={<Button variant="primary" onClick={() => select("new")}>New page</Button>} />
-      {s && (
+      {s?.backend === "gbrain" ? (
+        <p className="mb-4 text-[12px] text-ink-3">
+          <a href="https://github.com/garrytan/gbrain" target="_blank" rel="noreferrer" className="text-accent hover:underline">GBrain</a>
+          {s.gbrain?.version ? ` ${s.gbrain.version}` : ""} at {s.gbrain?.url}{s.gbrain?.managed ? ", run by mux" : ""} · {fmtInt(s.pages)}{s.morePages ? "+" : ""} pages · embeddings through mux's embed route
+          {s.gbrain && !s.gbrain.ok && <span className="text-bad"> · not answering{s.gbrain.error ? `: ${s.gbrain.error}` : ""}</span>}
+        </p>
+      ) : s && (
         <p className="mb-4 text-[12px] text-ink-3">
           {fmtInt(s.pages)} pages · {fmtInt(s.embedded)} embedded{s.models.length ? ` with ${s.models.map((m) => m.model).join(", ")}` : ""}
           {!s.embedding && " · the embed route is not answering, so search goes by words until it is"}

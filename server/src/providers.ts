@@ -1,5 +1,6 @@
 import { db, event, json, now } from "./db.js";
 import { sampleProvider } from "./admin/resources.js";
+import type { Presence } from "./presence.js";
 import { deleteModel, getModel, listModels, listRoutes, upsertModel, upsertRoute, type Caps, type Kind } from "./models.js";
 
 /**
@@ -18,6 +19,8 @@ export interface NodeInfo {
   instances?: { id: string; state: string; estimateGb: number; inflight: number; rssGb: number | null }[];
   budget?: { budgetGb: number; usedGb: number };
   models?: number; latencyMs?: number; version?: string;
+  /** Whether the node takes work now (free, polite, busy, away) and what kind of machine it is; read every 5 s. */
+  presence?: Presence | null;
 }
 
 /** Cloud presets: an OpenAI-compatible base URL each (Anthropic and Gemini included, through their compatibility endpoints). */
@@ -95,7 +98,7 @@ export async function syncNode(p: Provider) {
   const t0 = Date.now();
   try {
     const [sys, models] = await Promise.all([nodeApi<NodeInfo & { system: NodeInfo["system"] }>(p, "GET", "/system?range=15m"), nodeApi<NodeModel[]>(p, "GET", "/models")]);
-    const info: NodeInfo = { system: sys.system, instances: sys.instances, budget: sys.budget, models: models.length, latencyMs: Date.now() - t0, version: sys.version };
+    const info: NodeInfo = { system: sys.system, instances: sys.instances, budget: sys.budget, models: models.length, latencyMs: Date.now() - t0, version: sys.version, presence: sys.presence ?? null };
     const wasDown = p.status !== "online";
     saveProvider({ ...p, status: "online", last_seen: now(), error: null, info });
     sampleProvider(p.id, true, info);
@@ -151,8 +154,27 @@ export function loadedOnNode(providerId: string, upstream: string): boolean {
   return !!p?.info?.instances?.some((i) => i.id === upstream && i.state === "ready");
 }
 
+/** A node's presence, as last read; nodes from before presence (no field) are free. */
+export function presenceOf(providerId: string | null): Presence | null {
+  if (!providerId) return null;
+  return getProvider(providerId)?.info?.presence ?? null;
+}
+
+/** Presence changes faster than the rest of a node: read it every 5 s from the nodes that are online. */
+async function syncPresence(p: Provider) {
+  try {
+    const pr = await nodeApi<Presence>(p, "GET", "/presence", undefined, 4000);
+    const fresh = getProvider(p.id);
+    if (!fresh?.info || fresh.status !== "online") return;
+    if (fresh.info.presence?.state !== pr.state) event("info", "providers", `${p.name}: ${fresh.info.presence?.state ?? "unknown"} → ${pr.state} (${pr.reasons.join(", ")})`);
+    saveProvider({ ...fresh, info: { ...fresh.info, presence: pr } });
+  } catch { /* the 15 s sync marks a node offline; an older node has no /presence */ }
+}
+
 export function startProviderSync() {
-  const tick = () => { for (const p of listProviders().filter((x) => x.kind === "mux" && x.enabled)) void syncNode(p); };
+  const nodes = () => listProviders().filter((x) => x.kind === "mux" && x.enabled);
+  const tick = () => { for (const p of nodes()) void syncNode(p); };
   setInterval(tick, 15_000).unref();
   setTimeout(tick, 1000);
+  setInterval(() => { for (const p of nodes().filter((x) => x.status === "online")) void syncPresence(p); }, 5000).unref();
 }

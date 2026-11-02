@@ -8,6 +8,7 @@ import { check, enter, leave } from "../router/limits.js";
 import { finish, newCtx, type Ctx } from "../router/metering.js";
 import { features } from "../router/select.js";
 import { runSystemOne } from "../router/systemone.js";
+import { runRead, runSearch } from "../router/web.js";
 import { authenticate } from "../tenants.js";
 import { anthropicErrorType, fromOpenAI, StreamTranslator, toOpenAI, type MessagesBody } from "./anthropic.js";
 
@@ -181,6 +182,9 @@ export function registerGateway(app: FastifyInstance) {
   app.post("/v1/messages", (req, reply) => chat(req, reply, "anthropic"));
   app.post("/v1/embeddings", (req, reply) => simple(req, reply, "openai.embeddings", (ctx, s) => runEmbeddings(ctx, req.body as never, s)));
   for (const path of ["/v1/rerank", "/v1/reranking", "/rerank"]) app.post(path, (req, reply) => simple(req, reply, "rerank", (ctx, s) => runEmbeddings(ctx, req.body as never, s, "rerank")));
+  // Shared services for every product: search the web, read a page as plain text (router/web.ts)
+  app.post("/v1/search", (req, reply) => simple(req, reply, "web.search", (ctx, s) => runSearch(ctx, (req.body ?? {}) as never, s)));
+  app.post("/v1/read", (req, reply) => simple(req, reply, "web.read", (ctx, s) => runRead(ctx, (req.body ?? {}) as never, s)));
   app.post("/v1/systemone", (req, reply) => simple(req, reply, "systemone", (ctx, s) => runSystemOne(ctx, req.body as never, s)));
 
   app.post("/v1/messages/count_tokens", async (req, reply) => {

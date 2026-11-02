@@ -300,6 +300,7 @@ struct MachinesView: View {
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 14) {
+        if let p = monitor.system?.presence, !monitor.isGateway { PresenceCard(monitor: monitor, p: p) }
         if let s = monitor.system?.system, !monitor.isGateway {
           Section2(title: monitor.system?.name ?? "This mux") {
             HStack(spacing: 14) {
@@ -312,6 +313,7 @@ struct MachinesView: View {
             ForEach(monitor.instances) { i in ModelRow(i: i, unload: i.state == "ready" ? { Task { await monitor.unload(i.id) } } : nil) }
           }
         }
+        if !monitor.isGateway && monitor.system?.presence != nil { JoinSection(monitor: monitor) }
         if !monitor.nodes.isEmpty || monitor.isGateway {
           Section2(title: "Nodes") {
             if monitor.nodes.isEmpty { Text("No mux nodes have joined this gateway yet.").font(.caption).foregroundStyle(.secondary) }
@@ -320,6 +322,91 @@ struct MachinesView: View {
         }
       }
       .padding(12)
+    }
+  }
+}
+
+/// This machine's presence and its owner's say over it.
+struct PresenceCard: View {
+  let monitor: Monitor
+  let p: Presence
+  var body: some View {
+    Section2(title: "This machine in the cluster") {
+      HStack(spacing: 8) {
+        StatePill(state: p.state)
+        Text(p.reasons.joined(separator: ", ")).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+        Spacer()
+        Text(p.class).font(.caption2).foregroundStyle(.tertiary)
+      }
+      Picker("Takes work", selection: Binding(get: { p.mode }, set: { m in Task { await monitor.setPresence(mode: m) } })) {
+        Text("Available").tag("available"); Text("When I'm away").tag("away-only"); Text("Off").tag("off")
+      }
+      .pickerStyle(.segmented)
+      Toggle(isOn: Binding(get: { p.using }, set: { u in Task { await monitor.setPresence(using: u) } })) {
+        VStack(alignment: .leading, spacing: 1) {
+          Text("I'm using this Mac").font(.system(size: 12))
+          Text("Only models already loaded, one at a time. Ends by itself after 30 min away.").font(.caption2).foregroundStyle(.secondary)
+        }
+      }
+      .toggleStyle(.switch).controlSize(.small)
+    }
+  }
+}
+
+struct StatePill: View {
+  let state: String
+  var body: some View {
+    Text(state).font(.system(size: 10.5, weight: .semibold)).padding(.horizontal, 7).padding(.vertical, 2)
+      .background(color.opacity(0.18), in: Capsule()).foregroundStyle(color)
+  }
+  private var color: Color { switch state { case "free": .green; case "polite": .blue; case "busy": .orange; default: .red } }
+}
+
+/// "Join the cluster": tell a gateway how to reach this Mac, and hand it this Mac's admin token.
+struct JoinSection: View {
+  let monitor: Monitor
+  @State private var info: JoinInfo?
+  @State private var open = false
+  @State private var gateway = Connections.envFile("railway.env")["MUX_GATEWAY_URL"] ?? ""
+  @State private var token = Connections.envFile("railway.env")["MUX_GATEWAY_ADMIN_TOKEN"] ?? ""
+  @State private var way = ""
+  @State private var custom = ""
+  @State private var name = ""
+  @State private var result: String?
+  @State private var busy = false
+
+  var body: some View {
+    Section2(title: "Cluster") {
+      if let g = info?.gateways, !g.isEmpty {
+        ForEach(g, id: \.id) { x in
+          Label("\(x.name)\(x.last_used.map { " · last used \(ago($0 / 1000))" } ?? "")", systemImage: "point.3.connected.trianglepath.dotted").font(.system(size: 12))
+        }
+      } else if info != nil {
+        Text("This Mac is not part of a cluster yet.").font(.caption).foregroundStyle(.secondary)
+      }
+      if !open { Button(info?.gateways.isEmpty == false ? "Join another gateway…" : "Join the cluster…") { open = true }.controlSize(.small) }
+      if open, let info {
+        TextField("Gateway URL", text: $gateway).textFieldStyle(.roundedBorder)
+        SecureField("Gateway admin token", text: $token).textFieldStyle(.roundedBorder)
+        Picker("Reached at", selection: $way) {
+          ForEach(info.ways, id: \.url) { w in Text("\(w.label) · \(w.url)").tag(w.url) }
+          Text("Another URL…").tag("other")
+        }
+        if way == "other" { TextField("https://… or http://….local:7070", text: $custom).textFieldStyle(.roundedBorder) }
+        if let w = info.ways.first(where: { $0.url == way }) { Text(w.note).font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+        TextField("Name", text: $name).textFieldStyle(.roundedBorder)
+        HStack {
+          Button(busy ? "Joining…" : "Join") { Task { busy = true; result = await monitor.join(gatewayUrl: gateway, gatewayToken: token, nodeUrl: way == "other" ? custom : way, name: name); busy = false; self.info = await monitor.joinInfo() } }
+            .buttonStyle(.borderedProminent).disabled(busy || gateway.isEmpty || token.isEmpty || way.isEmpty || (way == "other" && custom.isEmpty))
+          Button("Cancel") { open = false }
+        }.controlSize(.small)
+      }
+      if let result { Text(result).font(.caption).foregroundStyle(result.hasPrefix("✓") ? .green : .red).fixedSize(horizontal: false, vertical: true) }
+    }
+    .task {
+      info = await monitor.joinInfo()
+      if way.isEmpty { way = info?.ways.first?.url ?? "" }
+      if name.isEmpty { name = info?.name ?? "" }
     }
   }
 }
@@ -365,9 +452,11 @@ struct NodeRow: View {
       HStack(spacing: 8) {
         Circle().fill(n.status == "online" ? Color.green : n.enabled ? .red : .gray).frame(width: 7, height: 7)
         Text(n.name).font(.system(size: 12, weight: .medium))
+        if let p = n.info?.presence, n.status == "online" { StatePill(state: p.state); Text(p.class).font(.caption2).foregroundStyle(.tertiary) }
         Spacer()
         Text(n.enabled ? n.status : "disabled").font(.caption).foregroundStyle(.secondary)
       }
+      if let p = n.info?.presence, n.status == "online", p.state != "free" { Text(p.reasons.joined(separator: ", ")).font(.caption2).foregroundStyle(.secondary) }
       if let info = n.info {
         let loaded = (info.instances ?? []).filter { $0.state == "ready" }.map(\.id)
         Text([info.system?.chip, info.system.map { String(format: "%.0f GB free of %.0f", $0.memFreeGb ?? 0, $0.memTotalGb ?? 0) }, info.latencyMs.map { "\(Int($0)) ms" }].compactMap { $0 }.joined(separator: " · "))

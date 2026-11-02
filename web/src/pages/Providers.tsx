@@ -68,6 +68,7 @@ function NodeCard({ p, onChange }: { p: Provider; onChange: () => void }) {
       actions={<><StatusDot tone={tone} label={p.status} pulse={p.status === "online"} />
         <Button size="sm" onClick={async () => { await api(`/providers/${p.id}/sync`, { method: "POST", scope: null }); onChange(); }}>Sync</Button></>}>
       {p.error && p.status !== "online" && <p className="mb-3 text-[12px] text-bad">{p.error}</p>}
+      {p.info?.presence && p.status === "online" && <PresenceRow p={p} onChange={onChange} />}
       <div className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4 text-[12px]">
         <div><div className="text-ink-3">Machine</div><div className="font-medium">{s?.chip ?? "—"}</div><div className="text-ink-3 num">{s ? `${s.cores} cores · ${s.memTotalGb.toFixed(0)} GB` : ""}</div></div>
         <div><div className="text-ink-3">Free memory</div><div className="font-medium num">{fmtGb(s?.memFreeGb)}</div><div className={`num ${(s?.swapGb ?? 0) > 20 ? "text-warn" : "text-ink-3"}`}>swap {fmtGb(s?.swapGb)}</div></div>
@@ -173,5 +174,22 @@ function CloudModels({ p, onClose }: { p: Provider; onClose: () => void }) {
         </Table>
       </div>
     </Modal>
+  );
+}
+
+/** A node's presence: free, polite, busy or away, why, and when it takes work (its owner can set it here too). */
+function PresenceRow({ p, onChange }: { p: Provider; onChange: () => void }) {
+  const pr = p.info!.presence!;
+  const tone = pr.state === "free" ? "good" : pr.state === "polite" ? "accent" : pr.state === "busy" ? "warn" : "bad";
+  const set = async (mode: string) => { await api(`/providers/${p.id}/proxy/presence`, { method: "PUT", body: { mode }, scope: null }); onChange(); };
+  return (
+    <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md bg-s2 px-3 py-2 text-[12px]">
+      <Badge tone={tone}>{pr.state}</Badge>
+      <span className="text-ink-2">{pr.reasons.join(", ")}</span>
+      <span className="text-ink-3">· {pr.class}</span>
+      <Select className="ml-auto w-44" value={pr.mode} onChange={(e) => void set(e.target.value)} title="When this machine takes work">
+        <option value="available">Available</option><option value="away-only">When nobody's there</option><option value="off">Off</option>
+      </Select>
+    </div>
   );
 }

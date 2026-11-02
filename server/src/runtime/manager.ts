@@ -8,6 +8,7 @@ import { event, settings } from "../db.js";
 import { getModel, listModels, type Model } from "../models.js";
 import { getProvider } from "../providers.js";
 import { rssGb, systemStats } from "./system.js";
+import { admit, Resting, setLoadReader } from "../presence.js";
 
 const GB = 1024 ** 3;
 const RUN_DIR = join(config.home, "run");
@@ -203,6 +204,9 @@ export async function acquire(m: Model): Promise<Upstream> {
     return { baseUrl: base.replace(/\/$/, ""), model: m.upstream_model || m.id, headers, coldStartMs: 0 };
   }
   const t0 = Date.now();
+  // This machine's presence first: a person at it, or its owner, may keep it from new work (presence.ts).
+  try { await admit(m.id, () => !!instances.get(m.id) && instances.get(m.id)!.state !== "failed", () => instances.get(m.id)?.inflight ?? 0); }
+  catch (e) { if (e instanceof Resting) throw new ModelUnavailable(e.message, 503, "node_resting"); throw e; }
   let inst = instances.get(m.id);
   if (!inst) {
     const failed = lastFailure.get(m.id);
@@ -234,6 +238,18 @@ export async function unload(id: string) {
   });
   event("info", "runtime", `unloaded ${id}`);
   return true;
+}
+
+/** Requests running against slots, per loaded model: how long a new request would wait. */
+export function loadOf(id: string): { inflight: number; slots: number } | null {
+  const i = instances.get(id);
+  return i && i.state === "ready" ? { inflight: i.inflight, slots: Math.max(1, getModel(id)?.parallel ?? 1) } : null;
+}
+setLoadReader(() => Object.fromEntries([...instances.keys()].map((id) => [id, loadOf(id)]).filter(([, l]) => l)));
+
+/** Unload every model nobody is using that is not pinned: for the person at a busy machine, or one turned off. */
+export async function freeIdle() {
+  for (const i of [...instances.values()].filter((x) => x.state === "ready" && x.inflight === 0 && !getModel(x.id)?.pinned)) await unload(i.id);
 }
 
 export async function warm(id: string) {

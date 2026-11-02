@@ -1,7 +1,8 @@
 import { closeSync, existsSync, openSync, readFileSync, readSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { advise, recommendStack, USE_CASES, type UseCase } from "../advisor.js";
+import { advise, insights, recommendStack, usageTable, USE_CASES, type UseCase } from "../advisor.js";
+import { refreshSignals, signalsAge, trendingNotInCatalog } from "../signals.js";
 import { benchBus, runBenchmark } from "../bench.js";
 import { CATALOG } from "../catalog.js";
 import { config } from "../config.js";
@@ -22,6 +23,10 @@ import { timingSafeEqual } from "node:crypto";
 import { registerAssistant } from "../assistant.js";
 import { registerHealer } from "../healer.js";
 import { registerBrain } from "../brain.js";
+import { presence, registerPresence } from "../presence.js";
+import { registerJoin } from "../join.js";
+import { registerExperiments } from "../experiments.js";
+import { BORDERS, type Border } from "../router/border.js";
 import { modelResources, providerResources, tenantResources } from "./resources.js";
 
 const ok = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
@@ -36,6 +41,8 @@ export function registerAdmin(app: FastifyInstance) {
   app.register(async (api) => {
     api.addHook("onRequest", async (req: FastifyRequest, reply: FastifyReply) => {
       const token = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "") || (req.query as { token?: string }).token || "";
+      const signals = req.method === "POST" && req.url.split("?")[0] === "/api/admin/presence/signals";
+      if (signals && config.presenceToken && ok(token, config.presenceToken)) return;
       if (!ok(token, config.adminToken)) return reply.code(401).send({ error: "admin token required" });
     });
 
@@ -52,6 +59,7 @@ export function registerAdmin(app: FastifyInstance) {
         budget: { budgetGb: s.memoryBudgetGb, usedGb: inst.reduce((a, i) => a + i.estimateGb, 0), headroomGb: s.memoryHeadroomGb, maxLoaded: s.maxLoaded },
         series: systemSeries((req.query as { range?: string }).range),
         version: process.env.npm_package_version ?? "0.1.0", uptimeS: Math.round(process.uptime()), role: config.role, name: config.name,
+        presence: config.role === "gateway" ? null : presence(),
       };
     });
     api.get("/events", async (req) => {
@@ -191,6 +199,10 @@ export function registerAdmin(app: FastifyInstance) {
       return advise(q.useCase && q.useCase in USE_CASES ? q.useCase : "agent", q.priority);
     });
     api.get("/advisor/stack", async () => recommendStack());
+    api.get("/advisor/insights", async () => ({ ...(await insights()), signalsAt: signalsAge() }));
+    api.get("/advisor/trending", async () => trendingNotInCatalog(30));
+    api.get("/advisor/usage", async (req) => usageTable(Math.min(Number((req.query as { days?: string }).days) || 30, 365)));
+    api.post("/advisor/signals", async () => refreshSignals());
     api.get("/hf/search", async (req) => searchHf((req.query as { q: string }).q ?? ""));
     api.get("/hf/files", async (req) => repoFiles((req.query as { repo: string }).repo));
     api.get("/downloads", async () => listDownloads());
@@ -238,6 +250,8 @@ export function registerAdmin(app: FastifyInstance) {
     api.put("/tenants/:id", async (req, reply) => {
       const id = (req.params as { id: string }).id;
       if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) return reply.code(400).send({ error: "a tenant id is lowercase letters, digits and dashes" });
+      const border = (req.body as { data_border?: string })?.data_border;
+      if (border !== undefined && !BORDERS.includes(border as Border)) return reply.code(400).send({ error: "data_border is any, own or servers" });
       const t = upsertTenant({ ...(req.body as object), id });
       event("info", "tenants", `saved tenant ${id}`);
       return t;
@@ -281,6 +295,9 @@ export function registerAdmin(app: FastifyInstance) {
     registerAssistant(api, app);
     registerHealer(api);
     registerBrain(api);
+    registerPresence(api);
+    registerJoin(api);
+    registerExperiments(api);
 
     // ── Resource data per tenant, provider and model (ids may hold a slash: a node's model is <node>/<model>) ────
     const stat = (fn: (id: string, range?: string) => unknown) => async (req: FastifyRequest, reply: FastifyReply) =>

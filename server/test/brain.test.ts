@@ -34,16 +34,16 @@ test("pages are written, found, updated by title instead of copied, and forgotte
 
   const b = await writePage({ title: "nexus uses the AGENT route", kind: "decision", body: "Changed: now `smart`." });
   assert.equal(b.id, a.id);
-  assert.equal(getPage(a.id)!.body, "Changed: now `smart`.");
+  assert.equal((await getPage(a.id))!.body, "Changed: now `smart`.");
   assert.equal(b.created_at, a.created_at);
 
   const r = await recall("nexus agent route");
   assert.deepEqual(r.pages.map((p) => p.id), [a.id]);
   assert.match(r.block, /Changed: now `smart`/);
-  assert.equal(getPage(a.id)!.recalls, 1);
+  assert.equal((await getPage(a.id))!.recalls, 1);
 
-  assert.equal(forgetPage(a.id), true);
-  assert.equal(getPage(a.id), undefined);
+  assert.equal(await forgetPage(a.id), true);
+  assert.equal(await getPage(a.id), undefined);
   assert.match((await recall("nexus agent route")).block, /Nothing in the brain/);
 });
 

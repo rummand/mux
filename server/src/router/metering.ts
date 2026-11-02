@@ -14,6 +14,8 @@ export interface Ctx {
   promptTokens?: number; completionTokens?: number; cachedTokens?: number;
   ttftMs?: number | null; queueMs?: number; upstreamMs?: number; tps?: number | null; coldStart?: boolean; fallbacks?: number; finish?: string | null;
   bodyReq?: unknown; bodyRes?: unknown;
+  /** The experiment (and arm) the router put this request in, if any. */
+  experiment?: { id: string; arm: "A" | "B" } | null;
 }
 
 export const live = new EventEmitter();
@@ -31,10 +33,10 @@ const clip = (v: unknown, n = 8000) => {
 
 const insert = db.prepare(`INSERT INTO requests(id, ts, tenant_id, key_id, endpoint, requested_model, route, model_id, route_reason, stream, tools, forced_tool,
   status, error_type, error, prompt_tokens, completion_tokens, cached_tokens, latency_ms, ttft_ms, queue_ms, tps, overhead_ms, tags, cold_start, fallbacks, trace_id, agent, end_user,
-  finish_reason, ip, user_agent, body_req, body_res, provider_id, cost_usd)
+  finish_reason, ip, user_agent, body_req, body_res, provider_id, cost_usd, experiment_id, arm)
   VALUES(@id, @ts, @tenant_id, @key_id, @endpoint, @requested_model, @route, @model_id, @route_reason, @stream, @tools, @forced_tool,
   @status, @error_type, @error, @prompt_tokens, @completion_tokens, @cached_tokens, @latency_ms, @ttft_ms, @queue_ms, @tps, @overhead_ms, @tags, @cold_start, @fallbacks, @trace_id, @agent, @end_user,
-  @finish_reason, @ip, @user_agent, @body_req, @body_res, @provider_id, @cost_usd)`);
+  @finish_reason, @ip, @user_agent, @body_req, @body_res, @provider_id, @cost_usd, @experiment_id, @arm)`);
 
 /** Write the call's row and tell the live view. */
 export function finish(ctx: Ctx, status: number, error?: { type: string; message: string }) {
@@ -51,6 +53,7 @@ export function finish(ctx: Ctx, status: number, error?: { type: string; message
     overhead_ms: Math.max(0, Math.round((latency - (ctx.upstreamMs ?? 0) - (ctx.queueMs ?? 0)) * 100) / 100),
     tags: ctx.tags.length ? ctx.tags.join(",") : null, cold_start: ctx.coldStart ? 1 : 0, fallbacks: ctx.fallbacks ?? 0, trace_id: ctx.traceId ?? null, agent: ctx.agent ?? null, end_user: ctx.endUser ?? null, finish_reason: ctx.finish ?? null,
     ip: ctx.ip, user_agent: ctx.userAgent.slice(0, 200), provider_id: model?.provider_id ?? null, cost_usd: cost, body_req: keepBodies ? clip(ctx.bodyReq) : null, body_res: keepBodies ? clip(ctx.bodyRes) : null,
+    experiment_id: ctx.experiment?.id ?? null, arm: ctx.experiment?.arm ?? null,
   };
   try { insert.run(row); } catch (e) { console.error("metering:", (e as Error).message); }
   addTokens(ctx.tenant.id, row.prompt_tokens + row.completion_tokens);

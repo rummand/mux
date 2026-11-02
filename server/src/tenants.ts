@@ -5,6 +5,8 @@ export interface Tenant {
   id: string; name: string; description: string; color: string; status: "active" | "paused";
   rpm_limit: number; tpm_limit: number; monthly_token_budget: number; monthly_usd_budget: number;
   default_route: string; allowed: string[]; aliases: Record<string, string>; log_bodies: boolean; max_parallel: number; created_at: number;
+  /** Which machines its requests may run on: any, own (never a cloud API) or servers (router/border.ts). */
+  data_border: "any" | "own" | "servers";
 }
 type Row = Omit<Tenant, "allowed" | "aliases" | "log_bodies"> & { allowed: string; aliases: string; log_bodies: number };
 const fromRow = (r: Row): Tenant => ({ ...r, allowed: json(r.allowed, []), aliases: json(r.aliases, {}), log_bodies: !!r.log_bodies });
@@ -19,13 +21,13 @@ export function upsertTenant(t: Partial<Tenant> & { id: string }): Tenant {
   const prev = getTenant(t.id);
   const next = {
     name: t.id, description: "", color: "#6366f1", status: "active", rpm_limit: 0, tpm_limit: 0, monthly_token_budget: 0, monthly_usd_budget: 0,
-    default_route: "auto", allowed: [], aliases: {}, log_bodies: false, max_parallel: 0, created_at: now(), ...prev, ...t,
+    default_route: "auto", allowed: [], aliases: {}, log_bodies: false, max_parallel: 0, data_border: "any", created_at: now(), ...prev, ...t,
   } as Tenant;
-  db.prepare(`INSERT INTO tenants(id, name, description, color, status, rpm_limit, tpm_limit, monthly_token_budget, monthly_usd_budget, default_route, allowed, aliases, log_bodies, max_parallel, created_at)
-    VALUES(@id, @name, @description, @color, @status, @rpm_limit, @tpm_limit, @monthly_token_budget, @monthly_usd_budget, @default_route, @allowed, @aliases, @log_bodies, @max_parallel, @created_at)
+  db.prepare(`INSERT INTO tenants(id, name, description, color, status, rpm_limit, tpm_limit, monthly_token_budget, monthly_usd_budget, default_route, allowed, aliases, log_bodies, max_parallel, data_border, created_at)
+    VALUES(@id, @name, @description, @color, @status, @rpm_limit, @tpm_limit, @monthly_token_budget, @monthly_usd_budget, @default_route, @allowed, @aliases, @log_bodies, @max_parallel, @data_border, @created_at)
     ON CONFLICT(id) DO UPDATE SET name=excluded.name, description=excluded.description, color=excluded.color, status=excluded.status,
       rpm_limit=excluded.rpm_limit, tpm_limit=excluded.tpm_limit, monthly_token_budget=excluded.monthly_token_budget, monthly_usd_budget=excluded.monthly_usd_budget,
-      default_route=excluded.default_route, allowed=excluded.allowed, aliases=excluded.aliases, log_bodies=excluded.log_bodies, max_parallel=excluded.max_parallel`)
+      default_route=excluded.default_route, allowed=excluded.allowed, aliases=excluded.aliases, log_bodies=excluded.log_bodies, max_parallel=excluded.max_parallel, data_border=excluded.data_border`)
     .run({ ...next, allowed: JSON.stringify(next.allowed), aliases: JSON.stringify(next.aliases), log_bodies: next.log_bodies ? 1 : 0 });
   return next;
 }

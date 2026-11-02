@@ -49,6 +49,20 @@ struct SystemInfo: Decodable {
   var role: String?
   var name: String?
   var version: String?
+  var presence: Presence?
+}
+
+/// Whether a machine takes work now (free, polite, busy, away), what its owner set, and why.
+struct Presence: Decodable {
+  struct Signals: Decodable { var idleS: Double?; var onBattery: Bool?; var batteryPct: Double?; var thermal: String? }
+  var state: String; var mode: String; var using: Bool; var `class`: String; var reasons: [String]; var since: Double; var signals: Signals?
+}
+
+/// How a gateway could reach this machine, and the gateways that already did.
+struct JoinInfo: Decodable {
+  struct Way: Decodable, Hashable { var label: String; var url: String; var note: String }
+  struct Gateway: Decodable { var id: String; var name: String; var last_used: Double? }
+  var role: String; var name: String; var id: String; var ways: [Way]; var gateways: [Gateway]
 }
 
 struct Overview: Decodable {
@@ -65,6 +79,6 @@ struct LensRun: Decodable, Identifiable {
 
 /// A provider; for a mux node, what the gateway last saw of the machine.
 struct Provider: Decodable, Identifiable {
-  struct Info: Decodable { var system: SystemInfo.Sys?; var instances: [SystemInfo.Instance]?; var budget: SystemInfo.Budget?; var latencyMs: Double? }
+  struct Info: Decodable { var system: SystemInfo.Sys?; var instances: [SystemInfo.Instance]?; var budget: SystemInfo.Budget?; var latencyMs: Double?; var presence: Presence? }
   var id: String; var name: String; var kind: String; var status: String; var enabled: Bool; var error: String?; var info: Info?
 }

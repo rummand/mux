@@ -51,6 +51,7 @@ export interface DownloadRequest { catalogId?: string; repo?: string; file?: str
 
 /** Queue a download (one at a time); the model is registered when its files are on disk. */
 export async function startDownload(req: DownloadRequest): Promise<DownloadRow> {
+  if (process.env.MUX_NO_DOWNLOADS) throw new Error("downloads are off here (MUX_NO_DOWNLOADS)");
   const entry = req.catalogId ? catalogEntry(req.catalogId) : undefined;
   const repo = req.repo ?? entry?.repo;
   const file = req.file ?? entry?.file;

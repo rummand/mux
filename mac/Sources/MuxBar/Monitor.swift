@@ -20,6 +20,14 @@ final class Monitor {
 
   private var seen: Set<String>? // incident ids and Lens finding keys already told about; nil until the first look
   private var loop: Task<Void, Never>?
+  private var report: Task<Void, Never>?
+
+  /// Every 5 s, to this Mac's own mux (whichever mux the panel shows): a fullscreen app, a call — what the node cannot see.
+  func reportSignals() async {
+    guard let me = connections.first(where: { $0.source == .thisMac }), let token = Connections.token(for: me) else { return }
+    let body = JSON.object(["fullscreen": .bool(MacSignals.fullscreen()), "call": .bool(MacSignals.micInUse())])
+    try? await API(url: me.url, token: token).send("/presence/signals", body: body)
+  }
 
   init() {
     let pick = UserDefaults.standard.string(forKey: "connection")
@@ -29,6 +37,12 @@ final class Monitor {
       while !Task.isCancelled {
         await self?.refresh()
         try? await Task.sleep(for: .seconds(self?.panelOpen == true ? 3 : 10))
+      }
+    }
+    report = Task { [weak self] in
+      while !Task.isCancelled {
+        await self?.reportSignals()
+        try? await Task.sleep(for: .seconds(5))
       }
     }
   }
@@ -92,6 +106,31 @@ final class Monitor {
     for i in incidents where !seen.contains("incident:\(i.id)") { Notifier.post("mux · \(i.severity) incident", i.title) }
     for f in lensNew where !seen.contains("lens:\(lens?.id ?? ""):\(f.key ?? f.title)") { Notifier.post("mux · Lens found something new", f.title) }
     for n in nodesDown where !seen.contains("node:\(n.id)") { Notifier.post("mux · \(n.name) is \(n.status)", n.error ?? "The gateway cannot reach this node.") }
+  }
+
+  /// The owner's say: available, only when I'm away, or off; and "I'm using this Mac".
+  func setPresence(mode: String? = nil, using: Bool? = nil) async {
+    var b: [String: JSON] = [:]
+    if let mode { b["mode"] = .string(mode) }
+    if let using { b["using"] = .bool(using) }
+    do { try await api?.send("/presence", method: "PUT", body: .object(b)); error = nil } catch { self.error = error.localizedDescription }
+    await refresh()
+  }
+
+  func joinInfo() async -> JoinInfo? { try? await api?.get("/join") }
+
+  /// Join this machine to a gateway; the answer says whether the gateway reached it.
+  func join(gatewayUrl: String, gatewayToken: String, nodeUrl: String, name: String) async -> String {
+    guard let api else { return "No mux." }
+    do {
+      var req = api.request("/join", method: "POST", body: try JSONEncoder().encode(JSON.object(["gatewayUrl": .string(gatewayUrl), "gatewayToken": .string(gatewayToken), "nodeUrl": .string(nodeUrl), "name": .string(name)])))
+      req.timeoutInterval = 60
+      let (data, res) = try await URLSession.shared.data(for: req)
+      let j = JSON.parse(String(decoding: data, as: UTF8.self))
+      guard (res as? HTTPURLResponse)?.statusCode == 200 else { return j?["error"]?.string ?? "The join failed." }
+      let p = j?["provider"]
+      return j?["ok"] == .bool(true) ? "✓ Joined as \(p?["id"]?.string ?? "?"): the gateway reaches this Mac" : "Joined, but the gateway says \(p?["status"]?.string ?? "?"): \(p?["error"]?.string ?? "")"
+    } catch { return error.localizedDescription }
   }
 
   func unload(_ id: String) async {

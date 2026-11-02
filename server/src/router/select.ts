@@ -1,8 +1,11 @@
 import { getModel, getRoute, listModels, type Kind, type Model, type Route } from "../models.js";
 import type { Tenant } from "../tenants.js";
-import { isLoaded } from "../runtime/manager.js";
+import { isLoaded, loadOf } from "../runtime/manager.js";
 import { inCooldown, measuredTps } from "./health.js";
-import { loadedOnNode, providerUp } from "../providers.js";
+import { loadedOnNode, presenceOf, providerUp } from "../providers.js";
+import { restingReason } from "../presence.js";
+import { outside } from "./border.js";
+import { split } from "../experiments.js";
 
 /** What a request needs, read from the request itself. */
 export interface Features {
@@ -37,7 +40,7 @@ export function features(body: ChatLike): Features {
   return { inputTokens, maxTokens, tools, forcedTool, vision, code, reasoning, danish, json, simple: !tools && !code && !reasoning && !vision && inputTokens < 600 && maxTokens <= 1024 };
 }
 
-export interface Decision { route: Route | null; candidates: Model[]; reason: string; requested: string }
+export interface Decision { route: Route | null; candidates: Model[]; reason: string; requested: string; experiment?: { id: string; arm: "A" | "B" } }
 
 export class RouteError extends Error {
   constructor(message: string, public status = 404, public type = "model_not_found") { super(message); }
@@ -80,10 +83,17 @@ export const warm = (m: Model) => isLoaded(m.id) || m.backend === "external" || 
 const cap = (m: Model, k: keyof Model["caps"], d = 5) => m.caps[k] ?? d;
 
 /** Can this model take the request at all? The reason when not. */
-function unfit(m: Model, f: Features): string | null {
+function unfit(m: Model, f: Features, t?: Tenant): string | null {
   if (!m.enabled) return "disabled";
+  const border = outside(t?.data_border, m);
+  if (border) return border;
   if (!providerUp(m.provider_id)) return "provider offline";
   if (inCooldown(m.id)) return "cooling down after failures";
+  // Presence: a machine with someone at it, or turned off, takes less or nothing (presence.ts).
+  const pr = m.backend === "node" ? presenceOf(m.provider_id) : null;
+  if (pr?.state === "away" || pr?.state === "busy") return `node ${pr.state} (${pr.reasons.join(", ")})`;
+  if (pr?.state === "polite" && !warm(m)) return `node polite (${pr.reasons.join(", ")}): only loaded models`;
+  if (["llamacpp", "mlx", "laya"].includes(m.backend)) { const r = restingReason(m.id, isLoaded(m.id)); if (r) return r; }
   if (f.vision && !(m.mmproj || cap(m, "vision", 0) > 0)) return "no vision";
   if (m.kind === "chat" && f.inputTokens + Math.min(f.maxTokens, 4096) > m.ctx) return `context ${m.ctx} too small for ~${f.inputTokens} tokens`;
   return null;
@@ -102,7 +112,21 @@ function score(m: Model, f: Features): number {
   // first choice, unless the request needs what only they have.
   s += warm(m) ? 4 : -Math.min(4, m.size_bytes / 1024 ** 3 / 8);
   if (m.cost_in || m.cost_out) s -= 3;
+  // By the kind of machine: a server first, a laptop last; a polite machine (someone is there) after a free one.
+  const pr = m.backend === "node" ? presenceOf(m.provider_id) : null;
+  if (pr?.class === "always-on") s += 1;
+  if (pr?.class === "laptop") s -= 1.5;
+  if (pr?.state === "polite") s -= 2;
+  // Burst: a model whose slots are all taken makes the next request wait; past a queue of a couple, a model elsewhere
+  // — another node, or a paid API if the tenant's border allows one — answers sooner.
+  s -= Math.min(8, waiting(m) * 2.5);
   return s;
+}
+
+/** How many requests a new one would wait behind: on this machine now, on a node as of its last report (≤ 5 s). */
+export function waiting(m: Model): number {
+  const l = ["llamacpp", "mlx", "laya"].includes(m.backend) ? loadOf(m.id) : m.backend === "node" ? presenceOf(m.provider_id)?.load?.[m.upstream_model ?? ""] ?? null : null;
+  return l && l.inflight >= l.slots ? l.inflight - l.slots + 1 : 0;
 }
 
 const describe = (f: Features) => [f.tools && (f.forcedTool ? "forced tool" : "tools"), f.code && "code", f.reasoning && "reasoning", f.danish && "danish", f.vision && "vision", f.json && "json", f.simple && "simple", `~${f.inputTokens} tok`].filter(Boolean).join("+");
@@ -112,15 +136,18 @@ export function decide(tenant: Tenant, requested: string | undefined, kind: Kind
   const { route, model, via } = resolve(tenant, requested, kind);
   const feats = f ?? features({});
   if (model) {
+    // A tenant's data border holds even for a model named outright.
+    const border = outside(tenant.data_border, model);
+    if (border) throw new RouteError(`${model.id} is ${border}`, 403, "data_border");
     // A model asked for by name is tried first; the tenant's default route stands behind it.
     const def = getRoute(kind === "chat" ? tenant.default_route || "auto" : kind === "embedding" ? "embed" : kind);
-    const backups = (def?.candidates ?? []).filter((id) => id !== model.id).map(getModel).filter((m): m is Model => !!m && m.kind === kind && !unfit(m, feats));
+    const backups = (def?.candidates ?? []).filter((id) => id !== model.id).map(getModel).filter((m): m is Model => !!m && m.kind === kind && !unfit(m, feats, tenant));
     return { route: null, candidates: [model, ...backups], reason: [via, `model ${model.id}`].filter(Boolean).join("; "), requested: requested ?? "" };
   }
   const r = route!;
   const pool = (r.candidates.length ? r.candidates.map(getModel) : listModels().filter((m) => m.kind === kind)).filter((m): m is Model => !!m && m.kind === kind);
   const skipped: string[] = [];
-  const fit = pool.filter((m) => { const why = unfit(m, feats); if (why) skipped.push(`${m.id}: ${why}`); return !why; });
+  const fit = pool.filter((m) => { const why = unfit(m, feats, tenant); if (why) skipped.push(`${m.id}: ${why}`); return !why; });
   let ordered = fit;
   let how: string = r.strategy;
   if (r.strategy === "auto") {
@@ -133,7 +160,10 @@ export function decide(tenant: Tenant, requested: string | undefined, kind: Kind
   } else if (r.strategy === "quality") {
     ordered = [...fit].sort((a, b) => cap(b, "quality") - cap(a, "quality"));
   }
-  const reason = [via, `route ${r.name}: ${how}`, skipped.length ? `skipped ${skipped.join("; ")}` : ""].filter(Boolean).join("; ");
+  // An experiment on this route splits its traffic: arm B tries the challenger first, arm A the champion.
+  const sp = split(r.name, ordered);
+  if (sp) ordered = sp.candidates;
+  const reason = [via, `route ${r.name}: ${how}`, sp ? `experiment ${sp.experiment.id}, arm ${sp.experiment.arm}` : "", skipped.length ? `skipped ${skipped.join("; ")}` : ""].filter(Boolean).join("; ");
   if (!ordered.length) throw new RouteError(`route ${r.name} has no model that can take this request${skipped.length ? ` (${skipped.join("; ")})` : ""}`, 503, "no_capable_model");
-  return { route: r, candidates: ordered, reason, requested: requested ?? "" };
+  return { route: r, candidates: ordered, reason, requested: requested ?? "", ...(sp ? { experiment: sp.experiment } : {}) };
 }

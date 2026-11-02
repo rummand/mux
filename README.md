@@ -107,8 +107,55 @@ before it and with the last run of its scope (new, ongoing, resolved). Watches r
 (one, every 6 hours, ships enabled) and log a warning for a new serious finding; findings go to the assistant, into the
 brain, or are muted.
 
+**GBrain as the brain.** With [GBrain](https://github.com/garrytan/gbrain) installed (`bun install -g
+github:garrytan/gbrain#latest-stable`, `gbrain init --pglite --embedding-model litellm:embed --embedding-dimensions 1024`
+with `LITELLM_BASE_URL` pointing at mux's `/v1` and a mux key as `LITELLM_API_KEY`) and a token for mux in
+`~/.mux/mux.env` (`MUX_GBRAIN_TOKEN`, from `gbrain auth create mux --scopes read,write`), mux runs `gbrain serve --http`
+on loopback port 3131 and keeps its brain there (`server/src/gbrain.ts`): pages as `mux/<kind>/<slug>`, facts through
+GBrain's `remember` (the assistant's `brain_remember`), recall through its `recall` verb. GBrain embeds through mux's
+`embed` route as the GBrain tenant, so nothing leaves the Mac. Without the token, the brain is mux's own SQLite one.
+
+GBrain runs entirely on mux: embeddings (`litellm:embed`, bge-m3), reranking (`llama-server-reranker:qwen3-reranker-0.6b`
+through mux's `/v1/rerank`), and its chat work through the `ollama` provider pointed at mux (`provider_base_urls.ollama`):
+utility and fact extraction on `agent`, reasoning and deep on `smart`, query expansion on `fast`. Search mode
+`balanced`. The GBrain tenant's key lives in `~/.gbrain/mux.env` (`LITELLM_API_KEY`, `LLAMA_SERVER_RERANKER_API_KEY`,
+`OLLAMA_BASE_URL`, `OLLAMA_API_KEY`), which mux hands every GBrain process it starts. Do not configure GBrain's `openai`
+provider with a mux key: its chat calls ignore `provider_base_urls.openai` and go to api.openai.com. mux runs
+`gbrain sweep --once` every 30 minutes (links, timelines, facts), which `gbrain serve --http` does not do itself.
+
 The dashboard is installable as an app (Chrome/Edge "Install mux", Safari "Add to Dock", iOS "Add to Home Screen"),
 which opens straight on the assistant.
+
+## The fleet: Macs and PCs that also have people at them
+
+A node can be a machine someone works at: a MacBook, an iMac, a Windows PC. Each node has a **presence**
+(`server/src/presence.ts`), recomputed every 5 s and read by the gateway every 5 s:
+
+- **free** — nobody there for 10 minutes, or its owner made it *available* (a server): loads anything that fits.
+- **polite** — someone is there, it runs on battery, or "I'm using this Mac" is on: only models already loaded, one
+  request at a time.
+- **busy** — a fullscreen app, a game or a call (on a machine that works only when nobody is there): nothing new; idle
+  models are unloaded after a minute.
+- **away** — turned off by its owner, or a battery under 20%: out of every route.
+
+The owner says when a machine takes work: **available** (the default — the Mac Studio is unchanged), **only when
+nobody is there**, or **off**. A Mac reads its own idle time, battery, heat and memory pressure, and the menu bar app
+adds a fullscreen app and the microphone in use (a call); a Windows PC gets them from a helper in the user's session,
+which reports with a token that can do nothing else. The router skips busy and
+away nodes, lets polite ones serve only what they have loaded, and prefers a server to a desktop to a laptop. The node
+enforces its state too, so a gateway that has not caught up cannot overrule it.
+
+**Data borders** (`server/src/router/border.ts`): a tenant may run **anywhere**, on **our machines** only (this one,
+our nodes and model servers on our own network — never a cloud API, not even as a fallback), or on **our servers**
+only (not a desktop or laptop someone works at). The router enforces it for every kind of request, also for a model
+named outright (403 `data_border`); Lens reports traffic that ran outside a border. A request still passes through the
+gateway that routes it.
+
+**Burst**: a model whose slots are all taken counts its queue against it (nodes report their queues every 5 s), so
+past a couple of waiting requests another node — or a paid API, where the tenant's border allows — answers first.
+
+Joining: from the menu bar on a Mac (Machines → Cluster → Join the cluster), with `deploy/join-node.sh`, or on Windows
+with `deploy/windows/install.ps1` (untested so far: see `deploy/windows/README.md`).
 
 ## In the menu bar
 

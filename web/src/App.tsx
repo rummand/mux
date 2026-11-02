@@ -11,6 +11,7 @@ import TenantsPage from "./pages/Tenants";
 import TenantDetailPage from "./pages/TenantDetail";
 import ModelsPage from "./pages/Models";
 import AdvisorPage from "./pages/Advisor";
+import ExperimentsPage from "./pages/Experiments";
 import RoutesPage from "./pages/RoutesPage";
 import RequestsPage from "./pages/Requests";
 import TracesPage from "./pages/Traces";
@@ -38,6 +39,7 @@ const NAV: { to: string; label: string; icon: ReactNode; group?: string }[] = [
   { to: "/providers", label: "Providers", group: "Compute", icon: icon("M4 6h16v5H4zM4 13h16v5H4zM8 8.5h.01M8 15.5h.01") },
   { to: "/models", label: "Models", icon: icon("M12 3l8 4.5v9L12 21l-8-4.5v-9zM12 12l8-4.5M12 12v9M12 12L4 7.5") },
   { to: "/advisor", label: "Advisor", icon: icon("M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9V16h7v-2.1A6 6 0 0 0 12 3z") },
+  { to: "/experiments", label: "Experiments", icon: icon("M9 3h6M10 3v6l-5 9a2 2 0 0 0 1.8 3h10.4a2 2 0 0 0 1.8-3l-5-9V3M7.5 15h9") },
   { to: "/routes", label: "Routes", icon: icon("M6 3v12a3 3 0 0 0 3 3h9M15 15l3 3-3 3M6 7a2 2 0 1 0 0-4 2 2 0 0 0 0 4") },
   { to: "/benchmarks", label: "Benchmarks", icon: icon("M12 13l4-4M3.5 17a9 9 0 1 1 17 0") },
   { to: "/playground", label: "Playground", icon: icon("M5 4l14 8-14 8z") },
@@ -155,6 +157,7 @@ function Shell() {
             <Route path="/models/*" element={<ModelDetailPage />} />
             <Route path="/advisor" element={<Scoped page={AdvisorPage} />} />
             <Route path="/routes" element={<RoutesPage />} />
+            <Route path="/experiments" element={<ExperimentsPage />} />
             <Route path="/providers" element={<ProvidersPage />} />
             <Route path="/providers/*" element={<ProviderDetailPage />} />
             <Route path="/benchmarks" element={<Scoped page={BenchmarksPage} />} />

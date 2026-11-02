@@ -5,6 +5,7 @@ import { db, event, json, now } from "./db.js";
 import { getModel, getRoute, listModels } from "./models.js";
 import { acquire, release } from "./runtime/manager.js";
 import { getTenant } from "./tenants.js";
+import { outside } from "./router/border.js";
 
 /**
  * Lens (after LiteLLM's): an investigation reads a slice of traffic — a tenant, an agent, a time window — and writes
@@ -148,6 +149,18 @@ export function rules(rows: Row[], at = now()): Finding[] {
       suggestion: "If a local model is good enough for these calls (try them in the Playground or a benchmark), point the tenant's route at it: local tokens cost no USD.",
       evidence: [...rs].sort((a, b) => (b.cost_usd ?? 0) - (a.cost_usd ?? 0)).slice(0, 5).map((r) => ({ request_id: r.id, quote: `$${(r.cost_usd ?? 0).toFixed(4)}, ${r.prompt_tokens}+${r.completion_tokens} tokens` })) });
   }
+  // Data borders: requests a tenant's border does not allow where they ran (from before the border, or a stale route).
+  const crossed = new Map<string, { rs: Row[]; why: string }>();
+  for (const r of rows) {
+    const t = r.tenant_id ? getTenant(r.tenant_id) : undefined;
+    const m = r.model_id ? getModel(r.model_id) : undefined;
+    const why = t && m && r.status < 400 ? outside(t.data_border, m) : null;
+    if (why) { const c = crossed.get(r.tenant_id) ?? { rs: [], why }; c.rs.push(r); crossed.set(r.tenant_id, c); }
+  }
+  for (const [tenant, c] of crossed) out.push({ key: `border|${tenant}`, source: "rules", kind: "needs-attention", priority: "high",
+    title: `${c.rs.length} of ${tenant}'s requests ran outside its data border`, description: `${getTenant(tenant)?.name ?? tenant} may run only on ${getTenant(tenant)?.data_border === "servers" ? "our always-on machines" : "our own machines"}, but these ran on ${[...new Set(c.rs.map((r) => r.model_id))].join(", ")} — ${c.why}. The router refuses this now; these are from before the border, or a route that has since changed.`,
+    suggestion: "Check what these requests carried; if the border is right, nothing more to do — new requests stay inside it. Take the outside models off the tenant's routes so fallbacks do not fail.",
+    evidence: c.rs.slice(0, 5).map((r) => ({ request_id: r.id, quote: `${r.model_id} (${r.provider_id ?? "here"})` })) });
   // Budgets: at this month's pace, will a tenant run out before the month does?
   const d = new Date(at); const start = new Date(d.getFullYear(), d.getMonth(), 1).getTime(); const end = new Date(d.getFullYear(), d.getMonth() + 1, 1).getTime();
   const elapsed = Math.max((at - start) / (end - start), 1 / 60);

@@ -64,6 +64,7 @@ export async function runChat(ctx: Ctx, body: ChatBody, signal: AbortSignal, onC
   const forced = forcedTools(body);
   ctx.tools = f.tools; ctx.forcedTool = !!forced; ctx.stream = !!onChunk; ctx.requested = body.model;
   const d = decide(ctx.tenant, body.model, "chat", f);
+  ctx.experiment = d.experiment ?? null;
   ctx.route = d.route?.name ?? null;
   ctx.reason = d.reason;
   let lastErr: Error | null = null;

@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { statfs } from "node:fs/promises";
-import { cpus, loadavg, totalmem } from "node:os";
+import { cpus, freemem, loadavg, totalmem } from "node:os";
 import { promisify } from "node:util";
 import { config } from "../config.js";
 
@@ -15,6 +15,7 @@ export interface SystemStats {
 
 let chip = "";
 export async function systemStats(): Promise<SystemStats> {
+  if (process.platform !== "darwin") return portableStats();
   const [vm, swap, pressure, disk] = await Promise.all([
     run("vm_stat").then((r) => r.stdout).catch(() => ""),
     run("sysctl", ["-n", "vm.swapusage"]).then((r) => r.stdout).catch(() => ""),
@@ -37,6 +38,20 @@ export async function systemStats(): Promise<SystemStats> {
     swapGb: swapUsed ? Number(swapUsed) / 1024 : 0, pressure,
     diskFreeGb: disk ? (disk.bavail * disk.bsize) / GB : 0, diskTotalGb: disk ? (disk.blocks * disk.bsize) / GB : 0,
     load1: loadavg()[0], cores: cpus().length, chip,
+  };
+}
+
+/**
+ * Elsewhere (a Windows or Linux node): what Node itself knows. Memory pressure is not measured (1); on a machine whose
+ * models run on a GPU, the memory budget is its VRAM, which the installer sets (MUX_MEMORY_BUDGET_GB).
+ */
+async function portableStats(): Promise<SystemStats> {
+  const disk = await statfs(config.modelsDir).catch(() => null);
+  const total = totalmem(), free = freemem();
+  return {
+    memTotalGb: total / GB, memFreeGb: free / GB, memUsedGb: (total - free) / GB, swapGb: 0, pressure: 1,
+    diskFreeGb: disk ? (disk.bavail * disk.bsize) / GB : 0, diskTotalGb: disk ? (disk.blocks * disk.bsize) / GB : 0,
+    load1: loadavg()[0], cores: cpus().length, chip: cpus()[0]?.model?.trim() ?? "",
   };
 }
 

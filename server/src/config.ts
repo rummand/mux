@@ -15,6 +15,17 @@ export const config = {
   host: env.MUX_HOST ?? "0.0.0.0",
   /** The dashboard's bearer token. install.sh writes one into ~/.mux/mux.env; dev falls back to "dev". */
   adminToken: env.MUX_ADMIN_TOKEN ?? "dev",
+  /**
+   * A token that may only report presence (POST /api/admin/presence/signals): the session helper on a Windows PC runs
+   * as the person at it, who should not hold the node's admin token. Unset: only the admin token reports.
+   */
+  presenceToken: env.MUX_PRESENCE_TOKEN ?? "",
+  /** GBrain as mux's brain (gbrain.ts): its token turns it on; mux runs `gbrain serve --http` on this port. */
+  gbrainToken: env.MUX_GBRAIN_TOKEN ?? "",
+  gbrainBin: env.MUX_GBRAIN_BIN ?? join(homedir(), ".bun/bin/gbrain"),
+  gbrainPort: Number(env.MUX_GBRAIN_PORT ?? 3131),
+  /** KEY=value lines for GBrain's processes: where mux is, and GBrain's mux key (embed, rerank and chat through mux). */
+  gbrainEnvFile: env.MUX_GBRAIN_ENV ?? join(homedir(), ".gbrain/mux.env"),
   dbPath: env.MUX_DB ?? join(home, "mux.db"),
   modelsDir: env.MUX_MODELS_DIR ?? join(home, "models"),
   logsDir: join(home, "logs"),
@@ -27,6 +38,8 @@ export const config = {
   /** Where already-downloaded GGUFs may be found and imported (symlinked, never copied). */
   scanDirs: (env.MUX_SCAN_DIRS ?? [join(homedir(), ".nexus/models/hf/hub"), join(homedir(), ".cache/huggingface/hub"), join(homedir(), ".cache/llama.cpp"), join(homedir(), ".lmstudio/models")].join(":")).split(":"),
   hfToken: env.HF_TOKEN ?? "",
+  /** The SearXNG beside mux (Railway's private network): /v1/search asks it; unset, search answers 503. */
+  searxngUrl: env.MUX_SEARXNG_URL ?? "",
 };
 
 /** Defaults for settings the dashboard can change; stored rows in `settings` win. */
@@ -48,6 +61,19 @@ export const defaultSettings = {
   selfHeal: true,
   /** What the healer cannot fix goes to the doctor (the assistant, headless), who may make safe changes itself. */
   selfHealAi: true,
+  /**
+   * When this machine takes work (see presence.ts): "available" — always, as a server does; "away-only" — only while
+   * nobody is at it (someone there: only what is already loaded, one at a time); "off" — out of the cluster.
+   */
+  presenceMode: (env.MUX_PRESENCE_MODE ?? "available") as "available" | "away-only" | "off",
+  /** "I'm using this Mac": polite until turned off, or until nobody has been at the machine for 30 minutes. */
+  presenceUsing: false,
+  /** always-on | desktop | laptop, or auto: a laptop if it has a battery, else always-on when available, else a desktop. */
+  nodeClass: "auto" as "auto" | "always-on" | "desktop" | "laptop",
+  /** On a gateway: the node whose brain mux uses (its GBrain), so mux has one brain wherever it is asked. "" = the first online node. */
+  brainNode: "",
+  /** mux runs experiments itself: picks challengers from what it measures and the catalog, splits live traffic, promotes winners (experiments.ts). */
+  autoExperiments: true,
 };
 export type Settings = typeof defaultSettings;
 

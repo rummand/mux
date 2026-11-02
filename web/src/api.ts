@@ -63,6 +63,8 @@ export interface Route { name: string; description: string; kind: Model["kind"];
 export interface Tenant {
   id: string; name: string; description: string; color: string; status: "active" | "paused"; rpm_limit: number; tpm_limit: number; monthly_token_budget: number; monthly_usd_budget?: number;
   default_route: string; allowed: string[]; aliases: Record<string, string>; log_bodies: boolean; max_parallel: number; created_at: number;
+  /** Which machines its requests may run on (server/src/router/border.ts). */
+  data_border?: "any" | "own" | "servers";
   keys?: ApiKey[] | number; usage24h?: { n: number; errors: number; tokens: number; last: number } | null; monthTokens?: number;
 }
 export interface ApiKey { id: string; tenant_id: string; name: string; prefix: string; created_at: number; last_used_at: number | null; revoked_at: number | null; expires_at: number | null; rpm_limit: number; monthly_token_budget: number }
@@ -76,7 +78,16 @@ export interface Advice {
   id: string; name: string; family: string; kind: string; sizeGb: number; needGb: number; params: string; activeParams?: string; license: string;
   installed: boolean; modelId: string | null; fit: "fits" | "tight" | "too-big"; diskOk: boolean; score: number; caps: Caps;
   measured: { score: number; tps: number; ttftMs: number } | null; reasons: string[]; notes: string; routes: string[]; repo: string; file: string; released: string;
+  usage?: ModelUsage | null; web?: WebSignal | null; onRoutes?: { route: string; position: number }[];
+  benchmarks?: { name: string; value: string | number; url?: string }[]; supersededBy?: string | null; experimental?: string | null; research?: string | null;
 }
+/** A model's own traffic over 30 days (server/src/advisor.ts usageOf). */
+export interface ModelUsage { requests: number; errors: number; errorRate: number; tenants: number; tps: number | null; latencyMs: number | null; ttftMs: number | null; costUsd: number; toolShare: number; lastTs: number | null }
+/** What Hugging Face says (server/src/signals.ts). */
+export interface WebSignal { repo: string; baseRepo: string | null; downloads: number | null; likes: number | null; trending: number | null; baseDownloads: number | null; baseLikes: number | null; fetchedAt: number; error: string | null; popularity: number | null }
+export interface Insight { kind: "promote" | "try" | "measure" | "retire" | "watch"; title: string; detail: string; priority: "high" | "medium" | "low"; action: { method: "POST" | "PUT" | "PATCH"; path: string; body: unknown; label: string } | null }
+export interface Trending { repo: string; downloads: number; likes: number; trending: number; created_at: string | null; pipeline: string | null; uploads: number }
+export interface UsageRow { id: string; kind: string | null; backend: string | null; enabled: boolean; requests: number; errors: number; errorRate: number; tenants: number; latencyMs: number | null; ttftMs: number | null; tps: number | null; tokens: number; costUsd: number; lastTs: number | null; bench: { score: number; tps: number; ts: number } | null; routes: string[] }
 export interface RequestRow {
   id: string; ts: number; tenant_id: string; key_id: string; endpoint: string; requested_model: string | null; route: string | null; model_id: string | null;
   stream: number; tools: number; forced_tool: number; status: number; error_type: string | null; error: string | null; prompt_tokens: number; completion_tokens: number; cached_tokens: number;
@@ -109,7 +120,10 @@ export interface NodeInfo {
   system?: { memTotalGb: number; memFreeGb: number; swapGb: number; pressure: number; diskFreeGb: number; chip: string; cores: number };
   instances?: { id: string; state: string; estimateGb: number; inflight: number; rssGb: number | null }[];
   budget?: { budgetGb: number; usedGb: number }; models?: number; latencyMs?: number; version?: string;
+  presence?: NodePresence | null;
 }
+/** Whether a node takes work now, what its owner set, and why (server/src/presence.ts). */
+export interface NodePresence { state: "free" | "polite" | "busy" | "away"; mode: "available" | "away-only" | "off"; using: boolean; class: "always-on" | "desktop" | "laptop"; reasons: string[]; since: number }
 export interface Provider {
   id: string; name: string; kind: string; base_url: string; api_key: string | null; admin_token: string | null; enabled: boolean;
   status: "online" | "offline" | "error" | "unknown"; last_seen: number | null; error: string | null; info: NodeInfo | null; created_at: number;
@@ -152,5 +166,8 @@ export interface BrainPage {
   id: string; title: string; kind: BrainKind; subject: string; body: string; tags: string[]; source: string;
   recalls: number; recalled_at: number | null; created_at: number; updated_at: number; embedded: boolean; score?: number;
 }
-export interface BrainStats { pages: number; embedded: number; updated: number | null; kinds: Record<string, number>; models: { model: string; n: number }[]; embedding: boolean }
+export interface BrainStats {
+  /** sqlite: mux's own brain; gbrain: GBrain (garrytan/gbrain), run by mux on loopback. */
+  backend?: "sqlite" | "gbrain"; gbrain?: { ok: boolean; version: string | null; managed: boolean; error: string | null; url: string }; morePages?: boolean;
+  pages: number; embedded: number; updated: number | null; kinds: Record<string, number>; models: { model: string; n: number }[]; embedding: boolean }
 export interface Conversation { id: string; title: string; page: string | null; created_at: number; updated_at: number; messages: number }

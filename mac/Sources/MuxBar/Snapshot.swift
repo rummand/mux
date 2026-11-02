@@ -7,6 +7,8 @@ import SwiftUI
 enum Snapshot {
   static func runIfAsked() {
     let args = CommandLine.arguments
+    // `--signals`: print what this Mac's presence would get from the menu bar, and exit.
+    if args.contains("--signals") { print("fullscreen: \(MacSignals.fullscreen()), microphone in use: \(MacSignals.micInUse())"); exit(0) }
     guard let i = args.firstIndex(of: "--snapshot"), i + 1 < args.count else { return }
     let out = URL(fileURLWithPath: args[i + 1])
     let tab = args.firstIndex(of: "--tab").flatMap { $0 + 1 < args.count ? PanelView.Tab(rawValue: args[$0 + 1].capitalized) : nil } ?? .agent

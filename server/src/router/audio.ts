@@ -33,6 +33,7 @@ export function formField(body: Buffer, contentType: string, name: string): stri
 
 export async function runAudio(ctx: Ctx, kind: AudioKind, requested: string | undefined, body: Buffer, contentType: string, signal: AbortSignal): Promise<Response> {
   const d = decide(ctx.tenant, requested, kind, null);
+  ctx.experiment = d.experiment ?? null;
   ctx.route = d.route?.name ?? null;
   ctx.reason = d.reason;
   ctx.requested = requested;

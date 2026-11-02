@@ -1,5 +1,6 @@
 import type { Caps, Kind } from "./models.js";
 import { RESEARCH } from "./catalog-research.js";
+import { NEW_MODELS, PATCHES } from "./catalog-research-2026-11.js";
 
 /**
  * Models mux knows how to fetch and what they are good for. Repos, files and sizes were read off the Hugging Face API
@@ -20,6 +21,14 @@ export interface CatalogEntry {
   released: string;
   /** The llama.cpp release that first runs this architecture. */
   minLlama?: string;
+  /** Published results, with where they come from (mostly the makers' own). */
+  benchmarks?: { name: string; value: string | number; url?: string }[];
+  /** A newer model that does this one's job better, by the research. */
+  supersededBy?: string;
+  /** Why to try it carefully: unverified in llama.cpp, or only its maker's numbers. */
+  experimental?: string;
+  /** What the latest research found about it. */
+  research?: string;
 }
 
 export const CATALOG: CatalogEntry[] = [
@@ -114,6 +123,18 @@ export const CATALOG: CatalogEntry[] = [
     notes: "Higher retrieval scores than BGE-M3 on MTEB, longer inputs, instruction-aware queries." },
 ];
 
-CATALOG.push(...RESEARCH);
+CATALOG.push(...RESEARCH, ...NEW_MODELS);
+
+// What the 2026-11 research changed about models already here: benchmarks, successors, better uploads, routes.
+for (const c of CATALOG) {
+  const p = PATCHES[c.id];
+  if (!p) continue;
+  if (p.benchmarks?.length) c.benchmarks = p.benchmarks;
+  if (p.supersededBy) c.supersededBy = p.supersededBy;
+  if (p.research) c.research = p.research;
+  if (p.repo) { c.repo = p.repo; c.file = p.file ?? c.file; c.sizeGb = p.sizeGb ?? c.sizeGb; }
+  if (p.routesRemove) c.routes = c.routes.filter((r) => !p.routesRemove!.includes(r));
+  if (p.toolsCap != null) c.caps = { ...c.caps, tools: Math.min(c.caps.tools ?? 10, p.toolsCap) };
+}
 
 export const catalogEntry = (id: string) => CATALOG.find((c) => c.id === id);

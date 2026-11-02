@@ -8,6 +8,7 @@ import { decide } from "./select.js";
 export async function runEmbeddings(ctx: Ctx, body: { model?: string; input?: unknown; documents?: unknown; query?: string; [k: string]: unknown }, signal: AbortSignal, kind: "embedding" | "rerank" = "embedding") {
   ctx.requested = body.model;
   const d = decide(ctx.tenant, body.model, kind, null);
+  ctx.experiment = d.experiment ?? null;
   ctx.route = d.route?.name ?? null;
   ctx.reason = d.reason;
   let last = "";

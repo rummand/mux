@@ -10,10 +10,15 @@ import { registerAdmin } from "./admin/routes.js";
 import { pruneSamples, sampleModels } from "./admin/resources.js";
 import { startHealer } from "./healer.js";
 import { startLens } from "./lens.js";
+import { startSignals } from "./signals.js";
+import { startExperiments } from "./experiments.js";
+import { startPresence } from "./presence.js";
+import { startGbrain, stopGbrain } from "./gbrain.js";
+import { moveToGbrain } from "./brain.js";
 import { adoptDownloaded } from "./hf.js";
 import { startCompat } from "./compat.js";
 import { startProviderSync } from "./providers.js";
-import { startRuntime, status, stopAll } from "./runtime/manager.js";
+import { freeIdle, startRuntime, status, stopAll } from "./runtime/manager.js";
 import { systemStats } from "./runtime/system.js";
 
 /** First boot: the routes every SaaS can name, and Laya for System One. Models are added by download or import. */
@@ -82,18 +87,22 @@ if (existsSync(config.webDir)) {
 
 seed();
 // A gateway holds no models of its own; everything it routes to is a provider's.
-if (config.role !== "gateway") { adoptDownloaded(); startRuntime(); }
+if (config.role !== "gateway") { adoptDownloaded(); startRuntime(); startPresence(freeIdle); }
 startProviderSync();
 samplers();
 await app.listen({ port: config.port, host: config.host });
 startHealer(app);
 startLens();
+startSignals();
+startExperiments();
+void startGbrain().then(() => moveToGbrain()).catch((e) => event("warn", "gbrain", (e as Error).message));
 if (config.role !== "gateway") startCompat();
 event("info", "mux", `${config.role} \"${config.name}\" listening on ${config.host}:${config.port}; models in ${config.modelsDir}; dashboard ${existsSync(config.webDir) ? "served" : "not built"}`);
 
 const stop = async (sig: string) => {
   event("info", "mux", `${sig}: stopping the model servers`);
   await app.close().catch(() => undefined);
+  stopGbrain();
   await stopAll();
   process.exit(0);
 };
