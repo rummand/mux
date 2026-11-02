@@ -109,7 +109,9 @@ export async function syncNode(p: Provider) {
     sampleProvider(p.id, true, info);
     if (wasDown) event("info", "providers", `${p.name} is online (${info.latencyMs} ms, ${models.length} models)`);
     const seen = new Set<string>();
-    for (const nm of models.filter((m) => m.enabled)) {
+    // Only what runs on the node: its cloud and free-tier models are the node's own business — a gateway has its own
+    // providers, and a node's free model copied here would look like a local one and take traffic first.
+    for (const nm of models.filter((m) => m.enabled && !["external", "jev", "node"].includes(m.backend))) {
       const id = `${p.id}/${nm.id}`;
       seen.add(id);
       const mine = getModel(id);

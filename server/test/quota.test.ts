@@ -92,3 +92,22 @@ test("a model tested on a free tier informs the advisor, without counting as ins
   assert.equal(after.cloudTest!.modelId, "ovh/Qwen3.8-27B");
   assert.ok(after.caps.quality! < before.caps.quality!); // 50% of the checks pulls its quality estimate down
 });
+
+test("a gateway takes only what runs on a node, never the node's cloud or free-tier models", async () => {
+  const { syncNode, saveProvider: save, getProvider } = await import("../src/providers.js");
+  const { listModels } = await import("../src/models.js");
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string) => {
+    const u = String(url);
+    const body = u.endsWith("/system?range=15m") ? { system: {}, instances: [], budget: { budgetGb: 48, usedGb: 0 } }
+      : [{ id: "qwen-local", display_name: "Qwen", kind: "chat", backend: "llamacpp", enabled: true, ctx: 32768, size_bytes: 1, caps: {}, notes: "", catalog_id: null },
+         { id: "ovh/Qwen3.8-27B", display_name: "OVH", kind: "chat", backend: "external", enabled: true, ctx: 32768, size_bytes: 0, caps: {}, notes: "", catalog_id: "qwen3.8-27b" }];
+    return new Response(JSON.stringify(body), { status: 200 });
+  }) as typeof fetch;
+  try {
+    save({ id: "studio", name: "Studio", kind: "mux", base_url: "http://studio", admin_token: "x" });
+    await syncNode(getProvider("studio")!);
+    const ids = listModels().filter((m) => m.provider_id === "studio").map((m) => m.id);
+    assert.deepEqual(ids, ["studio/qwen-local"]);
+  } finally { globalThis.fetch = realFetch; }
+});
