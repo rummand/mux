@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api, type BrainKind, type BrainPage, type BrainStats } from "../api";
 import { Markdown } from "../components/Assistant";
-import { Spinner } from "../components/ui";
+import { Spinner, Tabs } from "../components/ui";
+import BrainGraph, { type GEdge, type GNode } from "../components/BrainGraph";
 import { Badge, Button, Card, cx, Empty, ErrorNote, Field, Input, PageHeader, Select, Textarea } from "../components/ui";
 import { fmtAgo, fmtInt } from "../format";
 import { useApi } from "../hooks";
@@ -20,6 +21,7 @@ export default function BrainPage() {
   useEffect(() => { const t = setTimeout(() => setDq(q.trim()), 300); return () => clearTimeout(t); }, [q]);
   const { data, error, reload } = useApi<{ pages: BrainPage[]; stats: BrainStats }>("/brain", { q: dq, kind, limit: 100 }, undefined, null);
   const selected = params.get("page");
+  const [tab, setTab] = useState<"graph" | "pages" | "facts">(selected ? "pages" : "graph");
   const select = (id: string | null) => setParams(id ? { page: id } : {});
   const s = data?.stats;
   return (
@@ -40,7 +42,10 @@ export default function BrainPage() {
       )}
       <ErrorNote error={error} />
       <Keeper onRan={() => void reload(true)} />
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,380px)_minmax(0,1fr)]">
+      <div className="mb-4"><Tabs value={tab} onChange={setTab} tabs={[{ value: "graph", label: "Graph" }, { value: "pages", label: "Pages", count: s?.pages }, { value: "facts", label: "Facts" }]} /></div>
+      {tab === "graph" && <Graph onOpen={(id) => { setTab("pages"); select(id); }} />}
+      {tab === "facts" && <Facts />}
+      {tab === "pages" && <div className="grid gap-4 lg:grid-cols-[minmax(0,380px)_minmax(0,1fr)]">
         <Card pad={false}>
           <div className="flex gap-2 border-b border-line p-3">
             <Input placeholder="Search by meaning or words…" value={q} onChange={(e) => setQ(e.target.value)} />
@@ -64,7 +69,7 @@ export default function BrainPage() {
         </Card>
         {selected ? <Editor key={selected} id={selected} onSaved={(id) => { void reload(true); select(id); }} onDeleted={() => { void reload(true); select(null); }} />
           : <Card><Empty>Pick a page to read or correct it, or write a new one.</Empty></Card>}
-      </div>
+      </div>}
     </>
   );
 }
@@ -133,7 +138,7 @@ function Keeper({ onRan }: { onRan: () => void }) {
   const last = data?.runs.find((r) => r.status !== "running");
   const run = async () => { await api("/brain/keeper/run", { method: "POST", scope: null }); void reload(true); setTimeout(onRan, 60_000); };
   return (
-    <Card className="mb-4" title="Brain keeper" subtitle="mux's agent for its own memory: every 6 hours it reads the conversations, the doctor's diagnoses and Lens's new findings, writes down what matters, updates and merges pages, and forgets what is no longer true. It changes nothing else about mux; what it changes is in “What mux changed”."
+    <Card className="mb-4" title="Brain keeper" subtitle="mux's agent for its own memory: every 15 minutes it reads the conversations, the doctor's diagnoses and Lens's new findings, writes down what matters, updates and merges pages, and forgets what is no longer true (tidying the whole brain at most every 6 hours). It never rewrites your own pages, and changes nothing else about mux; what it changes is in “What mux changed”."
       actions={data?.busy ? <span className="flex items-center gap-1.5 text-[12px] text-ink-2"><Spinner /> keeping…</span> : <Button size="sm" onClick={() => void run()}>Run now</Button>}>
       {!last ? <p className="text-[12.5px] text-ink-3">It has not run yet; the first run is 10 minutes after mux starts.</p> : (
         <div className="text-[12.5px]">
@@ -142,5 +147,45 @@ function Keeper({ onRan }: { onRan: () => void }) {
         </div>
       )}
     </Card>
+  );
+}
+
+/** The brain as a graph: pages, facts, and the parts of mux they are about. What mux changed in the last day pulses. */
+function Graph({ onOpen }: { onOpen: (pageId: string) => void }) {
+  const { data, error } = useApi<{ nodes: GNode[]; edges: GEdge[] }>("/brain/graph", undefined, 60_000, null);
+  const { data: recent } = useApi<{ ref: string | null; ts: number }[]>("/journal", { kind: "brain", limit: 100 }, 60_000, null);
+  const changed = new Set((recent ?? []).filter((e) => e.ref && Date.now() - e.ts < 86400_000).flatMap((e) => [`page:${e.ref}`, `entity:${e.ref}`, `model:${e.ref}`, `tenant:${e.ref}`, `node:${e.ref}`]));
+  const counts = (data?.nodes ?? []).reduce<Record<string, number>>((a, n) => ({ ...a, [n.type]: (a[n.type] ?? 0) + 1 }), {});
+  return (
+    <div className="mb-6">
+      <ErrorNote error={error} />
+      {data && <p className="mb-2 text-[12px] text-ink-3">{counts.page ?? 0} pages · {counts.fact ?? 0} facts · {(data.nodes.length - (counts.page ?? 0) - (counts.fact ?? 0))} things they are about · {data.edges.length} connections. Drag to move, scroll to zoom, click a page to open it.</p>}
+      {data ? <BrainGraph nodes={data.nodes} edges={data.edges} changed={changed} onOpen={(n) => { if (n.type === "page") onOpen(n.id.replace(/^page:/, "")); }} /> : <div className="flex h-64 items-center justify-center"><Spinner /></div>}
+    </div>
+  );
+}
+
+interface FactRow { id: string; fact: string; entity: string | null; kind: string; ts: number; provenance: string | null }
+
+/** Every fact mux remembers, by what it is about. */
+function Facts() {
+  const { data, reload } = useApi<FactRow[]>("/brain/facts", undefined, 60_000, null);
+  const forget = async (f: FactRow) => { if (confirm(`Forget: “${f.fact}”?`)) { await api(`/brain/facts/${encodeURIComponent(f.id)}`, { method: "DELETE", scope: null }); void reload(true); } };
+  const groups = (data ?? []).reduce<Record<string, FactRow[]>>((a, f) => { const k = f.entity ?? "(about nothing in particular)"; (a[k] ??= []).push(f); return a; }, {});
+  return (
+    <div className="mb-6 space-y-3">
+      {!data?.length && <Empty>No facts yet. mux remembers facts about tenants, models and machines as it learns.</Empty>}
+      {Object.entries(groups).map(([entity, fs]) => (
+        <Card key={entity} title={entity} pad={false}>
+          {fs.map((f) => (
+            <div key={f.id} className="flex items-start gap-3 border-b border-line px-4 py-2 text-[12.5px] last:border-0">
+              <Badge>{f.kind}</Badge>
+              <div className="min-w-0 flex-1">{f.fact}<div className="text-[11px] text-ink-3">{f.provenance ?? ""} · {fmtAgo(f.ts)}</div></div>
+              <Button size="sm" variant="ghost" onClick={() => void forget(f)}>Forget</Button>
+            </div>
+          ))}
+        </Card>
+      ))}
+    </div>
   );
 }

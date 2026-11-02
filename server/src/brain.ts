@@ -306,6 +306,73 @@ export async function moveToGbrain() {
   if (rows.length) event("info", "brain", `moved ${rows.length} brain page(s) to GBrain`);
 }
 
+/* ── The brain as a graph ────────────────────────────────────────────────────────────────────────────────── */
+
+export interface GraphNode { id: string; type: "page" | "fact" | "entity" | "model" | "route" | "tenant" | "node" | "tag"; label: string; kind?: string; ts?: number; weight?: number; owner?: boolean; text?: string }
+export interface GraphEdge { source: string; target: string; type: "about" | "mentions" | "link" | "tag" | "route" | "fact" }
+export interface Fact { id: string; fact: string; entity: string | null; kind: string; ts: number; provenance: string | null }
+
+/** Every fact the brain holds (GBrain's facts; without GBrain, the fact pages). */
+export async function listFacts(): Promise<Fact[]> {
+  const node = brainNode();
+  if (node) return nodeApi<Fact[]>(node, "GET", "/brain/facts");
+  if (!gbrainOn()) return (await search("", { kind: "fact", limit: 100 })).map((p) => ({ id: p.id, fact: p.body || p.title, entity: p.subject || null, kind: "fact", ts: p.updated_at, provenance: p.source }));
+  const r = await gcall<{ facts?: G[] }>("recall", { since: "2000-01-01", limit: 100 });
+  return (r.facts ?? []).map((f) => ({ id: String(f.id), fact: unwrap(f.fact), entity: f.entity_slug ? String(f.entity_slug) : null, kind: String(f.kind ?? "fact"), ts: time(f.created_at), provenance: f.provenance ? unwrap(f.provenance) : null }));
+}
+
+let graphCache: { at: number; g: { nodes: GraphNode[]; edges: GraphEdge[] } } | null = null;
+
+/**
+ * The brain, drawn: its pages and facts, the things they are about (entities), and mux's own body — its models,
+ * routes, tenants and machines — joined by what each page is about, the things its text mentions, the tags pages share,
+ * and the links between pages. Cached for 30 s.
+ */
+export async function brainGraph(): Promise<{ nodes: GraphNode[]; edges: GraphEdge[] }> {
+  if (graphCache && Date.now() - graphCache.at < 30_000) return graphCache.g;
+  const node = brainNode();
+  if (node) return nodeApi(node, "GET", "/brain/graph");
+  const nodes = new Map<string, GraphNode>();
+  const edges: GraphEdge[] = [];
+  const add = (n: GraphNode) => { if (!nodes.has(n.id)) nodes.set(n.id, n); return n.id; };
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  // mux's body: what the memory is about.
+  const { listModels, listRoutes } = await import("./models.js");
+  const { listTenants } = await import("./tenants.js");
+  const body = new Map<string, string>(); // a normalised name → its node id, to find mentions
+  for (const m of listModels().filter((x) => x.enabled)) { const id = add({ id: `model:${m.id}`, type: "model", label: m.id, kind: m.kind }); body.set(norm(m.upstream_model || m.id), id); body.set(norm(m.id), id); }
+  for (const r of listRoutes()) { const id = add({ id: `route:${r.name}`, type: "route", label: r.name }); for (const c of r.candidates.slice(0, 3)) if (nodes.has(`model:${c}`)) edges.push({ source: id, target: `model:${c}`, type: "route" }); }
+  for (const t of listTenants()) { const id = add({ id: `tenant:${t.id}`, type: "tenant", label: t.name }); body.set(norm(t.id), id); body.set(norm(t.name), id); }
+  for (const p of listProviders().filter((x) => x.kind === "mux")) { const id = add({ id: `node:${p.id}`, type: "node", label: p.name }); body.set(norm(p.id), id); body.set(norm(p.name), id); }
+  const entity = (name: string) => { const n = norm(name); return body.get(n) ?? add({ id: `entity:${n}`, type: "entity", label: name }); };
+  // The memory: pages, with their text (GBrain's list has no text, so each is read; a brain of a few hundred pages is fine).
+  const pages = await search("", { limit: 200 });
+  const full = gbrainOn() ? await Promise.all(pages.map((p) => getPage(p.id).catch(() => p))) : pages;
+  for (const p of full.filter((x): x is Page => !!x)) {
+    const id = add({ id: `page:${p.id}`, type: "page", label: p.title, kind: p.kind, ts: p.updated_at, weight: p.recalls, owner: p.source === "user", text: p.body.slice(0, 280) });
+    if (p.subject) edges.push({ source: id, target: entity(p.subject), type: "about" });
+    const text = norm(`${p.title} ${p.body}`);
+    for (const [name, target] of body) if (name.length > 3 && text.includes(name) && !edges.some((e) => e.source === id && e.target === target)) edges.push({ source: id, target, type: "mentions" });
+    for (const t of p.tags) edges.push({ source: id, target: add({ id: `tag:${t}`, type: "tag", label: `#${t}` }), type: "tag" });
+    if (gbrainOn()) for (const l of await gcall<G[] | { links?: G[] }>("get_links", { slug: p.id }).then((r) => (Array.isArray(r) ? r : r.links ?? [])).catch(() => [])) {
+      const to = String(l.to_slug ?? l.target ?? l.slug ?? "");
+      if (to) edges.push({ source: id, target: `page:${to}`, type: "link" });
+    }
+  }
+  for (const f of await listFacts().catch(() => [])) {
+    const id = add({ id: `fact:${f.id}`, type: "fact", label: f.fact.slice(0, 90), ts: f.ts, text: f.fact });
+    if (f.entity) edges.push({ source: id, target: entity(f.entity), type: "fact" });
+  }
+  const live = edges.filter((e) => nodes.has(e.source) && nodes.has(e.target));
+  // mux's body only where the memory touches it, so the drawing is the brain and not the whole catalogue.
+  const touched = new Set(live.flatMap((e) => [e.source, e.target]));
+  const keep = [...nodes.values()].filter((n) => ["page", "fact"].includes(n.type) || touched.has(n.id));
+  const kept = new Set(keep.map((n) => n.id));
+  const g = { nodes: keep, edges: live.filter((e) => kept.has(e.source) && kept.has(e.target)) };
+  graphCache = { at: Date.now(), g };
+  return g;
+}
+
 /* ── Admin API ──────────────────────────────────────────────────────────────────────────────────────────────── */
 
 export function registerBrain(api: FastifyInstance) {
@@ -317,6 +384,16 @@ export function registerBrain(api: FastifyInstance) {
   // A GBrain slug has slashes (mux/runbook/…): the id is the rest of the path.
   const idOf = (req: { params: unknown }) => decodeURIComponent((req.params as { "*": string })["*"]);
   api.get("/brain/*", async (req, reply) => (await getPage(idOf(req))) ?? reply.code(404).send({ error: "no such page" }));
+  api.get("/brain/graph", async () => brainGraph());
+  api.get("/brain/facts", async () => listFacts());
+  api.delete("/brain/facts/:id", async (req, reply) => {
+    const id = (req.params as { id: string }).id;
+    const node = brainNode();
+    if (node) return nodeApi(node, "DELETE", `/brain/facts/${enc(id)}`);
+    if (!gbrainOn()) return (await forgetPage(id)) ? { ok: true } : reply.code(404).send({ error: "no such fact" });
+    await gcall("forget", { id, reason: "forgotten by the owner" });
+    return { ok: true };
+  });
   // What a gateway asks of the node whose brain it uses (brainNode): recall, facts, and writes that keep their writer.
   api.post("/brain/recall", async (req) => { const b = req.body as { text?: string; limit?: number }; return recall(String(b?.text ?? ""), Math.min(Number(b?.limit) || 4, 20)); });
   api.post("/brain/remember", async (req, reply) => { try { return await rememberFact(req.body as Parameters<typeof rememberFact>[0]); } catch (e) { return reply.code(400).send({ error: (e as Error).message }); } });
