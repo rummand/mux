@@ -34,5 +34,6 @@ model hviske-v5 "Hviske v5.3, Danish Conformer (speech to text)" 10 7 "syvai/hvi
 model whisper-turbo "Whisper large-v3-turbo, held to Danish (speech to text)" 8 8 "openai/whisper-large-v3-turbo on Record's speech-da (Metal); words timed. MIT"
 model edda-large "Edda v0.2 large, Danish Whisper large-v3 (speech to text)" 10 6 "danish-foundation-models/edda-v0.2-large on Record's speech-da; words timed. Apache-2.0"
 model edda "Edda v0.2, Danish Whisper large-v3-turbo (speech to text)" 9 9 "danish-foundation-models/edda-v0.2 on Record's speech-da; words timed. Apache-2.0"
+model edda-duo "Edda v0.2 duo, both Eddas in one beam search (speech to text)" 10 5 "danish-foundation-models/edda-v0.2-duo on Record's speech-da (its own code from the Hub, approved by the owner 2026-11-02); text only. Apache-2.0"
 printf '%s' '{"kind":"transcription","strategy":"priority","description":"Danish speech: Record'"'"'s engines, Røst first","candidates":["roest-v3","hviske-v5","whisper-turbo","whisper"]}' | api PUT /routes/transcribe-da
 echo "✓ transcribe-da: roest-v3, hviske-v5, whisper-turbo, whisper — POST /v1/audio/transcriptions with model=transcribe-da (or an engine)"
