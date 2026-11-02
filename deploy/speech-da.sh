@@ -1,6 +1,7 @@
 #!/bin/sh
-# Record's Danish speech engines as mux models: CoRal's Røst v3, syv.ai's Hviske v5.3 and Whisper turbo, served on
-# this Mac by Record's speech-da service (com.record.speech-da, 127.0.0.1:8798; record repo ops/mac-studio/speech-da).
+# Record's Danish speech engines as mux models: CoRal's Røst v3, syv.ai's Hviske v5.3, Whisper turbo and the Alexandra
+# Institute's Edda v0.2 (large and turbo), served on this Mac by Record's speech-da service (com.record.speech-da,
+# 127.0.0.1:8798; record repo ops/mac-studio/speech-da).
 #   ./deploy/speech-da.sh      register the models and the route transcribe-da (again: it updates them)
 # Route transcribe-da tries Røst first, then Hviske, Whisper turbo and whisper.cpp's Whisper. A gateway with this Mac
 # as a node gets them as mac-studio/roest-v3, … on its next sync. speech-da's key is read from Record's settings on
@@ -28,5 +29,7 @@ echo "→ Record's Danish engines in mux"
 model roest-v3 "Røst v3, CoRal's Danish Whisper (speech to text)" 10 6 "CoRal-project/roest-v3-whisper-1.5b on Record's speech-da; words timed. CoRal's licence (OpenRAIL-M)"
 model hviske-v5 "Hviske v5.3, Danish Conformer (speech to text)" 10 7 "syvai/hviske-v5.3 on Record's speech-da; text only. CC BY-NC 4.0: run at Record's owner's risk"
 model whisper-turbo "Whisper large-v3-turbo, held to Danish (speech to text)" 8 8 "openai/whisper-large-v3-turbo on Record's speech-da (Metal); words timed. MIT"
+model edda-large "Edda v0.2 large, Danish Whisper large-v3 (speech to text)" 10 6 "danish-foundation-models/edda-v0.2-large on Record's speech-da; words timed. Apache-2.0"
+model edda "Edda v0.2, Danish Whisper large-v3-turbo (speech to text)" 9 9 "danish-foundation-models/edda-v0.2 on Record's speech-da; words timed. Apache-2.0"
 printf '%s' '{"kind":"transcription","strategy":"priority","description":"Danish speech: Record'"'"'s engines, Røst first","candidates":["roest-v3","hviske-v5","whisper-turbo","whisper"]}' | api PUT /routes/transcribe-da
 echo "✓ transcribe-da: roest-v3, hviske-v5, whisper-turbo, whisper — POST /v1/audio/transcriptions with model=transcribe-da (or an engine)"
