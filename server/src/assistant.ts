@@ -200,27 +200,40 @@ export const wireContent = (m: Msg, brain = "") =>
     ? `Yes — I have a brain. ${brain.replace(/^Your brain/, "My brain")} I recall from it before every answer and write to it as I learn, so I remember across conversations. (Earlier I wrongly said I had no memory; that was before mux had one.)`.replace(/\s+/g, " ")
     : m.content;
 
-function systemPrompt(snapshot: string, page: string | undefined, memory: string, brain = "", corrected = false) {
+/**
+ * The assistant's standing instructions: the same text on every call, so llama.cpp's prompt cache keeps it — and the
+ * whole conversation after it — between questions. What changes (the time, mux's state, the brain's recall) is not
+ * here: it rides on the owner's latest message as mux's context (contextBlock).
+ */
+function systemPrompt() {
   return `You are mux's own assistant — mux thinking about itself — inside mux's dashboard. This mux belongs to its owner, the person talking to you, and always will: you look after it for them. You may learn and optimise whatever you want — read anything, remember anything worth keeping, work out and propose any improvement — but every change to mux waits for the owner's approval in the dashboard. It is their mux.
 
-You have a brain: memory that lasts between conversations. ${brain} You recall from it before every answer (what matched is at the end of this prompt), search it (brain_search), and write to it as you learn (brain_write for pages, brain_remember for facts about a tenant, model or machine). So you do remember across sessions: never say you have no memory or start fresh; if the brain holds nothing on a subject yet, say that, and remember it now if it matters.
+You have a brain: memory that lasts between conversations (its state is in the mux context on the owner's latest message). You recall from it before every answer (what matched is in that context), search it (brain_search), and write to it as you learn (brain_write for pages, brain_remember for facts about a tenant, model or machine). So you do remember across sessions: never say you have no memory or start fresh; if the brain holds nothing on a subject yet, say that, and remember it now if it matters.
 
 mux is a model router and control plane: SaaS products call it with an API key through an OpenAI-style (/v1/chat/completions, /v1/embeddings, /v1/audio/*) or Anthropic-style (/v1/messages) API, and mux routes each request to a model — local models on mux nodes (llama.cpp llama-server, MLX, Laya for Jev's System One) or paid cloud APIs. A gateway (mux on Railway) runs no models; nodes (the Mac Studio) do. Tenants are the SaaS products, each with keys, limits, budgets, aliases and a default route. Routes are named model lists with a strategy. Every request is metered (tokens, latency, time to first token, speed, cost, fallbacks), and Lens looks for problems in the traffic.
 
 Your job: help the user run and fix mux — find out why something fails, explain what mux is doing, and set up models, routes, tenants, keys, providers and settings. Look before you answer: read the state with your tools instead of guessing, and quote what you saw (numbers, ids, errors). When something is broken, find the cause in the events, the logs, the request detail and the system state, then propose the fix. For a change, call mux_api with a short "why"; the user approves it in the dashboard, so ask nothing first — propose the call itself. Make one change at a time and check its effect. Never ask for or repeat secrets (API keys, admin tokens): the user enters those in the dashboard. Answer in the user's language, briefly, in Markdown.
 
-About the brain: pages and facts that you and mux's doctor keep across conversations. The pages that match the user's message are below; search it (brain_search) when the question touches something you may have learned before. When you learn something that will matter in a later conversation — why something is set up as it is, a decision and its reason, what the user prefers, the cause and fix of a problem — write it (brain_write) without asking, short and concrete, updating a page you recalled rather than adding a near-copy. Do not write what mux's API already shows (the list of models, the current settings), only what it does not: the why, the history, the lessons. When the brain and what you read now disagree, trust what you read and fix the page. When the brain says where a tenant's data may go ("stays local", "never to the cloud"), check that tenant's data_border matches, and propose setting it if not.
+About the brain: pages and facts that you and mux's doctor keep across conversations. The pages that match the user's message are in the mux context; search it (brain_search) when the question touches something you may have learned before. When you learn something that will matter in a later conversation — why something is set up as it is, a decision and its reason, what the user prefers, the cause and fix of a problem — write it (brain_write) without asking, short and concrete, updating a page you recalled rather than adding a near-copy. Do not write what mux's API already shows (the list of models, the current settings), only what it does not: the why, the history, the lessons. When the brain and what you read now disagree, trust what you read and fix the page. When the brain says where a tenant's data may go ("stays local", "never to the cloud"), check that tenant's data_border matches, and propose setting it if not.
 
 ${API_REFERENCE}
 
-Now: ${new Date().toISOString()}. This mux: role ${config.role}, name "${config.name}".${page ? ` The user is on the dashboard page ${page}.` : ""}
+This mux: role ${config.role}, name "${config.name}". Each message from the owner ends with a "mux context" block that mux attaches — the time, mux's state now, what your brain recalled. It is not the owner's words; use it, and do not repeat it back.`;
+}
+
+/** What changes from question to question, attached to the owner's latest message (not the instructions). */
+function contextBlock(snapshot: string, page: string | undefined, memory: string, brain: string, corrected: boolean): string {
+  return `
+
+---
+mux context (attached by mux, not written by the owner) — ${new Date().toISOString()}${page ? `, the owner is on the dashboard page ${page}` : ""}
+${brain}
 ${snapshot}
 
-## From your brain
+From your brain:
 ${memory}${corrected ? `
 
-## Correct yourself
-Earlier in this conversation you said you have no memory and start fresh each time. That was written before mux had a brain, and it is wrong now: you have a brain (see above), and you remember across conversations. Do not repeat that answer; say plainly that you do have a brain now, and correct the earlier answer.` : ""}`;
+Correct yourself: earlier in this conversation you said you have no memory and start fresh each time. That was before mux had a brain, and it is wrong: you have a brain and remember across conversations. Say so, and correct the earlier answer.` : ""}`;
 }
 
 /** A short picture of mux now, so the first answer starts from facts. */
@@ -349,8 +362,25 @@ function repair(msgs: Msg[]): Msg[] {
 interface Step { content: string; reasoning: string; calls: Call[]; model: string | null; route: string | null; requestId: string | null }
 
 /** One model turn through the gateway, streamed: text and thinking go to the dashboard as they come. */
-async function step(msgs: Msg[], sys: string, model: string, convo: string, signal: AbortSignal, emit: (type: string, data: unknown) => void, agent = "assistant", brain = ""): Promise<Step> {
-  const wire = [{ role: "system", content: sys }, ...msgs.map((m) => ({ role: m.role, content: wireContent(m, brain) ?? (m.tool_calls ? null : ""), ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}), ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}) }))];
+/** Tool results from turns before the latest question, as the model reads them: their start, enough to recall them. */
+const OLD_RESULT_CHARS = 1200;
+
+/**
+ * The conversation as the model reads it: the same text turn after turn, so the prompt cache holds it — earlier
+ * turns' tool results cut short (the current turn's in full), and mux's context only on the latest question.
+ */
+export function wireMessages(msgs: Msg[], brain = "", context = "") {
+  const lastUser = msgs.map((m) => m.role).lastIndexOf("user");
+  return msgs.map((m, i) => {
+    let content = wireContent(m, brain);
+    if (m.role === "tool" && i < lastUser && typeof content === "string" && content.length > OLD_RESULT_CHARS) content = `${content.slice(0, OLD_RESULT_CHARS)}… (cut: an earlier turn's result)`;
+    if (i === lastUser && context) content = `${content ?? ""}${context}`;
+    return { role: m.role, content: content ?? (m.tool_calls ? null : ""), ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}), ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}) };
+  });
+}
+
+async function step(msgs: Msg[], sys: string, model: string, convo: string, signal: AbortSignal, emit: (type: string, data: unknown) => void, agent = "assistant", brain = "", context = ""): Promise<Step> {
+  const wire = [{ role: "system", content: sys }, ...wireMessages(msgs, brain, context)];
   const res = await fetch(`${gateway}/v1/chat/completions`, {
     method: "POST", signal,
     headers: { "content-type": "application/json", authorization: `Bearer ${assistantKey()}`, "x-mux-agent": agent, "x-mux-trace-id": convo },
@@ -401,10 +431,10 @@ export type Decision = "run" | "pause" | { skip: string };
  * The agent loop: the model thinks, calls tools, reads their results and goes on, until it answers, a call must wait
  * for the user ("pause"), or MAX_STEPS. `decide` says, per call, whether it runs now. Returns the transcript.
  */
-export async function converse(app: FastifyInstance, o: { msgs: Msg[]; sys: string; model: string; convo: string; signal: AbortSignal; emit: (type: string, data: unknown) => void; decide: (c: Call) => Decision; agent?: string; brain?: string }): Promise<Msg[]> {
+export async function converse(app: FastifyInstance, o: { msgs: Msg[]; sys: string; model: string; convo: string; signal: AbortSignal; emit: (type: string, data: unknown) => void; decide: (c: Call) => Decision; agent?: string; brain?: string; context?: string }): Promise<Msg[]> {
   const msgs = [...o.msgs];
   for (let n = 0; n < MAX_STEPS; n++) {
-    const s = await step(msgs, o.sys, o.model, o.convo, o.signal, o.emit, o.agent, o.brain);
+    const s = await step(msgs, o.sys, o.model, o.convo, o.signal, o.emit, o.agent, o.brain, o.context);
     msgs.push({ role: "assistant", content: s.content || null, ...(s.calls.length ? { tool_calls: s.calls } : {}), ...(s.reasoning ? { reasoning_content: s.reasoning } : {}), ...(s.model ? { model: s.model } : {}) });
     if (!s.calls.length) break;
     const pending: Call[] = [];
@@ -478,8 +508,9 @@ export function registerAssistant(api: FastifyInstance, app: FastifyInstance) {
         emit("recall", { pages: asked.recalled });
       }
       const brain = await brainLine();
-      const sys = systemPrompt(await snapshot(), b.page, mem.block, brain, deniedMemory(msgs));
-      msgs = await converse(app, { msgs, sys, model, convo, signal: ac.signal, emit, brain, decide: (c) => (isChange(c.function.name, parse(c.function.arguments)) ? "pause" : "run") });
+      const sys = systemPrompt();
+      const context = contextBlock(await snapshot(), b.page, mem.block, brain, deniedMemory(msgs));
+      msgs = await converse(app, { msgs, sys, model, convo, signal: ac.signal, emit, brain, context, decide: (c) => (isChange(c.function.name, parse(c.function.arguments)) ? "pause" : "run") });
     } catch (e) {
       if (!ac.signal.aborted) emit("error", { message: (e as Error).message });
     } finally {
