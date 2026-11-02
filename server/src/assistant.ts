@@ -167,7 +167,7 @@ export const API_REFERENCE = `Admin API (paths under /api/admin). Tenants, route
 - GET /catalog; GET /advisor?useCase=&priority=quality|balanced|speed (each model with its score, reasons, usage here over 30 days, Hugging Face downloads/likes, the routes it is on); GET /advisor/use-cases; GET /advisor/stack
 - GET /advisor/insights — what to do about models, each with the admin call that does it: promote (put a measured, better model first on a route), try (download a model that would beat what is here), measure (benchmark one in use but unmeasured), retire (disable one nothing uses); plus trending GGUF models not in the catalog. GET /advisor/trending; POST /advisor/signals re-reads Hugging Face (runs without approval)
 - GET /hf/search?q=; GET /hf/files?repo=; GET /downloads; POST /downloads {catalogId} or {repo, file}; DELETE /downloads/:id; GET /local; POST /local/import {path, id?, kind?}
-- GET /routes; PUT /routes/:name (create or update) {description, kind, strategy: priority|auto|fastest|quality, candidates: [model ids]}; DELETE /routes/:name
+- GET /routes; PUT /routes/:name (create or update) {description, kind, strategy: priority|auto|fastest|quality, candidates: [model ids]}; DELETE /routes/:name. Routes list mux's own models first; free tiers rescue on their own (do not put them ahead of ours), and never one that trains on prompts. An embedding route's first model is never changed (another model's vectors break the tenants' stored ones; mux refuses without force: true).
 - POST /routes/explain {tenant?, model?, messages, tools?, kind?} — what the router would do, without sending (runs without approval)
 - GET /tenants; GET /tenants/:id; PUT /tenants/:id (create or update) {name, description, color, status: active|paused, rpm_limit, tpm_limit, monthly_token_budget, monthly_usd_budget, max_parallel, default_route, allowed, aliases, log_bodies, data_border: any|own|servers} — data_border: own keeps a tenant on our machines (never a cloud API), servers on our always-on machines only; the router enforces it; DELETE /tenants/:id
 - POST /tenants/:id/keys {name, expiresInDays?, rpmLimit?, monthlyTokenBudget?} — returns the key once; DELETE /keys/:id revokes
@@ -188,23 +188,15 @@ export async function brainLine(): Promise<string> {
   } catch (e) { return `Your brain did not answer just now (${(e as Error).message.slice(0, 120)}).`; }
 }
 
-/** An answer that denied having a memory — written before mux had a brain. */
-const DENIES = /no memory|start (?:fresh|over)|don.t have (?:a |any )?(?:brain|memory)|no (?:brain|persistent memory)|ingen hukommelse|husker ikke/i;
+/**
+ * Answers that denied having a memory (from before mux had a brain), and the copies of a canned correction an earlier
+ * version put in their place. A small model copies its own earlier answers over any instruction — those copies became
+ * a loop — so the model does not read these answers at all; the stored conversation keeps them.
+ */
+const DENIES = /no memory|start (?:fresh|over)|don.t have (?:a |any )?(?:brain|memory)|no (?:brain|persistent memory)|ingen hukommelse|husker ikke|^Yes — I have a brain\. (?:Your|My) brain is/i;
 export const deniedMemory = (msgs: Msg[]) => msgs.some((m) => m.role === "assistant" && typeof m.content === "string" && DENIES.test(m.content));
-/**
- * What the model reads of such an answer. A small model copies its own earlier answers over any instruction, so the
- * stored conversation keeps them, but the model reads a correction in their place.
- */
-export const wireContent = (m: Msg, brain = "") =>
-  m.role === "assistant" && typeof m.content === "string" && DENIES.test(m.content)
-    ? `Yes — I have a brain. ${brain.replace(/^Your brain/, "My brain")} I recall from it before every answer and write to it as I learn, so I remember across conversations. (Earlier I wrongly said I had no memory; that was before mux had one.)`.replace(/\s+/g, " ")
-    : m.content;
+const left = (m: Msg) => m.role === "assistant" && !m.tool_calls?.length && typeof m.content === "string" && DENIES.test(m.content);
 
-/**
- * The assistant's standing instructions: the same text on every call, so llama.cpp's prompt cache keeps it — and the
- * whole conversation after it — between questions. What changes (the time, mux's state, the brain's recall) is not
- * here: it rides on the owner's latest message as mux's context (contextBlock).
- */
 function systemPrompt() {
   return `You are mux's own assistant — mux thinking about itself — inside mux's dashboard. This mux belongs to its owner, the person talking to you, and always will: you look after it for them. You may learn and optimise whatever you want — read anything, remember anything worth keeping, work out and propose any improvement — but every change to mux waits for the owner's approval in the dashboard. It is their mux.
 
@@ -233,7 +225,7 @@ ${snapshot}
 From your brain:
 ${memory}${corrected ? `
 
-Correct yourself: earlier in this conversation you said you have no memory and start fresh each time. That was before mux had a brain, and it is wrong: you have a brain and remember across conversations. Say so, and correct the earlier answer.` : ""}`;
+Some of your earlier answers in this conversation are left out: they wrongly said you had no memory, or repeated one canned line about your brain to every question. You do have a brain. Answer the owner's latest message itself — do not talk about your memory unless asked.` : ""}`;
 }
 
 /** A short picture of mux now, so the first answer starts from facts. */
@@ -369,13 +361,14 @@ const OLD_RESULT_CHARS = 1200;
  * The conversation as the model reads it: the same text turn after turn, so the prompt cache holds it — earlier
  * turns' tool results cut short (the current turn's in full), and mux's context only on the latest question.
  */
-export function wireMessages(msgs: Msg[], brain = "", context = "") {
+export function wireMessages(msgs: Msg[], _brain = "", context = "") {
   const lastUser = msgs.map((m) => m.role).lastIndexOf("user");
-  return msgs.map((m, i) => {
-    let content = wireContent(m, brain);
+  return msgs.flatMap((m, i) => {
+    if (left(m)) return [];
+    let content = m.content;
     if (m.role === "tool" && i < lastUser && typeof content === "string" && content.length > OLD_RESULT_CHARS) content = `${content.slice(0, OLD_RESULT_CHARS)}… (cut: an earlier turn's result)`;
     if (i === lastUser && context) content = `${content ?? ""}${context}`;
-    return { role: m.role, content: content ?? (m.tool_calls ? null : ""), ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}), ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}) };
+    return [{ role: m.role, content: content ?? (m.tool_calls ? null : ""), ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}), ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}) }];
   });
 }
 

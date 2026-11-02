@@ -96,7 +96,7 @@ export async function joinNode(p: Provider, gatewayName: string): Promise<Provid
   return getProvider(p.id)!;
 }
 
-interface NodeModel { id: string; display_name: string; kind: Kind; backend: string; enabled: boolean; ctx: number; size_bytes: number; caps: Caps; notes: string; catalog_id: string | null }
+interface NodeModel { id: string; display_name: string; kind: Kind; backend: string; enabled: boolean; ctx: number; size_bytes: number; caps: Caps; notes: string; catalog_id: string | null; provider_id?: string | null }
 
 /** Read a node's state and models; its models become the gateway's, as `<node>/<model>`. */
 export async function syncNode(p: Provider) {
@@ -109,9 +109,10 @@ export async function syncNode(p: Provider) {
     sampleProvider(p.id, true, info);
     if (wasDown) event("info", "providers", `${p.name} is online (${info.latencyMs} ms, ${models.length} models)`);
     const seen = new Set<string>();
-    // Only what runs on the node: its cloud and free-tier models are the node's own business — a gateway has its own
-    // providers, and a node's free model copied here would look like a local one and take traffic first.
-    for (const nm of models.filter((m) => m.enabled && !["external", "jev", "node"].includes(m.backend))) {
+    // Only what runs on the node — its llama-servers and its own speech servers (external backends on its loopback,
+    // with no provider). A model of one of the node's providers (a cloud or a free tier) is the node's business: a
+    // gateway has its own providers, and a node's free model copied here would look like a local one.
+    for (const nm of models.filter((m) => m.enabled && !m.provider_id && !["jev", "node"].includes(m.backend))) {
       const id = `${p.id}/${nm.id}`;
       seen.add(id);
       const mine = getModel(id);

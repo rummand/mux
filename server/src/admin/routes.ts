@@ -10,6 +10,7 @@ import { db, event, json, now, saveSettings, settings } from "../db.js";
 import { cancelDownload, downloadsBus, importLocal, listDownloads, repoFiles, scanLocal, searchHf, startDownload } from "../hf.js";
 import { registerLens } from "../lens.js";
 import { deleteModel, deleteRoute, getModel, listModels, listRoutes, upsertModel, upsertRoute, type Model } from "../models.js";
+import { getRoute } from "../models.js";
 import { snapshot } from "../router/health.js";
 import { addCloudModel, addFreeTier, getProvider, joinNode, listProviders, PRESETS, remoteModels, removeProvider, saveProvider, syncNode, type Provider } from "../providers.js";
 import { decide, features } from "../router/select.js";
@@ -232,7 +233,16 @@ export function registerAdmin(app: FastifyInstance) {
 
     // ── Routes ─────────────────────────────────────────────────────────────────────────────────────────────────
     api.get("/routes", async () => listRoutes());
-    api.put("/routes/:name", async (req) => upsertRoute({ ...(req.body as object), name: (req.params as { name: string }).name }));
+    api.put("/routes/:name", async (req, reply) => {
+      const name = (req.params as { name: string }).name, b = (req.body ?? {}) as { candidates?: string[]; force?: boolean };
+      // Another embedding model's vectors do not match the ones tenants stored: its first model changes only on purpose.
+      const prev = getRoute(name);
+      const base = (id?: string) => (id ? (getModel(id)?.upstream_model || id).split("/").pop()!.toLowerCase() : "");
+      if (prev?.kind === "embedding" && b.candidates?.length && prev.candidates[0] && base(b.candidates[0]) !== base(prev.candidates[0]) && !b.force)
+        return reply.code(409).send({ error: `${name} embeds with ${prev.candidates[0]}: putting ${b.candidates[0]} first would give tenants vectors that do not match the ones they stored. Send force: true only if every tenant re-embeds.` });
+      const { force: _f, ...rest } = b as Record<string, unknown>;
+      return upsertRoute({ ...rest, name });
+    });
     api.delete("/routes/:name", async (req) => { deleteRoute((req.params as { name: string }).name); return { ok: true }; });
     // What the router would do with a request, without sending it: the features it reads and the order it would try.
     api.post("/routes/explain", async (req, reply) => {

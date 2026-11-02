@@ -101,13 +101,29 @@ test("a gateway takes only what runs on a node, never the node's cloud or free-t
     const u = String(url);
     const body = u.endsWith("/system?range=15m") ? { system: {}, instances: [], budget: { budgetGb: 48, usedGb: 0 } }
       : [{ id: "qwen-local", display_name: "Qwen", kind: "chat", backend: "llamacpp", enabled: true, ctx: 32768, size_bytes: 1, caps: {}, notes: "", catalog_id: null },
-         { id: "ovh/Qwen3.8-27B", display_name: "OVH", kind: "chat", backend: "external", enabled: true, ctx: 32768, size_bytes: 0, caps: {}, notes: "", catalog_id: "qwen3.8-27b" }];
+         { id: "ovh/Qwen3.8-27B", display_name: "OVH", kind: "chat", backend: "external", enabled: true, ctx: 32768, size_bytes: 0, caps: {}, notes: "", catalog_id: "qwen3.8-27b", provider_id: "ovh" },
+         { id: "whisper", display_name: "Whisper", kind: "transcription", backend: "external", enabled: true, ctx: 0, size_bytes: 0, caps: {}, notes: "", catalog_id: null, provider_id: null }];
     return new Response(JSON.stringify(body), { status: 200 });
   }) as typeof fetch;
   try {
     save({ id: "studio", name: "Studio", kind: "mux", base_url: "http://studio", admin_token: "x" });
     await syncNode(getProvider("studio")!);
     const ids = listModels().filter((m) => m.provider_id === "studio").map((m) => m.id);
-    assert.deepEqual(ids, ["studio/qwen-local"]);
+    assert.deepEqual(ids.sort(), ["studio/qwen-local", "studio/whisper"]); // its own speech server, not its free tier
   } finally { globalThis.fetch = realFetch; }
+});
+
+test("an embedding route's first model changes only when forced", async () => {
+  const Fastify = (await import("fastify")).default;
+  const { registerAdmin } = await import("../src/admin/routes.js");
+  const app = Fastify(); registerAdmin(app);
+  const h = { authorization: "Bearer dev" };
+  upsertModel({ id: "gemini/gemini-embedding-001", backend: "external", kind: "embedding", provider_id: "groq", upstream_model: "gemini-embedding-001", ctx: 8192 });
+  upsertRoute({ name: "embed", kind: "embedding", strategy: "priority", candidates: ["bge-m3", "ovh/bge-m3"] });
+  const put = (body: object) => app.inject({ method: "PUT", url: "/api/admin/routes/embed", headers: h, payload: body });
+  assert.equal((await put({ candidates: ["gemini/gemini-embedding-001", "bge-m3"] })).statusCode, 409);
+  assert.equal((await put({ candidates: ["bge-m3"] })).statusCode, 200); // the same first model: fine
+  assert.equal((await put({ candidates: ["ovh/bge-m3", "bge-m3"] })).statusCode, 200); // the same model elsewhere: fine
+  assert.equal((await put({ candidates: ["gemini/gemini-embedding-001"], force: true })).statusCode, 200);
+  await app.close();
 });

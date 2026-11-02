@@ -32,6 +32,25 @@ export function formField(body: Buffer, contentType: string, name: string): stri
   return undefined;
 }
 
+/** The multipart body with a form field set (the `model` an upstream knows its model by); added when missing. */
+export function setFormField(body: Buffer, contentType: string, name: string, value: string): Buffer {
+  const boundary = /boundary=(?:"([^"]+)"|([^;\s]+))/i.exec(contentType);
+  if (!boundary) return body;
+  const sep = `--${boundary[1] ?? boundary[2]}`;
+  const text = body.toString("latin1"); // one byte, one char: the audio passes through unchanged
+  const head = new RegExp(`${sep.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\r\nContent-Disposition: form-data; name="${name}"\r\n(?:[^\r\n]+\r\n)*\r\n`, "i");
+  const m = head.exec(text);
+  const v = Buffer.from(value, "utf8").toString("latin1");
+  if (m) {
+    const start = m.index + m[0].length;
+    const end = text.indexOf(`\r\n${sep}`, start);
+    if (end > start) return Buffer.from(text.slice(0, start) + v + text.slice(end), "latin1");
+  }
+  const close = text.lastIndexOf(`${sep}--`);
+  if (close < 0) return body;
+  return Buffer.from(`${text.slice(0, close)}${sep}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${v}\r\n${text.slice(close)}`, "latin1");
+}
+
 export async function runAudio(ctx: Ctx, kind: AudioKind, requested: string | undefined, body: Buffer, contentType: string, signal: AbortSignal): Promise<Response> {
   const d = decide(ctx.tenant, requested, kind, null);
   ctx.experiment = d.experiment ?? null;
@@ -47,7 +66,7 @@ export async function runAudio(ctx: Ctx, kind: AudioKind, requested: string | un
     ctx.modelId = m.id;
     const tu = performance.now();
     try {
-      const payload = kind === "speech" ? Buffer.from(JSON.stringify({ ...JSON.parse(body.toString("utf8") || "{}"), model: up.model })) : body;
+      const payload = kind === "speech" ? Buffer.from(JSON.stringify({ ...JSON.parse(body.toString("utf8") || "{}"), model: up.model })) : setFormField(body, contentType, "model", up.model);
       const res = await fetch(`${up.baseUrl}/${path}?model=${encodeURIComponent(up.model)}`, {
         method: "POST", headers: { ...up.headers, "content-type": contentType }, body: new Uint8Array(payload), signal,
       });
