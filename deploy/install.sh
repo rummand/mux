@@ -45,6 +45,23 @@ cat > "$PLIST" <<PL
 PL
 launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$PLIST"
+# The outside watchdog: restarts mux when it is up but answers nothing.
+WD_LABEL=com.mux.watchdog
+WD_PLIST="$HOME/Library/LaunchAgents/$WD_LABEL.plist"
+cat > "$WD_PLIST" <<WD
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>$WD_LABEL</string>
+  <key>ProgramArguments</key><array><string>$ROOT/deploy/watchdog.sh</string></array>
+  <key>StartInterval</key><integer>60</integer>
+  <key>RunAtLoad</key><false/>
+  <key>StandardOutPath</key><string>$MUX_HOME/logs/watchdog.log</string>
+  <key>StandardErrorPath</key><string>$MUX_HOME/logs/watchdog.log</string>
+</dict></plist>
+WD
+launchctl bootout "gui/$(id -u)/$WD_LABEL" 2>/dev/null || true
+launchctl bootstrap "gui/$(id -u)" "$WD_PLIST"
 for i in $(seq 1 30); do curl -sf "http://127.0.0.1:7070/health" >/dev/null && break; sleep 1; done
 curl -s "http://127.0.0.1:7070/health"; echo
 echo "✓ mux on http://$(scutil --get LocalHostName 2>/dev/null || hostname).local:7070 — admin token: grep MUX_ADMIN_TOKEN ~/.mux/mux.env"

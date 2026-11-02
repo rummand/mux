@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import type { Group, Overview } from "../api";
 import { fmtCompact, fmtInt, fmtMs, fmtPct } from "../format";
 import { useApi } from "../hooks";
-import { ColumnChart, OTHER, SERIES, slotMap, TimeChart, type SeriesDef } from "./charts";
+import { ColumnChart, Heatmap, OTHER, SERIES, slotMap, TimeChart, type SeriesDef } from "./charts";
 import { Card, Empty, Segmented, Stat, Table, Td, Th } from "./ui";
 
 const axisMs = (v: number) => (v >= 1000 ? `${Math.round(v / 1000)}s` : `${Math.round(v)}ms`);
@@ -10,9 +10,14 @@ const axisMs = (v: number) => (v >= 1000 ? `${Math.round(v / 1000)}s` : `${Math.
 export const RANGE_OPTIONS = ["15m", "1h", "6h", "24h", "7d", "30d"].map((r) => ({ value: r, label: r }));
 
 /** KPIs, the time charts and the breakdowns for a range, optionally one tenant/model/agent. Shared by Overview and a tenant's page. */
-export function OverviewPanel({ range, tenant, model, agent, showTenants = true, nameOf }: { range: string; tenant?: string; model?: string; agent?: string; showTenants?: boolean; nameOf?: (id: string) => string }) {
-  const { data, error } = useApi<Overview>("/overview", { range, tenant, model, agent }, 15_000);
-  const [breakdown, setBreakdown] = useState<"provider" | "model" | "route" | "endpoint" | "agent" | "user" | "error">("provider");
+const TZ = -new Date().getTimezoneOffset();
+type Breakdown = "tenant" | "provider" | "model" | "route" | "endpoint" | "agent" | "user" | "key" | "finish" | "status" | "error";
+
+export function OverviewPanel({ range, tenant, model, agent, provider, route, showTenants = true, nameOf, scope = null }: {
+  range: string; tenant?: string; model?: string; agent?: string; provider?: string; route?: string; showTenants?: boolean; nameOf?: (id: string) => string; scope?: string | null;
+}) {
+  const { data, error } = useApi<Overview>("/overview", { range, tenant, model, agent, provider, route, tz: TZ }, 15_000, scope);
+  const [breakdown, setBreakdown] = useState<Breakdown>(tenant ? "model" : "provider");
   const colors = useMemo(() => slotMap(data?.tenants ?? []), [data?.tenants]);
   const modelColors = useMemo(() => slotMap(data?.models ?? []), [data?.models]);
   if (error) return <Empty>Could not load the overview: {error}</Empty>;
@@ -24,7 +29,10 @@ export function OverviewPanel({ range, tenant, model, agent, showTenants = true,
     ? data.tenants.slice().sort().map((tn) => ({ key: `tenant:${tn}`, label: label(tn), color: colors.get(tn) ?? OTHER }))
     : [{ key: "requests", label: "Requests", color: SERIES[0] }];
   const modelSeries: SeriesDef[] = data.models.slice().sort().map((m) => ({ key: `model:${m}`, label: m, color: modelColors.get(m) ?? OTHER }));
-  const groups: Record<typeof breakdown, Group[]> = { provider: data.byProvider ?? [], model: data.byModel, route: data.byRoute, endpoint: data.byEndpoint, agent: data.byAgent, user: data.byUser, error: data.byError };
+  const groups: Record<Breakdown, Group[]> = {
+    tenant: data.byTenant, provider: data.byProvider ?? [], model: data.byModel, route: data.byRoute, endpoint: data.byEndpoint, agent: data.byAgent, user: data.byUser,
+    key: data.byKey ?? [], finish: data.byFinish ?? [], status: data.byStatus ?? [], error: data.byError,
+  };
 
   return (
     <div className="min-w-0 space-y-4">
@@ -43,6 +51,14 @@ export function OverviewPanel({ range, tenant, model, agent, showTenants = true,
         <Stat label="Fallbacks" value={fmtInt(t.fallbacks)} sub="answered by a later candidate" tone={t.fallbacks > 0 ? "warn" : undefined} />
         <Stat label="Avg latency" value={fmtMs(t.latencyAvg)} sub="successful requests" />
         <Stat label="Cloud spend" value={`$${(t.costUsd ?? 0).toFixed(2)}`} sub={`${(data.byProvider ?? []).filter((p) => p.key !== "local").length} providers used · ${data.byTenant.length} tenants`} />
+      </div>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 2xl:grid-cols-6">
+        <Stat label="Peak concurrency" value={fmtInt(t.peakConcurrency ?? null)} sub="most requests in flight at once" />
+        <Stat label="Queue p95" value={fmtMs(t.queueP95 ?? null)} sub={`p50 ${fmtMs(t.queueP50 ?? null)} · waiting for a slot or load`} tone={(t.queueP95 ?? 0) > 2000 ? "warn" : undefined} />
+        <Stat label="Prompt cache hits" value={fmtPct(t.cacheHitRate ?? null, 0)} sub="prompt tokens served from cache" />
+        <Stat label="Tokens / request" value={fmtCompact(t.tokensPerRequest ?? null)} sub="prompt + completion, average" />
+        <Stat label="Rate limited" value={fmtInt(t.rateLimited ?? 0)} sub="answered 429 (limits, budgets)" tone={(t.rateLimited ?? 0) > 0 ? "warn" : undefined} />
+        <Stat label="Throughput peak" value={fmtCompact(Math.max(0, ...data.series.map((p) => p.tpm ?? 0)))} sub="tokens per minute, busiest bucket" />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
@@ -77,13 +93,42 @@ export function OverviewPanel({ range, tenant, model, agent, showTenants = true,
         <Card title="Gateway overhead" subtitle="p99 of mux's own time (total − model − load), ms">
           <TimeChart data={data.series} bucketMs={data.bucketMs} yFormat={(v) => `${v.toFixed(1)}`} series={[{ key: "overheadP99", label: "p99 overhead", color: SERIES[6], format: (v) => `${v.toFixed(2)} ms` }]} />
         </Card>
+        <Card title="Concurrency" subtitle="peak requests in flight per bucket, and queue wait p95">
+          <TimeChart data={data.series} bucketMs={data.bucketMs} series={[{ key: "concurrency", label: "In flight (peak)", color: SERIES[3], format: (v) => fmtInt(v) }]} kind="area" />
+        </Card>
+        <Card title="Throughput" subtitle="tokens per minute">
+          <TimeChart data={data.series} bucketMs={data.bucketMs} kind="area" series={[{ key: "tpm", label: "tokens/min", color: SERIES[4], format: (v) => fmtCompact(v) }]} />
+        </Card>
+        <Card title="Error rate" subtitle="share of requests that failed, per bucket">
+          <TimeChart data={data.series} bucketMs={data.bucketMs} yFormat={(v) => fmtPct(v, 0)} series={[{ key: "errorRate", label: "Error rate", color: "var(--critical)", format: (v) => fmtPct(v) }]} />
+        </Card>
+        <Card title="Cold starts & fallbacks" subtitle="requests that waited for a load, or were answered by a later candidate">
+          <TimeChart data={data.series} bucketMs={data.bucketMs} kind="bar" series={[
+            { key: "coldStarts", label: "Cold starts", color: SERIES[5] },
+            { key: "fallbacks", label: "Fallbacks", color: SERIES[1] },
+          ]} />
+        </Card>
+        <Card title="Queue wait" subtitle="p95 time waiting for a slot or a load, ms">
+          <TimeChart data={data.series} bucketMs={data.bucketMs} yFormat={axisMs} series={[{ key: "queueP95", label: "Queue p95", color: SERIES[7], format: fmtMs }]} />
+        </Card>
+        <Card title="Prompt sizes" subtitle="requests by prompt tokens">
+          {data.tokenHistogram ? <ColumnChart data={data.tokenHistogram} x="bucket" y="count" label="requests" color={SERIES[2]} /> : <Empty>—</Empty>}
+        </Card>
       </div>
+
+      {data.heatmap && (
+        <Card title="When traffic comes" subtitle="requests by weekday and hour, your time zone">
+          <Heatmap data={data.heatmap} />
+        </Card>
+      )}
 
       <Card title="Breakdown" pad={false} actions={
         <Segmented value={breakdown} onChange={setBreakdown} options={[
+          ...(showTenants ? [{ value: "tenant" as const, label: "Tenant" }] : []),
           { value: "provider", label: "Provider" },
           { value: "model", label: "Model" }, { value: "route", label: "Route" }, { value: "endpoint", label: "Endpoint" },
-          { value: "agent", label: "Agent" }, { value: "user", label: "End user" }, { value: "error", label: "Errors" },
+          { value: "agent", label: "Agent" }, { value: "user", label: "End user" }, { value: "key", label: "Key" },
+          { value: "finish", label: "Finish" }, { value: "status", label: "Status" }, { value: "error", label: "Errors" },
         ]} />
       }>
         <GroupTable rows={groups[breakdown]} />

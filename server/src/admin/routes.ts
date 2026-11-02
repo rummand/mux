@@ -20,6 +20,8 @@ import { createKey, deleteTenant, getTenant, listKeys, listTenants, revokeKey, u
 import { overview, requestDetail, requestLog, systemSeries, traces } from "./stats.js";
 import { timingSafeEqual } from "node:crypto";
 import { registerAssistant } from "../assistant.js";
+import { registerHealer } from "../healer.js";
+import { modelResources, providerResources, tenantResources } from "./resources.js";
 
 const ok = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 
@@ -38,7 +40,7 @@ export function registerAdmin(app: FastifyInstance) {
 
     // ── Overview & system ──────────────────────────────────────────────────────────────────────────────────────
     api.get("/overview", async (req) => {
-      const q = req.query as { range?: string; tenant?: string; model?: string; agent?: string };
+      const q = req.query as { range?: string; tenant?: string; model?: string; agent?: string; provider?: string; route?: string; tz?: string };
       return overview(q.range, q);
     });
     api.get("/system", async (req) => {
@@ -277,6 +279,14 @@ export function registerAdmin(app: FastifyInstance) {
     });
     api.get("/playground-key", async () => ({ key: playgroundKey() }));
     registerAssistant(api, app);
+    registerHealer(api);
+
+    // ── Resource data per tenant, provider and model (ids may hold a slash: a node's model is <node>/<model>) ────
+    const stat = (fn: (id: string, range?: string) => unknown) => async (req: FastifyRequest, reply: FastifyReply) =>
+      fn((req.params as { "*": string })["*"], (req.query as { range?: string }).range) ?? reply.code(404).send({ error: "not found" });
+    api.get("/stats/model/*", stat(modelResources));
+    api.get("/stats/provider/*", stat(providerResources));
+    api.get("/stats/tenant/*", stat(tenantResources));
 
     // ── Logs: the end of mux's own log or a model server's, filtered ───────────────────────────────────────────
     api.get("/logs", async (req, reply) => {

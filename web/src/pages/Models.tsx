@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import { api, type CatalogEntry, type Download, type LocalFile, type Model, type SystemInfo } from "../api";
+import { Link } from "react-router-dom";
+import { api, getPageScope, type CatalogEntry, type Download, type LocalFile, type Model, type SystemInfo } from "../api";
 import { Badge, Button, Card, Empty, ErrorNote, Field, Input, Meter, Modal, PageHeader, Segmented, Select, Spinner, StatusDot, Table, Tabs, Td, Textarea, Th, Toggle } from "../components/ui";
 import { fmtAgo, fmtBytes, fmtCompact, fmtGb, fmtInt, fmtPct } from "../format";
 import { useApi, useLive } from "../hooks";
@@ -130,7 +131,7 @@ function Installed({ models, error, reload }: { models: Model[] | null; error: s
             const bench = m.bench;
             const local = m.backend === "llamacpp" || m.backend === "mlx" || m.backend === "laya";
             return (
-              <Card key={m.id} title={<span className="flex items-center gap-2">{m.display_name}<span className="font-mono text-[11px] font-normal text-ink-3">{m.id}</span></span>}
+              <Card key={m.id} title={<Link to={`/models/${getPageScope() ? `${getPageScope()}/` : ""}${m.id}`} className="flex items-center gap-2 hover:text-accent" title="Statistics and resources">{m.display_name}<span className="font-mono text-[11px] font-normal text-ink-3">{m.id}</span></Link>}
                 subtitle={`${m.backend} · ${m.kind}${m.size_bytes ? ` · ${fmtBytes(m.size_bytes)}` : ""}${local ? ` · ~${m.estimateGb} GB loaded · ctx ${fmtCompact(m.ctx)}` : m.base_url ? ` · ${m.base_url}` : ""}`}
                 actions={<StatusDot tone={st.tone} label={busy[m.id] ?? st.label} pulse={st.pulse || !!busy[m.id]} />}>
                 <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[12px] sm:grid-cols-4">

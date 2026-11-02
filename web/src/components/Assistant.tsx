@@ -256,7 +256,7 @@ function Thinking({ text, open: initial }: { text: string; open?: boolean }) {
 const pretty = (s: string) => { try { return JSON.stringify(JSON.parse(s), null, 2); } catch { return s; } };
 
 /** Enough Markdown for an assistant's answers: headings, lists, code, tables, bold, inline code and links. */
-function Markdown({ text }: { text: string }) {
+export function Markdown({ text }: { text: string }) {
   const out: ReactNode[] = [];
   const lines = text.split("\n");
   for (let i = 0; i < lines.length; i++) {

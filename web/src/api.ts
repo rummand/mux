@@ -15,6 +15,7 @@ export const setUnauthorizedHandler = (fn: () => void) => { onUnauthorized = fn;
  */
 let pageScope: string | null = null;
 export const setPageScope = (s: string | null) => { pageScope = s; };
+export const getPageScope = () => pageScope;
 
 export async function api<T = unknown>(path: string, opts: { method?: string; body?: unknown; query?: Record<string, string | number | boolean | undefined | null>; scope?: string | null } = {}): Promise<T> {
   const scope = opts.scope === undefined ? pageScope : opts.scope;
@@ -39,9 +40,9 @@ export interface Summary {
   ttftP50: number | null; ttftP95: number | null; tpsAvg: number | null; tpsP50: number | null;
   overheadP50: number | null; overheadP99: number | null; coldStarts: number; fallbacks: number; streamShare: number; toolShare: number; costUsd?: number;
 }
-export type Group = Summary & { key: string };
-export interface Overview {
-  range: string; bucketMs: number; since: number; totals: Summary; series: Record<string, number | null>[];
+export type Group = Summary & SummaryExtra & { key: string };
+export interface Overview extends OverviewExtra {
+  range: string; bucketMs: number; since: number; totals: Summary & SummaryExtra; series: Record<string, number | null>[];
   latencyHistogram: { bucket: string; count: number }[]; tenants: string[]; models: string[];
   byTenant: Group[]; byProvider?: Group[]; byModel: Group[]; byRoute: Group[]; byEndpoint: Group[]; byAgent: Group[]; byUser: Group[]; byError: Group[];
 }
@@ -91,7 +92,7 @@ export interface SystemInfo {
   series: { ts: number; mem_total_gb: number; mem_used_gb: number; mem_free_gb: number; swap_gb: number; pressure: number; mux_gb: number; loaded: string; cpu: number; disk_free_gb: number }[];
   version: string; uptimeS: number; role?: "all" | "gateway" | "node"; name?: string;
 }
-export interface Settings { memoryBudgetGb: number; memoryHeadroomGb: number; diskReserveGb: number; keepAliveMin: number; maxLoaded: number; retentionDays: number; pressureGuard: boolean; logBodies: boolean; assistantModel?: string }
+export interface Settings { memoryBudgetGb: number; memoryHeadroomGb: number; diskReserveGb: number; keepAliveMin: number; maxLoaded: number; retentionDays: number; pressureGuard: boolean; logBodies: boolean; assistantModel?: string; selfHeal?: boolean; selfHealAi?: boolean }
 export interface MuxEvent { id: number; ts: number; level: "info" | "warn" | "error"; source: string; message: string; data: string | null }
 export interface Finding { title: string; kind: "needs-attention" | "pattern"; priority: "high" | "medium" | "low"; description: string; suggestion: string; evidence: { request_id: string; quote: string }[]; source: "rules" | "model" }
 export interface LensRun { id: string; ts: number; status: string; title: string; filters: Record<string, unknown>; criteria: string; model_id: string | null; coverage: { eligible: number; screened: number; errors: number } | null; findings: Finding[]; duration_ms: number | null; error: string | null }
@@ -108,3 +109,32 @@ export interface Provider {
   models: string[]; usage24h: { n: number; errors: number; tokens: number; usd: number } | null;
 }
 export type Presets = Record<string, { name: string; base_url: string; keyUrl: string }>;
+
+/* ── Richer stats (overview extras and /stats/<kind>/<id>) ─────────────────────────────────────────────────── */
+export interface SummaryExtra { queueP50?: number | null; queueP95?: number | null; cacheHitRate?: number; tokensPerRequest?: number; rateLimited?: number; peakConcurrency?: number }
+export interface OverviewExtra { heatmap?: number[][]; tokenHistogram?: { bucket: string; count: number }[]; byKey?: Group[]; byFinish?: Group[]; byStatus?: Group[] }
+export type Point = Record<string, number | null>;
+export interface MuxEventLite { ts: number; level: "info" | "warn" | "error"; message: string }
+export interface ModelStats {
+  id: string; range: string; bucketMs: number; provider: string | null; backend: string; series: Point[];
+  loadedShare: number | null; sampled: boolean; loadedHours: number | null; gbHours: number | null; tokensPerLoadedHour: number | null;
+  peakInflight: number | null; peakDeferred: number | null; loads: number; unloads: number; failures: number; loadSecondsP50: number | null; loadSecondsMax: number | null;
+  usage: { requests: number; tokens: number; promptTokens: number; completionTokens: number; errors: number; coldStarts: number; costUsd: number | null; tenants: number };
+  health: { fails: number[]; cooldown: boolean; ttftMs: number | null; tps: number | null; ok: number; err: number } | null;
+  events: MuxEventLite[]; benchmarks: { ts: number; score: number | null; tps: number | null; prompt_tps: number | null; ttft_ms: number | null; load_ms: number | null; status: string }[];
+}
+export interface Incident { id: string; ts: number; kind: string; severity: string; status: string; title: string; resolved_at: number | null }
+export interface ProviderStats {
+  id: string; kind: string; range: string; bucketMs: number; sampled: boolean; series: Point[]; uptime: number | null; latencyP50: number | null; latencyP95: number | null;
+  outages: { from: number; to: number | null }[]; models: number;
+  byModel: { model_id: string; n: number; pin: number | null; pout: number | null; errors: number | null; usd: number | null; tps: number | null; lat: number | null }[];
+  daily: { day: number; n: number; usd: number | null; tokens: number | null }[]; incidents: Incident[];
+}
+export interface TenantStats {
+  id: string; range: string;
+  limits: { rpmPeak: number; rpmLimit: number; tpmPeak: number; tpmLimit: number; activeMinutes: number; maxParallel: number };
+  month: { tokens: number; usd: number | null; requests: number; tokenBudget: number; usdBudget: number; projectedTokens: number; projectedUsd: number | null; daysInMonth: number; dayOfMonth: number };
+  daily: { day: number; n: number; tokens: number | null; usd: number | null; errors: number | null }[];
+  rateLimited: { type: string; n: number }[];
+  keys: { id: string; name: string; prefix: string; revoked: boolean; expires_at: number | null; rpm_limit: number; usage: { n: number; tokens: number; errors: number; last: number } | null }[];
+}

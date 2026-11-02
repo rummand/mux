@@ -122,6 +122,23 @@ CREATE TABLE IF NOT EXISTS system_samples (
   mem_total_gb REAL, mem_used_gb REAL, mem_free_gb REAL, swap_gb REAL, pressure INTEGER,
   mux_gb REAL, loaded TEXT, cpu REAL, disk_free_gb REAL
 );
+-- Every 30 s, per model with an instance (here, or on a node as the gateway last saw it).
+CREATE TABLE IF NOT EXISTS model_samples (
+  ts INTEGER NOT NULL, model_id TEXT NOT NULL, state TEXT, estimate_gb REAL, rss_gb REAL, inflight INTEGER,
+  processing INTEGER, deferred INTEGER, prompt_tps REAL, gen_tps REAL, PRIMARY KEY (model_id, ts)
+);
+-- Every sync, per mux node: reachable or not, how fast, and its memory.
+CREATE TABLE IF NOT EXISTS provider_samples (
+  ts INTEGER NOT NULL, provider_id TEXT NOT NULL, status TEXT, latency_ms INTEGER, mem_total_gb REAL, mem_free_gb REAL,
+  swap_gb REAL, pressure INTEGER, used_gb REAL, budget_gb REAL, loaded INTEGER, PRIMARY KEY (provider_id, ts)
+);
+-- What the healer saw and did: one row per problem, open until it is fixed.
+CREATE TABLE IF NOT EXISTS incidents (
+  id TEXT PRIMARY KEY, ts INTEGER NOT NULL, updated_at INTEGER NOT NULL, kind TEXT NOT NULL, subject TEXT NOT NULL,
+  severity TEXT NOT NULL, status TEXT NOT NULL, title TEXT NOT NULL, detail TEXT, actions TEXT NOT NULL DEFAULT '[]',
+  attempts INTEGER NOT NULL DEFAULT 0, diagnosis TEXT, resolved_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS incidents_open ON incidents(status, kind, subject);
 `);
 
 /** Columns added after a table first shipped: created on databases that predate them. */

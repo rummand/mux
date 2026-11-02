@@ -17,6 +17,9 @@ import BenchmarksPage from "./pages/Benchmarks";
 import SystemPage from "./pages/System";
 import PlaygroundPage from "./pages/Playground";
 import ProvidersPage from "./pages/Providers";
+import HealthPage from "./pages/Health";
+import ModelDetailPage from "./pages/ModelDetail";
+import ProviderDetailPage from "./pages/ProviderDetail";
 import { Scoped } from "./components/Scope";
 import { AssistantPanel, sparkle } from "./components/Assistant";
 
@@ -26,6 +29,7 @@ const NAV: { to: string; label: string; icon: ReactNode; group?: string }[] = [
   { to: "/tenants", label: "Tenants", icon: icon("M4 20v-1a5 5 0 0 1 5-5h0a5 5 0 0 1 5 5v1M9 10a3 3 0 1 0 0-6 3 3 0 0 0 0 6M17 11a2.5 2.5 0 1 0 0-5M20 20v-1a4 4 0 0 0-3-3.9") },
   { to: "/requests", label: "Requests", icon: icon("M4 6h16M4 12h16M4 18h10") },
   { to: "/traces", label: "Traces", icon: icon("M4 5h6v4H4zM14 15h6v4h-6zM7 9v4a2 2 0 0 0 2 2h5") },
+  { to: "/health", label: "Health", icon: icon("M3 12h4l3-8 4 16 3-8h4") },
   { to: "/lens", label: "Lens", icon: icon("M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM21 21l-5-5") },
   { to: "/providers", label: "Providers", group: "Compute", icon: icon("M4 6h16v5H4zM4 13h16v5H4zM8 8.5h.01M8 15.5h.01") },
   { to: "/models", label: "Models", icon: icon("M12 3l8 4.5v9L12 21l-8-4.5v-9zM12 12l8-4.5M12 12v9M12 12L4 7.5") },
@@ -135,10 +139,13 @@ function Shell() {
             <Route path="/requests" element={<RequestsPage />} />
             <Route path="/traces" element={<TracesPage />} />
             <Route path="/lens" element={<LensPage />} />
+            <Route path="/health" element={<Scoped page={HealthPage} />} />
             <Route path="/models" element={<Scoped page={ModelsPage} />} />
+            <Route path="/models/*" element={<ModelDetailPage />} />
             <Route path="/advisor" element={<Scoped page={AdvisorPage} />} />
             <Route path="/routes" element={<RoutesPage />} />
             <Route path="/providers" element={<ProvidersPage />} />
+            <Route path="/providers/*" element={<ProviderDetailPage />} />
             <Route path="/benchmarks" element={<Scoped page={BenchmarksPage} />} />
             <Route path="/playground" element={<PlaygroundPage />} />
             <Route path="/system" element={<Scoped page={SystemPage} />} />

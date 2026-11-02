@@ -88,7 +88,7 @@ const TOOLS = [
   },
 ];
 
-const API_REFERENCE = `Admin API (paths under /api/admin). Tenants, routes and providers are created and updated with the same PUT to their id (there is no POST /tenants, /routes or /providers):
+export const API_REFERENCE = `Admin API (paths under /api/admin). Tenants, routes and providers are created and updated with the same PUT to their id (there is no POST /tenants, /routes or /providers):
 - GET /overview?range=15m|1h|6h|24h|7d|30d&tenant=&model=&agent= — totals, latency/ttft/tps percentiles, cost, breakdowns by tenant/provider/model/route/endpoint/agent/user/error
 - GET /system?range= — memory, swap, pressure, disk, loaded instances, model health and cooldowns, failures, in-flight, memory budget, role and name
 - GET /events?limit=&level=info|warn|error — mux's event log (loads, unloads, failures, settings, providers)
@@ -121,7 +121,7 @@ ${snapshot}`;
 }
 
 /** A short picture of mux now, so the first answer starts from facts. */
-async function snapshot(): Promise<string> {
+export async function snapshot(): Promise<string> {
   const inst = await status().catch(() => []);
   const providers = listProviders().map((p) => `${p.id} (${p.kind}, ${p.enabled ? p.status : "disabled"}${p.error ? `: ${p.error.slice(0, 120)}` : ""})`);
   const models = listModels();
@@ -138,10 +138,10 @@ async function snapshot(): Promise<string> {
   ].join("\n");
 }
 
-const isChange = (name: string, args: Record<string, unknown>) =>
+export const isChange = (name: string, args: Record<string, unknown>) =>
   name === "mux_api" && String(args.method ?? "GET").toUpperCase() !== "GET" && !/\/routes\/explain$/.test(String(args.path ?? ""));
 
-const parse = (s: string): Record<string, unknown> => { try { const v = JSON.parse(s || "{}"); return v && typeof v === "object" ? v : {}; } catch { return {}; } };
+export const parse = (s: string): Record<string, unknown> => { try { const v = JSON.parse(s || "{}"); return v && typeof v === "object" ? v : {}; } catch { return {}; } };
 
 /** Long arrays and texts are cut so one answer cannot fill the model's context. */
 function compact(v: unknown, key = ""): unknown {
@@ -183,7 +183,7 @@ function assistantKey(): string {
 
 const gateway = `http://127.0.0.1:${config.port}`;
 
-async function runTool(app: FastifyInstance, call: Call, emit: (type: string, data: unknown) => void): Promise<string> {
+export async function runTool(app: FastifyInstance, call: Call, emit: (type: string, data: unknown) => void): Promise<string> {
   const a = parse(call.function.arguments);
   try {
     switch (call.function.name) {
@@ -243,11 +243,11 @@ function repair(msgs: Msg[]): Msg[] {
 interface Step { content: string; reasoning: string; calls: Call[]; model: string | null; route: string | null; requestId: string | null }
 
 /** One model turn through the gateway, streamed: text and thinking go to the dashboard as they come. */
-async function step(msgs: Msg[], sys: string, model: string, convo: string, signal: AbortSignal, emit: (type: string, data: unknown) => void): Promise<Step> {
+async function step(msgs: Msg[], sys: string, model: string, convo: string, signal: AbortSignal, emit: (type: string, data: unknown) => void, agent = "assistant"): Promise<Step> {
   const wire = [{ role: "system", content: sys }, ...msgs.map(({ role, content, tool_calls, tool_call_id }) => ({ role, content: content ?? (tool_calls ? null : ""), ...(tool_calls ? { tool_calls } : {}), ...(tool_call_id ? { tool_call_id } : {}) }))];
   const res = await fetch(`${gateway}/v1/chat/completions`, {
     method: "POST", signal,
-    headers: { "content-type": "application/json", authorization: `Bearer ${assistantKey()}`, "x-mux-agent": "assistant", "x-mux-trace-id": convo },
+    headers: { "content-type": "application/json", authorization: `Bearer ${assistantKey()}`, "x-mux-agent": agent, "x-mux-trace-id": convo },
     body: JSON.stringify({ model, stream: true, messages: wire, tools: TOOLS, tool_choice: "auto", max_tokens: 4096, temperature: 0.3 }),
   });
   const out: Step = { content: "", reasoning: "", calls: [], model: res.headers.get("x-mux-model"), route: res.headers.get("x-mux-route"), requestId: res.headers.get("x-mux-request-id") };
@@ -289,6 +289,33 @@ async function step(msgs: Msg[], sys: string, model: string, convo: string, sign
 }
 
 /** `api` is the admin scope (its token check guards this route); `app` is the server, which the tools call into. */
+export type Decision = "run" | "pause" | { skip: string };
+
+/**
+ * The agent loop: the model thinks, calls tools, reads their results and goes on, until it answers, a call must wait
+ * for the user ("pause"), or MAX_STEPS. `decide` says, per call, whether it runs now. Returns the transcript.
+ */
+export async function converse(app: FastifyInstance, o: { msgs: Msg[]; sys: string; model: string; convo: string; signal: AbortSignal; emit: (type: string, data: unknown) => void; decide: (c: Call) => Decision; agent?: string }): Promise<Msg[]> {
+  const msgs = [...o.msgs];
+  for (let n = 0; n < MAX_STEPS; n++) {
+    const s = await step(msgs, o.sys, o.model, o.convo, o.signal, o.emit, o.agent);
+    msgs.push({ role: "assistant", content: s.content || null, ...(s.calls.length ? { tool_calls: s.calls } : {}), ...(s.reasoning ? { reasoning_content: s.reasoning } : {}), ...(s.model ? { model: s.model } : {}) });
+    if (!s.calls.length) break;
+    const pending: Call[] = [];
+    for (const c of s.calls) {
+      const d = o.decide(c);
+      o.emit("call", { id: c.id, name: c.function.name, args: parse(c.function.arguments), change: d === "pause" });
+      if (d === "pause") { pending.push(c); continue; }
+      const content = d === "run" ? await runTool(app, c, o.emit) : JSON.stringify({ error: d.skip });
+      o.emit("result", { id: c.id, content });
+      msgs.push({ role: "tool", tool_call_id: c.id, content });
+    }
+    if (pending.length) { o.emit("pending", { ids: pending.map((c) => c.id) }); break; }
+    if (n === MAX_STEPS - 1) o.emit("delta", { text: "\n\n_(stopped after many steps; say \"go on\" to continue)_" });
+  }
+  return msgs;
+}
+
 export function registerAssistant(api: FastifyInstance, app: FastifyInstance) {
   api.post("/assistant", async (req: FastifyRequest, reply: FastifyReply) => {
     const b = (req.body ?? {}) as { messages?: Msg[]; approvals?: Record<string, boolean>; page?: string; model?: string; conversation?: string };
@@ -318,23 +345,7 @@ export function registerAssistant(api: FastifyInstance, app: FastifyInstance) {
       }
       msgs = repair(msgs);
       const sys = systemPrompt(await snapshot(), b.page);
-
-      for (let n = 0; n < MAX_STEPS; n++) {
-        const s = await step(msgs, sys, model, convo, ac.signal, emit);
-        msgs.push({ role: "assistant", content: s.content || null, ...(s.calls.length ? { tool_calls: s.calls } : {}), ...(s.reasoning ? { reasoning_content: s.reasoning } : {}), ...(s.model ? { model: s.model } : {}) });
-        if (!s.calls.length) break;
-        const pending: Call[] = [];
-        for (const c of s.calls) {
-          const change = isChange(c.function.name, parse(c.function.arguments));
-          emit("call", { id: c.id, name: c.function.name, args: parse(c.function.arguments), change });
-          if (change) { pending.push(c); continue; }
-          const content = await runTool(app, c, emit);
-          emit("result", { id: c.id, content });
-          msgs.push({ role: "tool", tool_call_id: c.id, content });
-        }
-        if (pending.length) { emit("pending", { ids: pending.map((c) => c.id) }); break; }
-        if (n === MAX_STEPS - 1) emit("delta", { text: "\n\n_(stopped after many steps; say \"go on\" to continue)_" });
-      }
+      msgs = await converse(app, { msgs, sys, model, convo, signal: ac.signal, emit, decide: (c) => (isChange(c.function.name, parse(c.function.arguments)) ? "pause" : "run") });
     } catch (e) {
       if (!ac.signal.aborted) emit("error", { message: (e as Error).message });
     } finally {

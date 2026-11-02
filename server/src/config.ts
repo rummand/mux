@@ -44,6 +44,10 @@ export const defaultSettings = {
   logBodies: false,
   /** The route or model the dashboard's assistant thinks with. */
   assistantModel: "auto",
+  /** The healer repairs what it finds: restarts, reloads, unloads, prunes, re-joins. */
+  selfHeal: true,
+  /** What the healer cannot fix goes to the doctor (the assistant, headless), who may make safe changes itself. */
+  selfHealAi: true,
 };
 export type Settings = typeof defaultSettings;
 

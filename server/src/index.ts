@@ -7,6 +7,8 @@ import { db, event, now, settings } from "./db.js";
 import { getModel, getRoute, listModels, listRoutes, upsertModel, upsertRoute, type Kind } from "./models.js";
 import { registerGateway } from "./api/gateway.js";
 import { registerAdmin } from "./admin/routes.js";
+import { pruneSamples, sampleModels } from "./admin/resources.js";
+import { startHealer } from "./healer.js";
 import { adoptDownloaded } from "./hf.js";
 import { startCompat } from "./compat.js";
 import { startProviderSync } from "./providers.js";
@@ -47,12 +49,13 @@ function samplers() {
     const [s, inst] = await Promise.all([systemStats(), status()]);
     put.run(now(), s.memTotalGb, s.memUsedGb, s.memFreeGb, s.swapGb, s.pressure, inst.reduce((a, i) => a + (i.rssGb ?? i.estimateGb), 0), JSON.stringify(inst.map((i) => i.id)), s.load1, s.diskFreeGb);
   };
-  setInterval(() => void sample().catch(() => undefined), 30_000).unref();
+  setInterval(() => { void sample().catch(() => undefined); void sampleModels().catch(() => undefined); }, 30_000).unref();
   void sample().catch(() => undefined);
   const retain = () => {
     const days = settings().retentionDays;
     const r = db.prepare("DELETE FROM requests WHERE ts < ?").run(now() - days * 86400_000);
     db.prepare("DELETE FROM system_samples WHERE ts < ?").run(now() - 14 * 86400_000);
+    pruneSamples();
     db.prepare("DELETE FROM events WHERE ts < ?").run(now() - 30 * 86400_000);
     if (r.changes) event("info", "retention", `removed ${r.changes} requests older than ${days} days`);
   };
@@ -82,6 +85,7 @@ if (config.role !== "gateway") { adoptDownloaded(); startRuntime(); }
 startProviderSync();
 samplers();
 await app.listen({ port: config.port, host: config.host });
+startHealer(app);
 if (config.role !== "gateway") startCompat();
 event("info", "mux", `${config.role} \"${config.name}\" listening on ${config.host}:${config.port}; models in ${config.modelsDir}; dashboard ${existsSync(config.webDir) ? "served" : "not built"}`);
 

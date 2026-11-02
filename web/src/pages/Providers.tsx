@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { api, type Presets, type Provider } from "../api";
 import { Badge, Button, Card, Empty, ErrorNote, Field, Input, Meter, Modal, PageHeader, Select, StatusDot, Table, Td, Th, Toggle } from "../components/ui";
 import { fmtAgo, fmtCompact, fmtGb, fmtInt } from "../format";
@@ -33,7 +34,7 @@ export default function ProvidersPage() {
             <tbody>
               {clouds.map((p) => (
                 <tr key={p.id} className="hover:bg-s2">
-                  <Td><div className="font-medium">{p.name}</div><div className="font-mono text-[11px] text-ink-3">{p.id} · {p.kind}</div></Td>
+                  <Td><Link to={`/providers/${p.id}`} className="font-medium hover:text-accent">{p.name}</Link><div className="font-mono text-[11px] text-ink-3">{p.id} · {p.kind}</div></Td>
                   <Td mono className="max-w-72 truncate text-ink-2">{p.base_url}</Td>
                   <Td right>{p.models.length}</Td>
                   <Td right>{fmtInt(p.usage24h?.n ?? 0)}</Td>
@@ -62,7 +63,7 @@ function NodeCard({ p, onChange }: { p: Provider; onChange: () => void }) {
   const loaded = (p.info?.instances ?? []).filter((i) => i.state === "ready");
   const tone = p.status === "online" ? "good" : p.status === "unknown" ? "muted" : "bad";
   return (
-    <Card title={<span className="flex items-center gap-2">{p.name}<span className="font-mono text-[11px] font-normal text-ink-3">{p.id}</span></span>}
+    <Card title={<Link to={`/providers/${p.id}`} className="flex items-center gap-2 hover:text-accent" title="Statistics and resources">{p.name}<span className="font-mono text-[11px] font-normal text-ink-3">{p.id}</span></Link>}
       subtitle={p.base_url}
       actions={<><StatusDot tone={tone} label={p.status} pulse={p.status === "online"} />
         <Button size="sm" onClick={async () => { await api(`/providers/${p.id}/sync`, { method: "POST", scope: null }); onChange(); }}>Sync</Button></>}>

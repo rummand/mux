@@ -165,3 +165,26 @@ export function Sparkline({ values, height = 28, color = "var(--accent)" }: { va
     </ResponsiveContainer>
   );
 }
+
+const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+/** When traffic comes: weekday rows × hour columns, one hue whose strength is the count. */
+export function Heatmap({ data, label = "requests" }: { data: number[][]; label?: string }) {
+  const max = Math.max(1, ...data.flat());
+  return (
+    <div className="overflow-x-auto">
+      <div className="grid min-w-[520px] gap-[3px]" style={{ gridTemplateColumns: "32px repeat(24, minmax(0, 1fr))" }}>
+        <div />
+        {Array.from({ length: 24 }, (_, h) => <div key={h} className="text-center text-[10px] text-ink-3 num">{h % 3 === 0 ? h : ""}</div>)}
+        {data.map((row, d) => [
+          <div key={`d${d}`} className="pr-1 text-right text-[10.5px] leading-[18px] text-ink-3">{DAYS[d]}</div>,
+          ...row.map((v, h) => (
+            <div key={`${d}-${h}`} title={`${DAYS[d]} ${String(h).padStart(2, "0")}:00 · ${v.toLocaleString("en-US")} ${label}`}
+              className="h-[18px] rounded-[3px]"
+              style={{ background: v ? "var(--accent)" : "var(--surface-3)", opacity: v ? 0.18 + 0.82 * (v / max) : 0.5 }} />
+          )),
+        ])}
+      </div>
+    </div>
+  );
+}

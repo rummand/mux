@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, type ApiKey, type Model, type RequestRow, type Route, type Tenant } from "../api";
 import { OverviewPanel, RANGE_OPTIONS } from "../components/OverviewPanel";
+import { TenantLimits } from "../components/TenantLimits";
 import { RequestDrawer } from "../components/RequestDrawer";
 import { RequestTable } from "../components/RequestTable";
 import { Badge, Button, Card, CopyButton, Empty, ErrorNote, Field, Input, Meter, Modal, PageHeader, Segmented, Select, Table, Tabs, Td, Th, Toggle } from "../components/ui";
@@ -30,6 +31,7 @@ export default function TenantDetailPage() {
       ]} />
       {tab === "usage" && <>
         <div className="mb-4"><Segmented value={range} onChange={setRange} options={RANGE_OPTIONS} /></div>
+        <div className="mb-4"><TenantLimits tenant={data.id} range={range} /></div>
         <OverviewPanel range={range} tenant={data.id} showTenants={false} />
       </>}
       {tab === "settings" && <Settings tenant={data} onSaved={reload} />}

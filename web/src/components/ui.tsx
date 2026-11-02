@@ -108,7 +108,7 @@ export function Toggle({ checked, onChange, label }: { checked: boolean; onChang
 
 export function Segmented<T extends string>({ value, options, onChange }: { value: T; options: { value: T; label: ReactNode }[]; onChange: (v: T) => void }) {
   return (
-    <div className="inline-flex rounded-md border border-line-strong bg-s2 p-0.5">
+    <div className="inline-flex flex-wrap rounded-md border border-line-strong bg-s2 p-0.5">
       {options.map((o) => (
         <button key={o.value} type="button" onClick={() => onChange(o.value)} className={cx("h-6 rounded px-2.5 text-[12px] font-medium", value === o.value ? "bg-s3 text-ink shadow-sm" : "text-ink-3 hover:text-ink")}>{o.label}</button>
       ))}

@@ -1,4 +1,5 @@
 import { db, event, json, now } from "./db.js";
+import { sampleProvider } from "./admin/resources.js";
 import { deleteModel, getModel, listModels, listRoutes, upsertModel, upsertRoute, type Caps, type Kind } from "./models.js";
 
 /**
@@ -97,6 +98,7 @@ export async function syncNode(p: Provider) {
     const info: NodeInfo = { system: sys.system, instances: sys.instances, budget: sys.budget, models: models.length, latencyMs: Date.now() - t0, version: sys.version };
     const wasDown = p.status !== "online";
     saveProvider({ ...p, status: "online", last_seen: now(), error: null, info });
+    sampleProvider(p.id, true, info);
     if (wasDown) event("info", "providers", `${p.name} is online (${info.latencyMs} ms, ${models.length} models)`);
     const seen = new Set<string>();
     for (const nm of models.filter((m) => m.enabled)) {
@@ -114,6 +116,7 @@ export async function syncNode(p: Provider) {
     const msg = (e as Error).message;
     if (p.status === "online") event("warn", "providers", `${p.name} is unreachable: ${msg}`);
     saveProvider({ ...p, status: "offline", error: msg });
+    sampleProvider(p.id, false, null);
   }
 }
 

@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createWriteStream, existsSync, mkdirSync, readFileSync, statSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
+import { EventEmitter } from "node:events";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { config } from "../config.js";
@@ -29,6 +30,8 @@ export class ModelUnavailable extends Error {
 
 const instances = new Map<string, Instance>();
 const lastFailure = new Map<string, { at: number; error: string }>();
+/** What the healer listens to: "crash" (a ready model's server died) and "loadFailed". */
+export const runtimeBus = new EventEmitter();
 
 /** What a model will take in memory: its weights, plus a KV cache estimate for its context. */
 export function estimateGb(m: Model): number {
@@ -163,6 +166,7 @@ async function load(m: Model): Promise<Instance> {
     if (inst.state === "ready") {
       lastFailure.set(m.id, { at: Date.now(), error: `exited (${code ?? signal})` });
       event("error", "runtime", `${m.id} exited unexpectedly (${code ?? signal})`, { tail: logTail(m.id) });
+      runtimeBus.emit("crash", { id: m.id, code: code ?? signal, tail: logTail(m.id, 30) });
     }
   });
   inst.ready = waitHealthy(inst, m, m.backend === "laya" ? 15 * 60_000 : 10 * 60_000).then(
@@ -176,6 +180,7 @@ async function load(m: Model): Promise<Instance> {
       lastFailure.set(m.id, { at: Date.now(), error: e.message });
       event("error", "runtime", `${m.id} failed to load: ${e.message}`);
       instances.delete(m.id);
+      runtimeBus.emit("loadFailed", { id: m.id, error: e.message, tail: logTail(m.id, 30) });
       proc.kill("SIGKILL");
       throw new ModelUnavailable(`${m.id} failed to load: ${e.message.split("\n")[0]}`, 503, "load_failed");
     },
@@ -273,6 +278,12 @@ export async function status(): Promise<InstanceStatus[]> {
 }
 
 export const failures = () => Object.fromEntries(lastFailure);
+/** Let the next load try at once (the healer decides when to retry, not the 30 s guard). */
+export const clearFailure = (id: string) => lastFailure.delete(id);
+/** What the healer probes: each instance's port, process and in-flight count. */
+export const probeTargets = () => [...instances.values()].map((i) => ({ id: i.id, backend: i.backend, port: i.port, pid: i.pid, state: i.state, inflight: i.inflight, readyAt: i.readyAt, healthPath: healthPath(getModel(i.id) ?? ({ backend: i.backend } as Model)) }));
+export const trackedPids = () => new Set([...instances.values()].map((i) => i.pid));
+export { logTail, isLocal };
 
 /** Unload what has been idle past its keep-alive, and, under memory pressure, the idle ones LRU first. */
 async function sweep() {
