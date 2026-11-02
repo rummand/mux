@@ -111,7 +111,9 @@ export interface SystemLive {
   ts: number; cores: { id: number; kind: "P" | "E" | null; cluster: number; pct: number }[]; cpu: number;
   gpu: { pct: number; renderer: number; tiler: number; memGb: number } | null;
   memory: { wired: number; apps: number; compressed: number; cached: number; free: number } | null;
-  net: { in: number; out: number }; disk: { read: number; write: number }; thermal: string | null; load: number[]; uptimeS: number; pid: number;
+  net: { in: number; out: number }; disk: { read: number; write: number }; thermal: string | null; load: number[];
+  /** In a Linux container: its own CPU (share of its limit) and memory; the cores are the host's. */
+  container: { cpuLimit: number | null; cpuPct: number; memLimitGb: number | null; memGb: number } | null; uptimeS: number; pid: number;
   processes: { pid: number; name: string; cpu: number; rssGb: number }[];
   history: { ts: number; cores: number[]; cpu: number; gpu: number | null; netIn: number; netOut: number; diskR: number; diskW: number }[];
 }

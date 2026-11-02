@@ -107,7 +107,8 @@ export function SystemLivePanel({ models, machine }: { models: Record<number, st
   return (
     <>
       <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
-        <Tile label="CPU · all cores" value={`${l.cpu.toFixed(0)}%`} sub={perf.length ? `P ${avg(perf).toFixed(0)}% · E ${avg(eff).toFixed(0)}%` : `${l.cores.length} cores`}><Spark values={h.map((p) => p.cpu)} /></Tile>
+        {l.container ? <Tile label="CPU · this container" value={`${l.container.cpuPct.toFixed(1)}%`} sub={`of its ${l.container.cpuLimit ?? l.cores.length} CPUs · the server ${l.cpu.toFixed(0)}%`}><Spark values={h.map((p) => p.cpu)} /></Tile> :
+        <Tile label="CPU · all cores" value={`${l.cpu.toFixed(0)}%`} sub={perf.length ? `P ${avg(perf).toFixed(0)}% · E ${avg(eff).toFixed(0)}%` : `${l.cores.length} cores`}><Spark values={h.map((p) => p.cpu)} /></Tile>}
         <Tile label="GPU" value={l.gpu ? `${l.gpu.pct}%` : "—"} sub={l.gpu ? `renderer ${l.gpu.renderer}% · tiler ${l.gpu.tiler}%` : "no GPU on this machine"}><Spark values={h.map((p) => p.gpu ?? 0)} color="var(--series-3)" /></Tile>
         <Tile label="GPU memory" value={l.gpu ? fmtGb(l.gpu.memGb) : "—"} sub={l.gpu ? "in use by Metal — model weights and caches" : "no GPU on this machine"} />
         <Tile label="Network" value={<span>↓ {rate(l.net.in)}</span>} sub={`↑ ${rate(l.net.out)}`}><Spark values={h.map((p) => p.netIn + p.netOut)} max={1} color="var(--series-4)" /></Tile>
@@ -115,7 +116,7 @@ export function SystemLivePanel({ models, machine }: { models: Record<number, st
         <Tile label="Load · thermal" value={l.load.map((x) => x.toFixed(1)).join(" · ")} sub={`1 · 5 · 15 min · ${l.thermal ?? "—"} · machine up ${fmtDuration(l.uptimeS)}`} />
       </div>
 
-      <Card className="mb-4" title="Cores" subtitle={`${l.cores.length} cores${perf.length ? ` · ${perf.length} performance · ${eff.length} efficiency` : ""} · busiest core ${busiest?.id} at ${busiest?.pct.toFixed(0)}% · every 2 s, last 5 minutes`}
+      <Card className="mb-4" title={l.container ? "Cores · the shared server's" : "Cores"} subtitle={`${l.container ? "the whole server, not only mux — " : ""}${l.cores.length} cores${perf.length ? ` · ${perf.length} performance · ${eff.length} efficiency` : ""} · busiest core ${busiest?.id} at ${busiest?.pct.toFixed(0)}% · every 2 s, last 5 minutes`}
         actions={perf.length ? <div className="flex gap-3 text-[11.5px] text-ink-3"><span><i className="mr-1 inline-block h-2 w-2 rounded-full" style={{ background: P }} />performance</span><span><i className="mr-1 inline-block h-2 w-2 rounded-full" style={{ background: E }} />efficiency</span><span><i className="mr-1 inline-block h-2 w-2 rounded-full" style={{ background: HOT }} />≥ 85%</span></div> : undefined}>
         <div className="flex flex-wrap gap-4">
           {clusters.map((cs) => (
@@ -132,14 +133,14 @@ export function SystemLivePanel({ models, machine }: { models: Record<number, st
       </Card>
 
       <div className="mb-4 grid gap-4 lg:grid-cols-[1fr_1fr]">
-        <Card title="Memory, as macOS splits it" subtitle={l.memory ? `${fmtGb(memTotal, 0)} · live` : "not read on this machine"}>
+        <Card title={l.container ? "Memory · this container" : "Memory, as macOS splits it"} subtitle={!l.memory ? "not read on this machine" : l.container ? `${fmtGb(l.container.memGb)} used of its ${l.container.memLimitGb ? fmtGb(l.container.memLimitGb, 0) : "unlimited"} · live` : `${fmtGb(memTotal, 0)} · live`}>
           {l.memory && (
             <>
               <div className="flex h-5 overflow-hidden rounded-md">
                 {MEM.map((m) => <div key={m.key} title={`${m.label}: ${fmtGb(l.memory![m.key])}`} className="h-full transition-[width] duration-700" style={{ width: `${(100 * l.memory![m.key]) / memTotal}%`, background: m.color }} />)}
               </div>
               <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-1.5 text-[12.5px]">
-                {MEM.filter((m) => m.key === "free" || l.memory![m.key] > 0.01).map((m) => (
+                {MEM.filter((m) => m.key === "free" || l.memory![m.key] > 0.01).map((m) => ({ ...m, label: l.container ? ({ wired: "Kernel", apps: "Processes", cached: "Files", free: "Free of its limit" } as Record<string, string>)[m.key] ?? m.label : m.label })).map((m) => (
                   <div key={m.key} className="flex items-baseline gap-2" title={m.hint}>
                     <i className="inline-block h-2.5 w-2.5 shrink-0 rounded-sm" style={{ background: m.color }} />
                     <span className="text-ink-2">{m.label}</span><span className="ml-auto font-medium num">{fmtGb(l.memory![m.key])}</span>

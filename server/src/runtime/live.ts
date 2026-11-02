@@ -33,6 +33,9 @@ let rates = { netIn: 0, netOut: 0, diskR: 0, diskW: 0 };
 let gpu: Gpu | null = null;
 let mem: MemSplit | null = null;
 let thermal: string | null = null;
+/** In a Linux container: its own limits and use (cgroup v2), not the shared host's. */
+let container: { cpuLimit: number | null; cpuPct: number; memLimitGb: number | null; memGb: number } | null = null;
+let prevCpuUsec: { usec: number; ts: number } | null = null;
 let current: number[] = [];
 const history: Point[] = [];
 let lastAsk = 0;
@@ -117,7 +120,23 @@ async function sampleMac() {
 const DISK = /^(sd[a-z]+|vd[a-z]+|xvd[a-z]+|nvme\d+n\d+|mmcblk\d+)$/;
 async function sampleLinux() {
   const [mi, nd, ds] = await Promise.all(["/proc/meminfo", "/proc/net/dev", "/proc/diskstats"].map((f) => readFile(f, "utf8").catch(() => "")));
-  if (mi) {
+  const cg = (f: string) => readFile(`/sys/fs/cgroup/${f}`, "utf8").catch(() => "");
+  const [mMax, mCur, mStat, io, cMax, cStat] = await Promise.all(["memory.max", "memory.current", "memory.stat", "io.stat", "cpu.max", "cpu.stat"].map(cg));
+  if (mCur) {
+    // A container: memory and disk are its own; the cores and meminfo are the whole host's.
+    const st = (k: string) => num(new RegExp(`^${k} (\\d+)`, "m"), mStat) || 0;
+    const limit = /^\d+/.test(mMax.trim()) ? Number(mMax.trim()) / GB : null;
+    const used = Number(mCur.trim()) / GB;
+    const [quota, period] = cMax.trim().split(/\s+/);
+    const usec = num(/^usage_usec (\d+)/m, cStat), ts = Date.now();
+    const cpuLimit = quota && quota !== "max" ? Number(quota) / Number(period) : null;
+    const cores = cpuLimit ?? cpus().length;
+    const pct = prevCpuUsec && Number.isFinite(usec) && ts > prevCpuUsec.ts ? Math.min(100, (100 * (usec - prevCpuUsec.usec)) / ((ts - prevCpuUsec.ts) * 1000 * cores)) : 0;
+    if (Number.isFinite(usec)) prevCpuUsec = { usec, ts };
+    container = { cpuLimit, cpuPct: Math.max(0, pct), memLimitGb: limit, memGb: used };
+    const anon = st("anon") / GB, file = st("file") / GB, kernel = st("kernel") / GB;
+    mem = { wired: kernel, apps: anon, compressed: 0, cached: file, free: limit ? Math.max(0, limit - anon - file - kernel) : 0 };
+  } else if (mi) {
     const k = (name: string) => (num(new RegExp(`^${name}:\\s+(\\d+)`, "m"), mi) || 0) * 1024 / GB;
     const total = k("MemTotal"), free = k("MemFree"), cached = k("Cached") + k("Buffers") + k("SReclaimable");
     mem = { wired: k("Unevictable") + k("Mlocked"), apps: Math.max(0, total - free - cached), compressed: 0, cached, free };
@@ -130,7 +149,8 @@ async function sampleLinux() {
     netIn += f[0] || 0; netOut += f[8] || 0;
   }
   let diskR = 0, diskW = 0;
-  for (const line of ds.split("\n")) {
+  if (io) for (const m of io.matchAll(/rbytes=(\d+) wbytes=(\d+)/g)) { diskR += Number(m[1]); diskW += Number(m[2]); }
+  else for (const line of ds.split("\n")) {
     const f = line.trim().split(/\s+/);
     if (!DISK.test(f[2] ?? "")) continue;
     diskR += Number(f[5]) * 512 || 0; diskW += Number(f[9]) * 512 || 0;
@@ -228,7 +248,7 @@ export async function live(keep: number[] = []) {
   const [l1, l5, l15] = loadavg();
   return {
     ts: Date.now(), cores, cpu: avg(current), gpu, memory: mem, net: { in: rates.netIn, out: rates.netOut }, disk: { read: rates.diskR, write: rates.diskW },
-    thermal, load: [l1, l5, l15], uptimeS: Math.round(uptime()), processes: await topProcesses([process.pid, ...keep]).catch(() => []), pid: process.pid,
+    thermal, container, load: [l1, l5, l15], uptimeS: Math.round(uptime()), processes: await topProcesses([process.pid, ...keep]).catch(() => []), pid: process.pid,
     history,
   };
 }
