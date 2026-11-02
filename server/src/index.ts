@@ -21,6 +21,7 @@ import { adoptDownloaded } from "./hf.js";
 import { startCompat } from "./compat.js";
 import { startProviderSync } from "./providers.js";
 import { freeIdle, startRuntime, status, stopAll } from "./runtime/manager.js";
+import { liveAverages, startLive } from "./runtime/live.js";
 import { systemStats } from "./runtime/system.js";
 
 /** First boot: the routes every SaaS can name, and Laya for System One. Models are added by download or import. */
@@ -52,10 +53,13 @@ function seed() {
 
 /** Every 30 s: a sample of the Mac's memory for the System page; once an hour: retention. */
 function samplers() {
-  const put = db.prepare("INSERT OR REPLACE INTO system_samples(ts, mem_total_gb, mem_used_gb, mem_free_gb, swap_gb, pressure, mux_gb, loaded, cpu, disk_free_gb) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+  const put = db.prepare("INSERT OR REPLACE INTO system_samples(ts, mem_total_gb, mem_used_gb, mem_free_gb, swap_gb, pressure, mux_gb, loaded, cpu, disk_free_gb, cpu_pct, gpu_pct, net_in, net_out, disk_r, disk_w) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+  startLive();
   const sample = async () => {
     const [s, inst] = await Promise.all([systemStats(), status()]);
-    put.run(now(), s.memTotalGb, s.memUsedGb, s.memFreeGb, s.swapGb, s.pressure, inst.reduce((a, i) => a + (i.rssGb ?? i.estimateGb), 0), JSON.stringify(inst.map((i) => i.id)), s.load1, s.diskFreeGb);
+    const l = liveAverages();
+    put.run(now(), s.memTotalGb, s.memUsedGb, s.memFreeGb, s.swapGb, s.pressure, inst.reduce((a, i) => a + (i.rssGb ?? i.estimateGb), 0), JSON.stringify(inst.map((i) => i.id)), s.load1, s.diskFreeGb,
+      l?.cpu ?? null, l?.gpu ?? null, l?.netIn ?? null, l?.netOut ?? null, l?.diskR ?? null, l?.diskW ?? null);
   };
   setInterval(() => { void sample().catch(() => undefined); void sampleModels().catch(() => undefined); }, 30_000).unref();
   void sample().catch(() => undefined);

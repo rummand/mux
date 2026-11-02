@@ -17,6 +17,7 @@ import { decide, features } from "../router/select.js";
 import { inflightNow } from "../router/limits.js";
 import { live } from "../router/metering.js";
 import { estimateGb, failures, isLoaded, status, unload, warm } from "../runtime/manager.js";
+import { live as liveSystem } from "../runtime/live.js";
 import { systemStats } from "../runtime/system.js";
 import { createKey, deleteTenant, getTenant, listKeys, listTenants, revokeKey, upsertTenant } from "../tenants.js";
 import { overview, requestDetail, requestLog, systemSeries, traces } from "./stats.js";
@@ -67,6 +68,7 @@ export function registerAdmin(app: FastifyInstance) {
         presence: config.role === "gateway" ? null : presence(),
       };
     });
+    api.get("/system/live", async () => liveSystem((await status()).map((i) => i.pid)));
     api.get("/events", async (req) => {
       const q = req.query as { limit?: string; level?: string };
       return db.prepare(`SELECT * FROM events ${q.level ? "WHERE level = ?" : ""} ORDER BY ts DESC LIMIT ?`).all(...(q.level ? [q.level] : []), Math.min(Math.max(Math.floor(Number(q.limit)) || 200, 1), 1000));

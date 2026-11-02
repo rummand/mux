@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { api, type MuxEvent, type Settings, type SystemInfo } from "../api";
 import { SERIES, TimeChart } from "../components/charts";
+import { SystemLivePanel } from "../components/SystemLive";
 import { Badge, Button, Card, ErrorNote, Field, Input, Meter, PageHeader, Segmented, StatusDot, Table, Td, Th, Toggle } from "../components/ui";
-import { fmtAgo, fmtDuration, fmtGb, fmtTime } from "../format";
+import { fmtAgo, fmtBytes, fmtDuration, fmtGb, fmtTime } from "../format";
 import { useApi } from "../hooks";
 
 export default function SystemPage() {
@@ -13,7 +14,9 @@ export default function SystemPage() {
   if (error) return <ErrorNote error={error} />;
   if (!data) return null;
   const s = data.system;
-  const series = data.series.map((p) => ({ t: p.ts, used: p.mem_used_gb, free: p.mem_free_gb, swap: p.swap_gb, mux: p.mux_gb, disk: p.disk_free_gb, load: p.cpu }));
+  const series = data.series.map((p) => ({ t: p.ts, used: p.mem_used_gb, free: p.mem_free_gb, swap: p.swap_gb, mux: p.mux_gb, disk: p.disk_free_gb, load: p.cpu, cpuPct: p.cpu_pct, gpuPct: p.gpu_pct, netIn: p.net_in, netOut: p.net_out, diskR: p.disk_r, diskW: p.disk_w }));
+  const models = Object.fromEntries(data.instances.map((i) => [i.pid, i.id]));
+  const rate = (v: number) => `${fmtBytes(v)}/s`;
   const bucket = range === "1h" ? 60_000 : range === "24h" ? 900_000 : 300_000;
   const pressure = s.pressure === 4 ? { tone: "bad" as const, label: "critical" } : s.pressure === 2 ? { tone: "warn" as const, label: "warn" } : { tone: "good" as const, label: "normal" };
   return (
@@ -26,7 +29,29 @@ export default function SystemPage() {
         <Card><div className="text-[11px] uppercase tracking-wide text-ink-3">mux model budget</div><div className="mt-1 text-lg font-semibold num">{data.budget.usedGb.toFixed(1)} / {data.budget.budgetGb} GB</div><Meter value={data.budget.usedGb} max={data.budget.budgetGb} /></Card>
         <Card><div className="text-[11px] uppercase tracking-wide text-ink-3">Disk free · load</div><div className="mt-1 text-lg font-semibold num">{s.diskFreeGb.toFixed(0)} GB</div><div className="text-[11.5px] text-ink-3 num">load avg {s.load1.toFixed(2)}</div></Card>
       </div>
+      <SystemLivePanel models={models} />
       <div className="grid gap-4 lg:grid-cols-2">
+        <Card title="CPU and GPU" subtitle="% busy, averaged over each 30 seconds">
+          <TimeChart data={series} bucketMs={bucket} yFormat={(v) => `${Math.round(v)}`} series={[
+            { key: "cpuPct", label: "CPU", color: SERIES[0], format: (v) => `${v.toFixed(0)}%` },
+            { key: "gpuPct", label: "GPU", color: SERIES[2], format: (v) => `${v.toFixed(0)}%` },
+          ]} />
+        </Card>
+        <Card title="Load average" subtitle="processes running or waiting, over 1 minute">
+          <TimeChart data={series} bucketMs={bucket} kind="area" yFormat={(v) => v.toFixed(0)} series={[{ key: "load", label: "Load", color: SERIES[6], format: (v) => v.toFixed(2) }]} />
+        </Card>
+        <Card title="Network" subtitle="bytes per second, every interface but loopback">
+          <TimeChart data={series} bucketMs={bucket} yFormat={(v) => fmtBytes(v)} series={[
+            { key: "netIn", label: "In", color: SERIES[3], format: rate },
+            { key: "netOut", label: "Out", color: SERIES[1], format: rate },
+          ]} />
+        </Card>
+        <Card title="Disk" subtitle="bytes per second read and written">
+          <TimeChart data={series} bucketMs={bucket} yFormat={(v) => fmtBytes(v)} series={[
+            { key: "diskR", label: "Read", color: SERIES[4], format: rate },
+            { key: "diskW", label: "Write", color: SERIES[0], format: rate },
+          ]} />
+        </Card>
         <Card title="Memory" subtitle="GB: used by the Mac, free for new work, and mux's model servers">
           <TimeChart data={series} bucketMs={bucket} yFormat={(v) => `${Math.round(v)}`} series={[
             { key: "used", label: "Used", color: SERIES[0], format: (v) => fmtGb(v) },

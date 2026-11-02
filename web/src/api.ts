@@ -101,8 +101,17 @@ export interface SystemInfo {
   instances: Instance[]; health: Record<string, { fails: number[]; cooldown: boolean; ttftMs: number | null; tps: number | null; ok: number; err: number }>;
   failures: Record<string, { at: number; error: string }>; inflight: Record<string, number>;
   budget: { budgetGb: number; usedGb: number; headroomGb: number; maxLoaded: number };
-  series: { ts: number; mem_total_gb: number; mem_used_gb: number; mem_free_gb: number; swap_gb: number; pressure: number; mux_gb: number; loaded: string; cpu: number; disk_free_gb: number }[];
+  series: { ts: number; mem_total_gb: number; mem_used_gb: number; mem_free_gb: number; swap_gb: number; pressure: number; mux_gb: number; loaded: string; cpu: number; disk_free_gb: number; cpu_pct: number | null; gpu_pct: number | null; net_in: number | null; net_out: number | null; disk_r: number | null; disk_w: number | null }[];
   version: string; uptimeS: number; role?: "all" | "gateway" | "node"; name?: string;
+}
+/** GET /system/live: the machine every 2 s (server/src/runtime/live.ts). */
+export interface SystemLive {
+  ts: number; cores: { id: number; kind: "P" | "E" | null; cluster: number; pct: number }[]; cpu: number;
+  gpu: { pct: number; renderer: number; tiler: number; memGb: number } | null;
+  memory: { wired: number; apps: number; compressed: number; cached: number; free: number } | null;
+  net: { in: number; out: number }; disk: { read: number; write: number }; thermal: string | null; load: number[]; uptimeS: number; pid: number;
+  processes: { pid: number; name: string; cpu: number; rssGb: number }[];
+  history: { ts: number; cores: number[]; cpu: number; gpu: number | null; netIn: number; netOut: number; diskR: number; diskW: number }[];
 }
 export interface Settings { memoryBudgetGb: number; memoryHeadroomGb: number; diskReserveGb: number; keepAliveMin: number; maxLoaded: number; retentionDays: number; pressureGuard: boolean; logBodies: boolean; assistantModel?: string; selfHeal?: boolean; selfHealAi?: boolean }
 export interface MuxEvent { id: number; ts: number; level: "info" | "warn" | "error"; source: string; message: string; data: string | null }

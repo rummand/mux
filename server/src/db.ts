@@ -172,6 +172,7 @@ addColumns("requests", { provider_id: "TEXT", cost_usd: "REAL DEFAULT 0" });
 addColumns("tenants", { monthly_usd_budget: "REAL DEFAULT 0", data_border: "TEXT DEFAULT 'any'" });
 addColumns("requests", { experiment_id: "TEXT", arm: "TEXT" });
 addColumns("providers", { plan: "TEXT DEFAULT 'paid'", limits: "TEXT DEFAULT '{}'", trains_on_data: "INTEGER" });
+addColumns("system_samples", { cpu_pct: "REAL", gpu_pct: "REAL", net_in: "REAL", net_out: "REAL", disk_r: "REAL", disk_w: "REAL" });
 addColumns("lens_runs", { scope: "TEXT", watch_id: "TEXT", baseline: "TEXT", resolved: "TEXT DEFAULT '[]'", muted: "INTEGER DEFAULT 0" });
 
 export const now = () => Date.now();
