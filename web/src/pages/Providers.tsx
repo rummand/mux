@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { api, type Presets, type Provider } from "../api";
+import { api, type Presets, type Provider, type QuotaRow, type Settings } from "../api";
 import { Badge, Button, Card, Empty, ErrorNote, Field, Input, Meter, Modal, PageHeader, Select, StatusDot, Table, Td, Th, Toggle } from "../components/ui";
 import { fmtAgo, fmtCompact, fmtGb, fmtInt } from "../format";
 import { useApi } from "../hooks";
@@ -34,7 +34,10 @@ export default function ProvidersPage() {
             <tbody>
               {clouds.map((p) => (
                 <tr key={p.id} className="hover:bg-s2">
-                  <Td><Link to={`/providers/${p.id}`} className="font-medium hover:text-accent">{p.name}</Link><div className="font-mono text-[11px] text-ink-3">{p.id} · {p.kind}</div></Td>
+                  <Td><Link to={`/providers/${p.id}`} className="font-medium hover:text-accent">{p.name}</Link>
+                    {p.plan === "free" && <Badge tone="good" className="ml-1.5">free tier</Badge>}
+                    {p.plan === "free" && p.trains_on_data === 1 && <Badge tone="warn" className="ml-1" title="Its free tier may train on the prompts: mux uses it as a rescue only with “free tiers that train” allowed">trains on prompts</Badge>}
+                    <div className="font-mono text-[11px] text-ink-3">{p.id} · {p.kind}</div></Td>
                   <Td mono className="max-w-72 truncate text-ink-2">{p.base_url}</Td>
                   <Td right>{p.models.length}</Td>
                   <Td right>{fmtInt(p.usage24h?.n ?? 0)}</Td>
@@ -51,6 +54,7 @@ export default function ProvidersPage() {
           </Table>
         )}
       </Card>
+      <FreeTiers />
       {adding && <AddProvider kind={adding} onClose={() => setAdding(null)} onDone={() => { setAdding(null); reload(true); }} />}
       {models && <CloudModels p={models} onClose={() => { setModels(null); reload(true); }} />}
     </>
@@ -191,5 +195,28 @@ function PresenceRow({ p, onChange }: { p: Provider; onChange: () => void }) {
         <option value="available">Available</option><option value="away-only">When nobody's there</option><option value="off">Off</option>
       </Select>
     </div>
+  );
+}
+
+/** Free tiers: what each free model has used of its limits, and whether they rescue traffic when ours is down. */
+function FreeTiers() {
+  const { data: rows } = useApi<QuotaRow[]>("/quota", undefined, 15_000, null);
+  const { data: s, reload } = useApi<Settings & { freeRescue?: boolean; freeRescueTraining?: boolean }>("/settings", undefined, undefined, null);
+  const set = async (patch: Record<string, boolean>) => { await api("/settings", { method: "PATCH", body: patch, scope: null }); void reload(true); };
+  const lim = (n: number, of?: number) => (of ? `${fmtInt(n)} / ${fmtInt(of)}` : fmtInt(n));
+  return (
+    <Card className="mt-6" title="Free tiers" subtitle="Free cloud models: never part of a route's normal choice unless named; counted against their limits, and taken out just before one. As a rescue they answer last, when every model of ours failed or is out — inside each tenant's data border."
+      actions={<><Toggle checked={!!s?.freeRescue} onChange={(v) => void set({ freeRescue: v })} label="Rescue with free tiers" /><Toggle checked={!!s?.freeRescueTraining} onChange={(v) => void set({ freeRescueTraining: v })} label="Also tiers that train on prompts" /></>} pad={false}>
+      {!rows?.length ? <div className="p-4"><Empty>No free-tier models yet. Add a provider on its free plan (Groq, Cerebras, Gemini…) and its models.</Empty></div> : (
+        <Table>
+          <thead><tr><Th>Model</Th><Th right>This minute</Th><Th right>Today</Th><Th right>Tokens today</Th><Th>Trains on prompts</Th><Th>Now</Th></tr></thead>
+          <tbody>{rows.map((r) => (
+            <tr key={r.id}><Td mono>{r.id}</Td><Td right>{lim(r.minute, r.limits.rpm)}</Td><Td right>{lim(r.day, r.limits.rpd)}</Td><Td right>{lim(r.tokensToday, r.limits.tpd)}</Td>
+              <Td>{r.trainsOnData === false ? "no" : r.trainsOnData ? <span className="text-warn">yes</span> : <span className="text-ink-3">unknown</span>}</Td>
+              <Td>{r.blocked ? <span className="text-warn">{r.blocked}</span> : <span className="text-good">available</span>}</Td></tr>
+          ))}</tbody>
+        </Table>
+      )}
+    </Card>
   );
 }

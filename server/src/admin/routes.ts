@@ -26,6 +26,7 @@ import { registerBrain } from "../brain.js";
 import { presence, registerPresence } from "../presence.js";
 import { registerJoin } from "../join.js";
 import { registerExperiments } from "../experiments.js";
+import { quotaReport } from "../quota.js";
 import { BORDERS, type Border } from "../router/border.js";
 import { modelResources, providerResources, tenantResources } from "./resources.js";
 
@@ -135,7 +136,8 @@ export function registerAdmin(app: FastifyInstance) {
       const id = (req.params as { id: string }).id;
       if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) return reply.code(400).send({ error: "a provider id is lowercase letters, digits and dashes" });
       const raw = (req.body ?? {}) as Record<string, unknown>;
-      const b = Object.fromEntries(["name", "kind", "base_url", "api_key", "admin_token", "enabled"].filter((k) => k in raw).map((k) => [k, raw[k]])) as Partial<Provider>;
+      const b = Object.fromEntries(["name", "kind", "base_url", "api_key", "admin_token", "enabled", "plan", "limits", "trains_on_data"].filter((k) => k in raw).map((k) => [k, raw[k]])) as Partial<Provider>;
+      if (b.limits !== undefined && typeof b.limits !== "string") b.limits = JSON.stringify(b.limits);
       const prev = getProvider(id);
       if (b.api_key === "••••") b.api_key = prev?.api_key ?? null;
       if (b.admin_token === "••••") b.admin_token = prev?.admin_token ?? null;
@@ -298,6 +300,7 @@ export function registerAdmin(app: FastifyInstance) {
     registerPresence(api);
     registerJoin(api);
     registerExperiments(api);
+    api.get("/quota", async () => quotaReport());
 
     // ── Resource data per tenant, provider and model (ids may hold a slash: a node's model is <node>/<model>) ────
     const stat = (fn: (id: string, range?: string) => unknown) => async (req: FastifyRequest, reply: FastifyReply) =>

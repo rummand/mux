@@ -74,6 +74,13 @@ export const defaultSettings = {
   brainNode: "",
   /** mux runs experiments itself: picks challengers from what it measures and the catalog, splits live traffic, promotes winners (experiments.ts). */
   autoExperiments: true,
+  /**
+   * Free tiers as a rescue: when every model of a route fails or is out (a node down, all busy), free cloud models of
+   * the same kind answer, last — inside the tenant's data border, within their quotas, and only from providers that do
+   * not train on free-tier prompts unless freeRescueTraining allows those too.
+   */
+  freeRescue: true,
+  freeRescueTraining: false,
 };
 export type Settings = typeof defaultSettings;
 

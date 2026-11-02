@@ -13,6 +13,8 @@ export interface Provider {
   id: string; name: string; kind: string; base_url: string; api_key: string | null; admin_token: string | null;
   enabled: boolean; status: "online" | "offline" | "error" | "unknown"; last_seen: number | null; error: string | null;
   info: NodeInfo | null; created_at: number;
+  /** A cloud API's plan: free (limits counted by quota.ts) or paid; its free-tier limits; whether it trains on free-tier prompts. */
+  plan?: "free" | "paid"; limits?: string; trains_on_data?: number | null;
 }
 export interface NodeInfo {
   system?: { memTotalGb: number; memFreeGb: number; swapGb: number; pressure: number; diskFreeGb: number; chip: string; cores: number };
@@ -47,11 +49,12 @@ export function saveProvider(p: Partial<Provider> & { id: string }): Provider {
   const prev = getProvider(p.id);
   const next = { name: p.id, kind: "custom", base_url: "", api_key: null, admin_token: null, enabled: true, status: "unknown", last_seen: null, error: null, info: null, created_at: now(), ...prev, ...p } as Provider;
   next.base_url = next.base_url.replace(/\/+$/, "");
-  db.prepare(`INSERT INTO providers(id, name, kind, base_url, api_key, admin_token, enabled, status, last_seen, error, info, created_at)
-    VALUES(@id, @name, @kind, @base_url, @api_key, @admin_token, @enabled, @status, @last_seen, @error, @info, @created_at)
+  db.prepare(`INSERT INTO providers(id, name, kind, base_url, api_key, admin_token, enabled, status, last_seen, error, info, created_at, plan, limits, trains_on_data)
+    VALUES(@id, @name, @kind, @base_url, @api_key, @admin_token, @enabled, @status, @last_seen, @error, @info, @created_at, @plan, @limits, @trains_on_data)
     ON CONFLICT(id) DO UPDATE SET name=excluded.name, kind=excluded.kind, base_url=excluded.base_url, api_key=excluded.api_key,
-      admin_token=excluded.admin_token, enabled=excluded.enabled, status=excluded.status, last_seen=excluded.last_seen, error=excluded.error, info=excluded.info`)
-    .run({ ...next, enabled: next.enabled ? 1 : 0, info: next.info ? JSON.stringify(next.info) : null });
+      admin_token=excluded.admin_token, enabled=excluded.enabled, status=excluded.status, last_seen=excluded.last_seen, error=excluded.error, info=excluded.info,
+      plan=excluded.plan, limits=excluded.limits, trains_on_data=excluded.trains_on_data`)
+    .run({ ...next, enabled: next.enabled ? 1 : 0, info: next.info ? JSON.stringify(next.info) : null, plan: next.plan ?? "paid", limits: typeof next.limits === "string" ? next.limits : JSON.stringify(next.limits ?? {}), trains_on_data: next.trains_on_data == null ? null : next.trains_on_data ? 1 : 0 });
   return next;
 }
 

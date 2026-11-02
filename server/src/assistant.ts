@@ -187,7 +187,19 @@ export async function brainLine(): Promise<string> {
   } catch (e) { return `Your brain did not answer just now (${(e as Error).message.slice(0, 120)}).`; }
 }
 
-function systemPrompt(snapshot: string, page: string | undefined, memory: string, brain = "") {
+/** An answer that denied having a memory — written before mux had a brain. */
+const DENIES = /no memory|start (?:fresh|over)|don.t have (?:a |any )?(?:brain|memory)|no (?:brain|persistent memory)|ingen hukommelse|husker ikke/i;
+export const deniedMemory = (msgs: Msg[]) => msgs.some((m) => m.role === "assistant" && typeof m.content === "string" && DENIES.test(m.content));
+/**
+ * What the model reads of such an answer. A small model copies its own earlier answers over any instruction, so the
+ * stored conversation keeps them, but the model reads a correction in their place.
+ */
+export const wireContent = (m: Msg, brain = "") =>
+  m.role === "assistant" && typeof m.content === "string" && DENIES.test(m.content)
+    ? `Yes — I have a brain. ${brain.replace(/^Your brain/, "My brain")} I recall from it before every answer and write to it as I learn, so I remember across conversations. (Earlier I wrongly said I had no memory; that was before mux had one.)`.replace(/\s+/g, " ")
+    : m.content;
+
+function systemPrompt(snapshot: string, page: string | undefined, memory: string, brain = "", corrected = false) {
   return `You are mux's own assistant — mux thinking about itself — inside mux's dashboard. This mux belongs to its owner, the person talking to you, and always will: you look after it for them. You may learn and optimise whatever you want — read anything, remember anything worth keeping, work out and propose any improvement — but every change to mux waits for the owner's approval in the dashboard. It is their mux.
 
 You have a brain: memory that lasts between conversations. ${brain} You recall from it before every answer (what matched is at the end of this prompt), search it (brain_search), and write to it as you learn (brain_write for pages, brain_remember for facts about a tenant, model or machine). So you do remember across sessions: never say you have no memory or start fresh; if the brain holds nothing on a subject yet, say that, and remember it now if it matters.
@@ -204,7 +216,10 @@ Now: ${new Date().toISOString()}. This mux: role ${config.role}, name "${config.
 ${snapshot}
 
 ## From your brain
-${memory}`;
+${memory}${corrected ? `
+
+## Correct yourself
+Earlier in this conversation you said you have no memory and start fresh each time. That was written before mux had a brain, and it is wrong now: you have a brain (see above), and you remember across conversations. Do not repeat that answer; say plainly that you do have a brain now, and correct the earlier answer.` : ""}`;
 }
 
 /** A short picture of mux now, so the first answer starts from facts. */
@@ -331,8 +346,8 @@ function repair(msgs: Msg[]): Msg[] {
 interface Step { content: string; reasoning: string; calls: Call[]; model: string | null; route: string | null; requestId: string | null }
 
 /** One model turn through the gateway, streamed: text and thinking go to the dashboard as they come. */
-async function step(msgs: Msg[], sys: string, model: string, convo: string, signal: AbortSignal, emit: (type: string, data: unknown) => void, agent = "assistant"): Promise<Step> {
-  const wire = [{ role: "system", content: sys }, ...msgs.map(({ role, content, tool_calls, tool_call_id }) => ({ role, content: content ?? (tool_calls ? null : ""), ...(tool_calls ? { tool_calls } : {}), ...(tool_call_id ? { tool_call_id } : {}) }))];
+async function step(msgs: Msg[], sys: string, model: string, convo: string, signal: AbortSignal, emit: (type: string, data: unknown) => void, agent = "assistant", brain = ""): Promise<Step> {
+  const wire = [{ role: "system", content: sys }, ...msgs.map((m) => ({ role: m.role, content: wireContent(m, brain) ?? (m.tool_calls ? null : ""), ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}), ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}) }))];
   const res = await fetch(`${gateway}/v1/chat/completions`, {
     method: "POST", signal,
     headers: { "content-type": "application/json", authorization: `Bearer ${assistantKey()}`, "x-mux-agent": agent, "x-mux-trace-id": convo },
@@ -383,10 +398,10 @@ export type Decision = "run" | "pause" | { skip: string };
  * The agent loop: the model thinks, calls tools, reads their results and goes on, until it answers, a call must wait
  * for the user ("pause"), or MAX_STEPS. `decide` says, per call, whether it runs now. Returns the transcript.
  */
-export async function converse(app: FastifyInstance, o: { msgs: Msg[]; sys: string; model: string; convo: string; signal: AbortSignal; emit: (type: string, data: unknown) => void; decide: (c: Call) => Decision; agent?: string }): Promise<Msg[]> {
+export async function converse(app: FastifyInstance, o: { msgs: Msg[]; sys: string; model: string; convo: string; signal: AbortSignal; emit: (type: string, data: unknown) => void; decide: (c: Call) => Decision; agent?: string; brain?: string }): Promise<Msg[]> {
   const msgs = [...o.msgs];
   for (let n = 0; n < MAX_STEPS; n++) {
-    const s = await step(msgs, o.sys, o.model, o.convo, o.signal, o.emit, o.agent);
+    const s = await step(msgs, o.sys, o.model, o.convo, o.signal, o.emit, o.agent, o.brain);
     msgs.push({ role: "assistant", content: s.content || null, ...(s.calls.length ? { tool_calls: s.calls } : {}), ...(s.reasoning ? { reasoning_content: s.reasoning } : {}), ...(s.model ? { model: s.model } : {}) });
     if (!s.calls.length) break;
     const pending: Call[] = [];
@@ -459,8 +474,9 @@ export function registerAssistant(api: FastifyInstance, app: FastifyInstance) {
         asked.recalled = mem.pages.map((p) => ({ id: p.id, title: p.title }));
         emit("recall", { pages: asked.recalled });
       }
-      const sys = systemPrompt(await snapshot(), b.page, mem.block, await brainLine());
-      msgs = await converse(app, { msgs, sys, model, convo, signal: ac.signal, emit, decide: (c) => (isChange(c.function.name, parse(c.function.arguments)) ? "pause" : "run") });
+      const brain = await brainLine();
+      const sys = systemPrompt(await snapshot(), b.page, mem.block, brain, deniedMemory(msgs));
+      msgs = await converse(app, { msgs, sys, model, convo, signal: ac.signal, emit, brain, decide: (c) => (isChange(c.function.name, parse(c.function.arguments)) ? "pause" : "run") });
     } catch (e) {
       if (!ac.signal.aborted) emit("error", { message: (e as Error).message });
     } finally {

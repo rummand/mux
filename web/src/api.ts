@@ -128,7 +128,10 @@ export interface Provider {
   id: string; name: string; kind: string; base_url: string; api_key: string | null; admin_token: string | null; enabled: boolean;
   status: "online" | "offline" | "error" | "unknown"; last_seen: number | null; error: string | null; info: NodeInfo | null; created_at: number;
   models: string[]; usage24h: { n: number; errors: number; tokens: number; usd: number } | null;
+  /** A cloud API's plan; a free tier's limits (JSON) and whether it trains on free-tier prompts (1/0/null unknown). */
+  plan?: "free" | "paid"; limits?: string; trains_on_data?: number | null;
 }
+export interface QuotaRow { id: string; provider: string; limits: { rpm?: number; rpd?: number; tpm?: number; tpd?: number }; minute: number; day: number; tokensToday: number; blocked: string | null; trainsOnData: boolean | null }
 export type Presets = Record<string, { name: string; base_url: string; keyUrl: string }>;
 
 /* ── Richer stats (overview extras and /stats/<kind>/<id>) ─────────────────────────────────────────────────── */

@@ -3,6 +3,7 @@ import { MuxError } from "./errors.js";
 import { recordFailure, recordSuccess } from "./health.js";
 import type { Ctx } from "./metering.js";
 import { decide } from "./select.js";
+import { noteHeaders } from "../quota.js";
 
 /** POST /v1/embeddings (or /v1/rerank) across the route's candidates. */
 export async function runEmbeddings(ctx: Ctx, body: { model?: string; input?: unknown; documents?: unknown; query?: string; [k: string]: unknown }, signal: AbortSignal, kind: "embedding" | "rerank" = "embedding") {
@@ -23,6 +24,7 @@ export async function runEmbeddings(ctx: Ctx, body: { model?: string; input?: un
     try {
       const res = await fetch(`${up.baseUrl}/${kind === "rerank" ? "rerank" : "embeddings"}`, { method: "POST", headers: { "content-type": "application/json", ...up.headers }, body: JSON.stringify({ ...body, model: up.model }), signal });
       ctx.upstreamMs = performance.now() - tu;
+      noteHeaders(m.id, res.status, res.headers);
       if (!res.ok) {
         const text = await res.text();
         if (res.status < 500) throw new MuxError(res.status, "upstream_error", text.slice(0, 500));

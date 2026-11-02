@@ -3,6 +3,7 @@ import { MuxError } from "./errors.js";
 import { recordFailure, recordSuccess } from "./health.js";
 import type { Ctx } from "./metering.js";
 import { decide } from "./select.js";
+import { noteHeaders } from "../quota.js";
 
 /**
  * Speech in and out, OpenAI's audio API: /v1/audio/transcriptions (multipart, passed through as it came) and
@@ -51,6 +52,7 @@ export async function runAudio(ctx: Ctx, kind: AudioKind, requested: string | un
         method: "POST", headers: { ...up.headers, "content-type": contentType }, body: new Uint8Array(payload), signal,
       });
       ctx.upstreamMs = (ctx.upstreamMs ?? 0) + (performance.now() - tu);
+      noteHeaders(m.id, res.status, res.headers);
       if (res.ok) { recordSuccess(m.id, null, null); return res; }
       const text = (await res.text()).slice(0, 500);
       // The request itself is wrong: another model would say the same

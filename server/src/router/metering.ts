@@ -4,6 +4,7 @@ import { db, settings } from "../db.js";
 import { getModel } from "../models.js";
 import type { ApiKey, Tenant } from "../tenants.js";
 import { addTokens } from "./limits.js";
+import { countRequest } from "../quota.js";
 
 /** One call's record, filled in as it goes and written once at the end. */
 export interface Ctx {
@@ -56,6 +57,7 @@ export function finish(ctx: Ctx, status: number, error?: { type: string; message
     experiment_id: ctx.experiment?.id ?? null, arm: ctx.experiment?.arm ?? null,
   };
   try { insert.run(row); } catch (e) { console.error("metering:", (e as Error).message); }
+  if (row.model_id) countRequest(row.model_id, row.prompt_tokens + row.completion_tokens);
   addTokens(ctx.tenant.id, row.prompt_tokens + row.completion_tokens);
   const { body_req: _q, body_res: _r, ...summary } = row;
   live.emit("request", { ...summary, tenant_name: ctx.tenant.name, tenant_color: ctx.tenant.color });

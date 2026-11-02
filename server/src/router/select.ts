@@ -6,6 +6,8 @@ import { loadedOnNode, presenceOf, providerUp } from "../providers.js";
 import { restingReason } from "../presence.js";
 import { outside } from "./border.js";
 import { split } from "../experiments.js";
+import { freePlan, quotaBlock } from "../quota.js";
+import { settings } from "../db.js";
 
 /** What a request needs, read from the request itself. */
 export interface Features {
@@ -87,6 +89,8 @@ function unfit(m: Model, f: Features, t?: Tenant): string | null {
   if (!m.enabled) return "disabled";
   const border = outside(t?.data_border, m);
   if (border) return border;
+  const quota = quotaBlock(m);
+  if (quota) return quota;
   if (!providerUp(m.provider_id)) return "provider offline";
   if (inCooldown(m.id)) return "cooling down after failures";
   // Presence: a machine with someone at it, or turned off, takes less or nothing (presence.ts).
@@ -111,7 +115,7 @@ function score(m: Model, f: Features): number {
   // A model already in memory answers now; a cold one pays its load first. Paid models are the fallback, not the
   // first choice, unless the request needs what only they have.
   s += warm(m) ? 4 : -Math.min(4, m.size_bytes / 1024 ** 3 / 8);
-  if (m.cost_in || m.cost_out) s -= 3;
+  if (m.cost_in || m.cost_out || freePlan(m)) s -= 3; // paid, or a free tier's quota: the cloud is the fallback
   // By the kind of machine: a server first, a laptop last; a polite machine (someone is there) after a free one.
   const pr = m.backend === "node" ? presenceOf(m.provider_id) : null;
   if (pr?.class === "always-on") s += 1;
@@ -142,10 +146,13 @@ export function decide(tenant: Tenant, requested: string | undefined, kind: Kind
     // A model asked for by name is tried first; the tenant's default route stands behind it.
     const def = getRoute(kind === "chat" ? tenant.default_route || "auto" : kind === "embedding" ? "embed" : kind);
     const backups = (def?.candidates ?? []).filter((id) => id !== model.id).map(getModel).filter((m): m is Model => !!m && m.kind === kind && !unfit(m, feats, tenant));
-    return { route: null, candidates: [model, ...backups], reason: [via, `model ${model.id}`].filter(Boolean).join("; "), requested: requested ?? "" };
+    const rescue = rescueModels(kind, feats, tenant, [model, ...backups]);
+    return { route: null, candidates: [model, ...backups, ...rescue], reason: [via, `model ${model.id}`, rescue.length ? `rescue: ${rescue.map((m) => m.id).join(", ")}` : ""].filter(Boolean).join("; "), requested: requested ?? "" };
   }
   const r = route!;
-  const pool = (r.candidates.length ? r.candidates.map(getModel) : listModels().filter((m) => m.kind === kind)).filter((m): m is Model => !!m && m.kind === kind);
+  // A route that lists no models takes every model of its kind — but not a free tier's: those answer only when named,
+  // or as the rescue below.
+  const pool = (r.candidates.length ? r.candidates.map(getModel) : listModels().filter((m) => m.kind === kind && !freePlan(m))).filter((m): m is Model => !!m && m.kind === kind);
   const skipped: string[] = [];
   const fit = pool.filter((m) => { const why = unfit(m, feats, tenant); if (why) skipped.push(`${m.id}: ${why}`); return !why; });
   let ordered = fit;
@@ -163,7 +170,28 @@ export function decide(tenant: Tenant, requested: string | undefined, kind: Kind
   // An experiment on this route splits its traffic: arm B tries the challenger first, arm A the champion.
   const sp = split(r.name, ordered);
   if (sp) ordered = sp.candidates;
+  // Free tiers, last: they answer when everything of ours failed or is out.
+  const rescue = rescueModels(kind, feats, tenant, ordered);
+  ordered = [...ordered, ...rescue];
+  if (rescue.length) skipped.push(`rescue if all fail: ${rescue.map((m) => m.id).join(", ")}`);
   const reason = [via, `route ${r.name}: ${how}`, sp ? `experiment ${sp.experiment.id}, arm ${sp.experiment.arm}` : "", skipped.length ? `skipped ${skipped.join("; ")}` : ""].filter(Boolean).join("; ");
   if (!ordered.length) throw new RouteError(`route ${r.name} has no model that can take this request${skipped.length ? ` (${skipped.join("; ")})` : ""}`, 503, "no_capable_model");
   return { route: r, candidates: ordered, reason, requested: requested ?? "", ...(sp ? { experiment: sp.experiment } : {}) };
+}
+
+/**
+ * The free-tier models that may answer when a request's own candidates all fail or are out: same kind, inside the
+ * tenant's data border and their quotas, able to do what the request needs, from providers that do not train on
+ * free-tier prompts (unless freeRescueTraining allows those). The best three, by quality.
+ */
+export function rescueModels(kind: Kind, f: Features, tenant: Tenant, already: Model[]): Model[] {
+  const s = settings();
+  if (!s.freeRescue) return [];
+  const have = new Set(already.map((m) => m.id));
+  return listModels()
+    .filter((m) => m.kind === kind && !have.has(m.id))
+    .filter((m) => { const p = freePlan(m); return !!p && (s.freeRescueTraining || p.trainsOnData === false); })
+    .filter((m) => !unfit(m, f, tenant) && (!f.tools || cap(m, "tools") >= 5))
+    .sort((a, b) => cap(b, "quality") - cap(a, "quality"))
+    .slice(0, 3);
 }

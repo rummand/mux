@@ -5,6 +5,7 @@ import { recordFailure, recordSuccess } from "./health.js";
 import type { Ctx } from "./metering.js";
 import { decide, features } from "./select.js";
 import { asToolCall, forcedTools, guarded, isGoodNativeCall, type Tool } from "./toolguard.js";
+import { noteHeaders } from "../quota.js";
 
 /* OpenAI chat shapes, as loosely as mux needs them. */
 export interface ChatBody { model?: string; messages: { role: string; content?: unknown; [k: string]: unknown }[]; stream?: boolean; tools?: Tool[]; tool_choice?: unknown; [k: string]: unknown }
@@ -37,9 +38,11 @@ export async function* sse(res: Response): AsyncGenerator<Record<string, unknown
 /** A failure that another model may not have: try the next candidate. */
 class Retryable extends Error {}
 
-async function post(url: string, headers: Record<string, string>, body: unknown, signal: AbortSignal) {
+async function post(url: string, headers: Record<string, string>, body: unknown, signal: AbortSignal, modelId?: string) {
   try {
-    return await fetch(url, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body), signal });
+    const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body), signal });
+    if (modelId) noteHeaders(modelId, res.status, res.headers); // a free tier's limits, as it reports them
+    return res;
   } catch (e) {
     if ((e as Error).name === "AbortError") throw e;
     throw new Retryable(`could not reach the model server: ${(e as Error).message}`);
@@ -113,7 +116,7 @@ function meter(ctx: Ctx, usage: Usage | undefined | null, timings: Timings | und
 
 async function plainCall(ctx: Ctx, m: Model, url: string, headers: Record<string, string>, body: ChatBody, signal: AbortSignal): Promise<Completion> {
   const { stream: _s, stream_options: _o, ...rest } = body;
-  const res = await post(url, headers, rest, signal);
+  const res = await post(url, headers, rest, signal, m.id);
   if (!res.ok) throw await upstreamError(res);
   const c = (await res.json()) as Completion;
   meter(ctx, c.usage, c.timings, null, performance.now());
@@ -126,7 +129,7 @@ async function plainCall(ctx: Ctx, m: Model, url: string, headers: Record<string
 
 async function streamCall(ctx: Ctx, m: Model, url: string, headers: Record<string, string>, body: ChatBody, signal: AbortSignal, onChunk: (c: Chunk) => void): Promise<null> {
   const wantsUsage = !!(body.stream_options as { include_usage?: boolean } | undefined)?.include_usage;
-  const res = await post(url, headers, { ...body, stream: true, stream_options: { include_usage: true } }, signal);
+  const res = await post(url, headers, { ...body, stream: true, stream_options: { include_usage: true } }, signal, m.id);
   if (!res.ok) throw await upstreamError(res);
   let first: number | null = null;
   let usage: Usage | null = null;
@@ -158,7 +161,7 @@ async function forcedCall(ctx: Ctx, m: Model, url: string, headers: Record<strin
   let answer: Completion | null = null;
   // `required` among several tools: the model's own format first (its tool calling is trained); words fall through.
   if (tools.length > 1 && body.tool_choice === "required") {
-    const res = await post(url, headers, plain, signal);
+    const res = await post(url, headers, plain, signal, m.id);
     if (res.ok) {
       const c = (await res.json()) as Completion;
       if (isGoodNativeCall(c, tools)) answer = c;
@@ -166,13 +169,13 @@ async function forcedCall(ctx: Ctx, m: Model, url: string, headers: Record<strin
   }
   if (!answer) {
     const ask = guarded(plain, tools) as ChatBody;
-    let res = await post(url, headers, ask, signal);
+    let res = await post(url, headers, ask, signal, m.id);
     if (!res.ok) throw await upstreamError(res);
     let c = (await res.json()) as Completion;
     // Cut off by max_tokens, the JSON is half a JSON: ask once more with room.
     if (c.choices?.[0]?.finish_reason === "length") {
       const max = Number(ask.max_tokens ?? ask.max_completion_tokens ?? 1600);
-      res = await post(url, headers, { ...ask, max_tokens: Math.min(Math.max(max * 2, 2048), 8192) }, signal);
+      res = await post(url, headers, { ...ask, max_tokens: Math.min(Math.max(max * 2, 2048), 8192) }, signal, m.id);
       if (!res.ok) throw await upstreamError(res);
       c = (await res.json()) as Completion;
     }
