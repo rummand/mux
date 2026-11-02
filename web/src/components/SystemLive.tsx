@@ -89,8 +89,8 @@ const MEM: { key: keyof NonNullable<SystemLive["memory"]>; label: string; color:
   { key: "free", label: "Free", color: "var(--grid)", hint: "not used at all" },
 ];
 
-export function SystemLivePanel({ models, machine }: { models: Record<number, string>; machine: string }) {
-  const { data: l } = useApi<SystemLive>("/system/live", { machine }, 2_000);
+export function SystemLivePanel({ models }: { models: Record<number, string> }) {
+  const { data: l } = useApi<SystemLive>("/system/live", undefined, 2_000);
   const [sort, setSort] = useState<"cpu" | "mem">("cpu");
   const kinds = useMemo(() => l?.cores.map((c) => c.kind) ?? [], [l?.cores.length, l?.cores[0]?.kind]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!l) return null;

@@ -52,3 +52,6 @@ export function fmtAxisTime(ts: number, bucketMs: number): string {
 }
 
 export const fmtDuration = (s: number) => (s < 60 ? `${Math.round(s)}s` : s < 3600 ? `${Math.round(s / 60)}m` : s < 86400 ? `${(s / 3600).toFixed(1)}h` : `${(s / 86400).toFixed(1)}d`);
+
+/** What a machine is called in the dashboard: the Railway gateway is "Railway mux". */
+export const machineLabel = (name: string) => (name === "railway" ? "Railway mux" : name);
