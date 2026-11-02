@@ -26,7 +26,7 @@ export default function BrainPage() {
   const s = data?.stats;
   return (
     <>
-      <PageHeader title="Brain" subtitle="What the assistant and the doctor remember across conversations: how this mux is set up and why, decisions, preferences, and runbooks for problems already solved."
+      <PageHeader title="Brain" subtitle="What mux and its doctor remember across conversations: how this mux is set up and why, decisions, preferences, and runbooks for problems already solved."
         actions={<Button variant="primary" onClick={() => select("new")}>New page</Button>} />
       {s?.backend === "gbrain" ? (
         <p className="mb-4 text-[12px] text-ink-3">
@@ -55,7 +55,7 @@ export default function BrainPage() {
             </Select>
           </div>
           <div className="max-h-[70vh] divide-y divide-line overflow-y-auto">
-            {data && !data.pages.length && <div className="p-4"><Empty>{q ? "Nothing matches." : "Nothing remembered yet. The assistant writes here as it learns."}</Empty></div>}
+            {data && !data.pages.length && <div className="p-4"><Empty>{q ? "Nothing matches." : "Nothing remembered yet. mux writes here as it learns."}</Empty></div>}
             {data?.pages.map((p) => (
               <button key={p.id} onClick={() => select(p.id)} className={cx("block w-full px-3 py-2 text-left", p.id === selected ? "bg-accent-soft" : "hover:bg-s2")}>
                 <div className="truncate text-[13px]">{p.title}</div>

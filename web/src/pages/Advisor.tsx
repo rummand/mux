@@ -174,7 +174,7 @@ function TrendingCard() {
   const { data } = useApi<Trending[]>("/advisor/trending");
   if (!data?.length) return null;
   return (
-    <Card className="mt-6" title="Trending on Hugging Face, not in the catalog" subtitle="GGUF models rising now, one row per model (its most downloaded upload), safety-stripped re-uploads left out. Ask the assistant to look into one before downloading it." pad={false}>
+    <Card className="mt-6" title="Trending on Hugging Face, not in the catalog" subtitle="GGUF models rising now, one row per model (its most downloaded upload), safety-stripped re-uploads left out. Ask mux to look into one before downloading it." pad={false}>
       <Table>
         <thead><tr><Th>Model</Th><Th>Kind</Th><Th right>Downloads</Th><Th right>Likes</Th><Th>Since</Th><Th></Th></tr></thead>
         <tbody>{data.slice(0, 15).map((t) => (

@@ -174,7 +174,7 @@ export function AssistantChat({ layout, active = true, onClose, empty, ask }: { 
   const intro = (
     <div className="pt-6">
       <p className="mb-1 text-[15px] font-medium">Run mux with mux.</p>
-      <p className="mb-4 text-ink-3 text-[12.5px]">The assistant reads everything — models, routes, tenants, providers, requests, logs, the system — on its own, and remembers what it learns in mux's brain. Changes wait for your approval here.</p>
+      <p className="mb-4 text-ink-3 text-[12.5px]">mux reads everything — models, routes, tenants, providers, requests, logs, the system — on its own, and remembers what it learns in mux's brain. Changes wait for your approval here.</p>
       <div className="grid gap-1.5">
         {SUGGESTIONS.map((s) => <button key={s} onClick={() => send(s)} className="rounded-md border border-line px-3 py-2 text-left text-ink-2 hover:bg-s2 hover:text-ink">{s}</button>)}
       </div>
@@ -184,8 +184,8 @@ export function AssistantChat({ layout, active = true, onClose, empty, ask }: { 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className={cx("flex h-12 shrink-0 items-center gap-2 px-3", !page && "border-b border-line")}>
-        {!page && <><span className="text-accent">{sparkle}</span><span className="text-[14px] font-semibold">Assistant</span></>}
-        <Select className="ml-auto w-36" value={model} onChange={(e) => setModel(e.target.value)} title="The route or model the assistant thinks with">
+        {!page && <><span className="text-accent">{sparkle}</span><span className="text-[14px] font-semibold">Ask mux</span></>}
+        <Select className="ml-auto w-36" value={model} onChange={(e) => setModel(e.target.value)} title="The route or model mux thinks with here">
           <option value="">Default (settings)</option>
           {(routes ?? []).filter((r) => r.kind === "chat").map((r) => <option key={r.name} value={r.name}>route: {r.name}</option>)}
           {chatModels.map((m) => <option key={m.id} value={m.id}>{m.id}</option>)}

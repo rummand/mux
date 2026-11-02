@@ -137,7 +137,7 @@ function Brain({ ask }: { ask: (q: string) => void }) {
       <p className="mb-2 text-[11.5px] text-ink-3">
         {s ? `${fmtInt(s.pages)} pages${s.pages ? ` · ${fmtInt(s.embedded)} embedded` : ""}${s.embedding ? "" : " · embeddings unavailable, searching by words"}` : "…"}
       </p>
-      {s && !s.pages && <p className="text-[12px] text-ink-2">Empty so far. The assistant and the doctor write here as they learn how this mux is set up and what fixed what.</p>}
+      {s && !s.pages && <p className="text-[12px] text-ink-2">Empty so far. mux and its doctor write here as they learn how this mux is set up and what fixed what.</p>}
       <div className="space-y-1">
         {data?.pages.map((p) => (
           <div key={p.id} className="rounded-md border border-line px-2.5 py-1.5">

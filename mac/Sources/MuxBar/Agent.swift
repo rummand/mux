@@ -65,7 +65,7 @@ final class Agent {
         var req = api.request("/assistant", method: "POST", body: try JSONEncoder().encode(JSON.object(body)))
         req.timeoutInterval = 900
         let (bytes, res) = try await URLSession.shared.bytes(for: req)
-        guard (res as? HTTPURLResponse)?.statusCode == 200 else { throw API.Failure(status: (res as? HTTPURLResponse)?.statusCode ?? 0, message: "the assistant did not start") }
+        guard (res as? HTTPURLResponse)?.statusCode == 200 else { throw API.Failure(status: (res as? HTTPURLResponse)?.statusCode ?? 0, message: "mux did not start") }
         var event = ""
         for try await line in bytes.lines {
           if line.hasPrefix("event: ") { event = String(line.dropFirst(7)); continue }

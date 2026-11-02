@@ -30,7 +30,7 @@ import { ASK_EVENT, AssistantPanel, brainIcon, sparkle } from "./components/Assi
 
 const icon = (d: string) => <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={d} /></svg>;
 const NAV: { to: string; label: string; icon: ReactNode; group?: string }[] = [
-  { to: "/", label: "Assistant", icon: <span className="text-accent">{sparkle}</span> },
+  { to: "/", label: "Ask mux", icon: <span className="text-accent">{sparkle}</span> },
   { to: "/brain", label: "Brain", icon: brainIcon },
   { to: "/journal", label: "What mux changed", icon: icon("M12 8v4l3 2M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5") },
   { to: "/overview", label: "Overview", group: "Traffic", icon: icon("M3 13h4v8H3zM10 9h4v12h-4zM17 4h4v17h-4z") },
@@ -105,7 +105,7 @@ function TopBar({ onMenu, onAssistant, home }: { onMenu: () => void; onAssistant
           <Meter value={b.usedGb} max={b.budgetGb} tone={b.usedGb / b.budgetGb > 0.9 ? "bad" : b.usedGb / b.budgetGb > 0.7 ? "warn" : "accent"} height={5} />
         </div>
       )}
-      {!home && <Button size="sm" onClick={onAssistant} title="Assistant (⌘J)"><span className="inline-flex items-center gap-1.5"><span className="text-accent">{sparkle}</span>Assistant</span></Button>}
+      {!home && <Button size="sm" onClick={onAssistant} title="Ask mux (⌘J)"><span className="inline-flex items-center gap-1.5"><span className="text-accent">{sparkle}</span>Ask mux</span></Button>}
       <Button size="sm" variant="ghost" onClick={() => { setToken(""); location.reload(); }}>Sign out</Button>
     </header>
   );

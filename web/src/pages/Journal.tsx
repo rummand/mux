@@ -12,7 +12,7 @@ import { useApi } from "../hooks";
  */
 export interface JournalEntry { id: number; ts: number; actor: string; kind: string; title: string; detail: string | null; before: unknown; after: unknown; ref: string | null }
 
-export const ACTORS: Record<string, string> = { autopilot: "Autopilot", experiments: "Experiments", doctor: "Doctor", healer: "Healer", "brain-keeper": "Brain keeper", assistant: "Assistant (approved by you)", lens: "Lens" };
+export const ACTORS: Record<string, string> = { autopilot: "Autopilot", experiments: "Experiments", doctor: "Doctor", healer: "Healer", "brain-keeper": "Brain keeper", assistant: "mux (approved by you)", lens: "Lens" };
 export const actorTone = (a: string) => (a === "healer" || a === "doctor" ? "warn" : a === "brain-keeper" ? "accent" : a === "assistant" ? "muted" : "good") as "warn" | "accent" | "muted" | "good";
 
 /** Where an entry's subject lives in the dashboard. */

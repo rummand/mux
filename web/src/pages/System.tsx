@@ -118,7 +118,7 @@ function SettingsCard() {
         {num("keepAliveMin", "Keep alive (min)", "idle time before unload")}
         {num("diskReserveGb", "Disk reserve (GB)", "downloads refuse below it")}
         {num("retentionDays", "Retention (days)", "request history kept")}
-        <Field label="Assistant model" hint="route or model id the assistant thinks with">
+        <Field label="Ask mux model" hint="route or model id mux thinks with when you ask it">
           <Input value={s.assistantModel ?? "auto"} onChange={(e) => setS({ ...s, assistantModel: e.target.value })} />
         </Field>
       </div>

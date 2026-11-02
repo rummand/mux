@@ -110,7 +110,7 @@ function RunView({ run, onOpen, onMuted }: { run: LensRun; onOpen: (id: string) 
   return (
     <div className="space-y-4">
       <Card title={run.title} subtitle={run.criteria}
-        actions={run.status === "done" && run.findings.length > 0 && <Button size="sm" onClick={() => askAssistant(`Lens investigation ${run.id} (“${run.title}”, ${scope(run.filters)}) found ${run.findings.length} things${fresh.length ? `, ${fresh.length} of them new` : ""}. Read it (GET /lens/runs/${run.id}), work out which matter most and why, and propose the fixes.`)}>Ask the assistant</Button>}>
+        actions={run.status === "done" && run.findings.length > 0 && <Button size="sm" onClick={() => askAssistant(`Lens investigation ${run.id} (“${run.title}”, ${scope(run.filters)}) found ${run.findings.length} things${fresh.length ? `, ${fresh.length} of them new` : ""}. Read it (GET /lens/runs/${run.id}), work out which matter most and why, and propose the fixes.`)}>Ask mux</Button>}>
         <div className="flex flex-wrap gap-4 text-[12.5px] text-ink-2 num">
           <span>Status <b className="text-ink">{run.status}</b></span>
           {run.coverage && <><span>Eligible <b className="text-ink">{fmtInt(run.coverage.eligible)}</b></span><span>Screened <b className="text-ink">{fmtInt(run.coverage.screened)}</b></span><span>Failed <b className="text-ink">{fmtInt(run.coverage.errors)}</b></span></>}
@@ -212,7 +212,7 @@ function FindingCard({ f, run, onOpen, onMuted }: { f: Finding; run: LensRun; on
         </div>
       )}
       <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-line pt-3">
-        <Button size="sm" variant="primary" onClick={ask}>Ask the assistant</Button>
+        <Button size="sm" variant="primary" onClick={ask}>Ask mux</Button>
         <Button size="sm" onClick={() => void remember()}>Remember</Button>
         <Button size="sm" variant="ghost" onClick={() => void mute(7)}>Mute 7 days</Button>
         <Button size="sm" variant="ghost" onClick={() => void mute()}>Mute</Button>
@@ -229,7 +229,7 @@ function Watches({ watches, reload, onShow }: { watches: LensWatch[]; reload: ()
   const remove = async (w: LensWatch) => { if (confirm(`Stop and delete the watch “${w.title}”?`)) { await api(`/lens/watches/${encodeURIComponent(w.id)}`, { method: "DELETE" }).catch((e) => setErr((e as Error).message)); reload(); } };
   return (
     <div className="space-y-3">
-      <p className="text-[12.5px] text-ink-3">A watch repeats an investigation on its own. When a run finds something new that needs attention, mux logs a warning — the assistant and the healer see it. Make one with “Repeat” on a new investigation.</p>
+      <p className="text-[12.5px] text-ink-3">A watch repeats an investigation on its own. When a run finds something new that needs attention, mux logs a warning — mux (when you ask it) and the healer see it. Make one with “Repeat” on a new investigation.</p>
       <ErrorNote error={err} />
       {!watches.length && <Empty>No watches.</Empty>}
       {watches.map((w) => (
