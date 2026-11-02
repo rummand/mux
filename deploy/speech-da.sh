@@ -15,14 +15,17 @@ SPEECH_DA_KEY=$(sed -n 's/^SPEECH_DA_KEY=//p' "$SPEECH_ENV")
 curl -sf -o /dev/null http://127.0.0.1:8798/health || echo "speech-da is not answering on :8798 yet; the models are registered anyway"
 
 api() { curl -sf -X "$1" -H "Authorization: Bearer $MUX_ADMIN_TOKEN" -H "content-type: application/json" --data-binary @- "http://127.0.0.1:${MUX_PORT:-7070}/api/admin$2" >/dev/null; }
-model() { # id, display name, quality, speed, notes
-  SPEECH_DA_KEY="$SPEECH_DA_KEY" python3 - "$@" <<'PY' | api POST /models
+model() { # id, display name, quality, speed, notes: made, or brought up to date when it is there already
+  body=$(SPEECH_DA_KEY="$SPEECH_DA_KEY" python3 - "$@" <<'PY'
 import json, os, sys
 id_, name, quality, speed, notes = sys.argv[1:6]
 print(json.dumps({"id": id_, "display_name": name, "kind": "transcription", "backend": "external",
                   "base_url": "http://127.0.0.1:8798/v1", "api_key": os.environ["SPEECH_DA_KEY"], "upstream_model": id_,
                   "caps": {"multilingual": 3, "quality": int(quality), "speed": int(speed)}, "notes": notes}))
 PY
+)
+  printf '%s' "$body" | api POST /models 2>/dev/null || printf '%s' "$body" | api PATCH "/models/$1"
+  unset body
 }
 
 echo "→ Record's Danish engines in mux"
