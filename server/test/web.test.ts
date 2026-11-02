@@ -46,3 +46,13 @@ test("only the public web is read", () => {
   for (const ip of ["127.0.0.1", "10.1.2.3", "192.168.0.10", "172.20.1.1", "169.254.169.254", "100.64.0.1", "::1", "fd12::1"]) assert.equal(privateAddress(ip), true, ip);
   for (const ip of ["8.8.8.8", "93.184.216.34", "2606:4700::1111"]) assert.equal(privateAddress(ip), false, ip);
 });
+
+test("search results from SearXNG's own results page, when its JSON is off", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { resultsFromHtml } = await import("../src/router/web.js");
+  const r = resultsFromHtml(readFileSync(new URL("./fixtures-searxng.html", import.meta.url), "utf8"), 5);
+  assert.deepEqual(r.map((x) => [x.url, x.title, x.snippet]), [
+    ["https://a.example/stay", "Where to stay in Val d'Orcia", "Seven agriturismi with a pool & a view"],
+    ["https://b.example/?a=1&b=2", "Second", ""],
+  ]);
+});

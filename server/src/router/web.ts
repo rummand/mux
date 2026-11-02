@@ -35,6 +35,23 @@ export function resultsFrom(json: unknown, limit: number): WebResult[] {
   return out;
 }
 
+/**
+ * SearXNG's own results page → results, for an instance run from the official image as it is (JSON is switched on
+ * only in its settings file): each <article class="result"> has the link in its <h3> and the extract in <p class="content">.
+ */
+export function resultsFromHtml(html: string, limit: number): WebResult[] {
+  const raw: Record<string, unknown>[] = [];
+  for (const m of html.matchAll(/<article class="result[^"]*"[\s\S]*?<\/article>/g)) {
+    const a = m[0];
+    const link = /<h3>\s*<a href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/.exec(a);
+    if (!link) continue;
+    const content = /<p class="content">([\s\S]*?)<\/p>/.exec(a)?.[1] ?? "";
+    const strip = (x: string) => decode(x.replace(/<[^>]+>/g, ""));
+    raw.push({ url: decode(link[1]), title: strip(link[2]), content: strip(content) });
+  }
+  return resultsFrom({ results: raw }, limit);
+}
+
 const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", aelig: "æ", oslash: "ø", aring: "å", AElig: "Æ", Oslash: "Ø", Aring: "Å", ndash: "–", mdash: "—", hellip: "…", laquo: "«", raquo: "»" };
 const decode = (s: string) =>
   s.replace(/&(#x?[0-9a-f]+|[a-z]+);/gi, (m, e: string) => {
@@ -107,11 +124,19 @@ export async function runSearch(ctx: Ctx, body: { query?: unknown; q?: unknown; 
   if (typeof body.language === "string" && /^[a-z]{2}(-[A-Z]{2})?$/.test(body.language)) params.set("language", body.language);
   ctx.modelId = "searxng";
   ctx.route = "web.search";
-  const res = await fetch(`${config.searxngUrl.replace(/\/$/, "")}/search?${params}`, { headers: { accept: "application/json" }, signal: AbortSignal.any([signal, AbortSignal.timeout(12_000)]) }).catch((e) => {
-    throw new MuxError(502, "upstream_error", `the search engine could not be reached (${e instanceof Error ? e.name : "error"})`);
-  });
-  if (!res.ok) throw new MuxError(502, "upstream_error", `the search engine answered ${res.status}`);
-  return { object: "search", query, results: resultsFrom(await res.json().catch(() => null), limit) };
+  const ask = (format: "json" | "html") => {
+    params.set("format", format);
+    return fetch(`${config.searxngUrl.replace(/\/$/, "")}/search?${params}`, { headers: { accept: format === "json" ? "application/json" : "text/html" }, signal: AbortSignal.any([signal, AbortSignal.timeout(12_000)]) }).catch((e) => {
+      throw new MuxError(502, "upstream_error", `the search engine could not be reached (${e instanceof Error ? e.name : "error"})`);
+    });
+  };
+  const json = await ask("json");
+  if (json.ok) return { object: "search", query, results: resultsFrom(await json.json().catch(() => null), limit) };
+  // JSON not switched on in this instance's settings (it answers 403): its results page says the same
+  if (json.status !== 403) throw new MuxError(502, "upstream_error", `the search engine answered ${json.status}`);
+  const html = await ask("html");
+  if (!html.ok) throw new MuxError(502, "upstream_error", `the search engine answered ${html.status}`);
+  return { object: "search", query, results: resultsFromHtml(await html.text(), limit) };
 }
 
 export async function runRead(ctx: Ctx, body: { url?: unknown; max_chars?: unknown }, signal: AbortSignal) {
