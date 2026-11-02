@@ -89,8 +89,8 @@ const MEM: { key: keyof NonNullable<SystemLive["memory"]>; label: string; color:
   { key: "free", label: "Free", color: "var(--grid)", hint: "not used at all" },
 ];
 
-export function SystemLivePanel({ models }: { models: Record<number, string> }) {
-  const { data: l } = useApi<SystemLive>("/system/live", undefined, 2_000);
+export function SystemLivePanel({ models, machine }: { models: Record<number, string>; machine: string }) {
+  const { data: l } = useApi<SystemLive>("/system/live", { machine }, 2_000);
   const [sort, setSort] = useState<"cpu" | "mem">("cpu");
   const kinds = useMemo(() => l?.cores.map((c) => c.kind) ?? [], [l?.cores.length, l?.cores[0]?.kind]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!l) return null;
@@ -108,8 +108,8 @@ export function SystemLivePanel({ models }: { models: Record<number, string> }) 
     <>
       <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
         <Tile label="CPU · all cores" value={`${l.cpu.toFixed(0)}%`} sub={perf.length ? `P ${avg(perf).toFixed(0)}% · E ${avg(eff).toFixed(0)}%` : `${l.cores.length} cores`}><Spark values={h.map((p) => p.cpu)} /></Tile>
-        <Tile label="GPU" value={l.gpu ? `${l.gpu.pct}%` : "—"} sub={l.gpu ? `renderer ${l.gpu.renderer}% · tiler ${l.gpu.tiler}%` : "not read here"}><Spark values={h.map((p) => p.gpu ?? 0)} color="var(--series-3)" /></Tile>
-        <Tile label="GPU memory" value={l.gpu ? fmtGb(l.gpu.memGb) : "—"} sub="in use by Metal — model weights and caches" />
+        <Tile label="GPU" value={l.gpu ? `${l.gpu.pct}%` : "—"} sub={l.gpu ? `renderer ${l.gpu.renderer}% · tiler ${l.gpu.tiler}%` : "no GPU on this machine"}><Spark values={h.map((p) => p.gpu ?? 0)} color="var(--series-3)" /></Tile>
+        <Tile label="GPU memory" value={l.gpu ? fmtGb(l.gpu.memGb) : "—"} sub={l.gpu ? "in use by Metal — model weights and caches" : "no GPU on this machine"} />
         <Tile label="Network" value={<span>↓ {rate(l.net.in)}</span>} sub={`↑ ${rate(l.net.out)}`}><Spark values={h.map((p) => p.netIn + p.netOut)} max={1} color="var(--series-4)" /></Tile>
         <Tile label="Disk" value={<span>R {rate(l.disk.read)}</span>} sub={`W ${rate(l.disk.write)}`}><Spark values={h.map((p) => p.diskR + p.diskW)} max={1} color="var(--series-5)" /></Tile>
         <Tile label="Load · thermal" value={l.load.map((x) => x.toFixed(1)).join(" · ")} sub={`1 · 5 · 15 min · ${l.thermal ?? "—"} · machine up ${fmtDuration(l.uptimeS)}`} />
@@ -132,14 +132,14 @@ export function SystemLivePanel({ models }: { models: Record<number, string> }) 
       </Card>
 
       <div className="mb-4 grid gap-4 lg:grid-cols-[1fr_1fr]">
-        <Card title="Memory, as macOS splits it" subtitle={l.memory ? `${fmtGb(memTotal, 0)} · live` : "read on a Mac"}>
+        <Card title="Memory, as macOS splits it" subtitle={l.memory ? `${fmtGb(memTotal, 0)} · live` : "not read on this machine"}>
           {l.memory && (
             <>
               <div className="flex h-5 overflow-hidden rounded-md">
                 {MEM.map((m) => <div key={m.key} title={`${m.label}: ${fmtGb(l.memory![m.key])}`} className="h-full transition-[width] duration-700" style={{ width: `${(100 * l.memory![m.key]) / memTotal}%`, background: m.color }} />)}
               </div>
               <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-1.5 text-[12.5px]">
-                {MEM.map((m) => (
+                {MEM.filter((m) => m.key === "free" || l.memory![m.key] > 0.01).map((m) => (
                   <div key={m.key} className="flex items-baseline gap-2" title={m.hint}>
                     <i className="inline-block h-2.5 w-2.5 shrink-0 rounded-sm" style={{ background: m.color }} />
                     <span className="text-ink-2">{m.label}</span><span className="ml-auto font-medium num">{fmtGb(l.memory![m.key])}</span>
@@ -149,9 +149,11 @@ export function SystemLivePanel({ models }: { models: Record<number, string> }) 
             </>
           )}
         </Card>
-        <Card title="GPU" subtitle={l.gpu ? `device ${l.gpu.pct}% · renderer ${l.gpu.renderer}% · tiler ${l.gpu.tiler}% · ${fmtGb(l.gpu.memGb)} in use` : "read on a Mac"}>
-          <Spark values={h.map((p) => p.gpu ?? 0)} max={Math.max(100, gpuMax)} color="var(--series-3)" height={92} />
-          <div className="mt-1 flex justify-between text-[10.5px] text-ink-3"><span>5 minutes ago</span><span>now</span></div>
+        <Card title="GPU" subtitle={l.gpu ? `device ${l.gpu.pct}% · renderer ${l.gpu.renderer}% · tiler ${l.gpu.tiler}% · ${fmtGb(l.gpu.memGb)} in use` : "no GPU on this machine"}>
+          {l.gpu ? <>
+            <Spark values={h.map((p) => p.gpu ?? 0)} max={Math.max(100, gpuMax)} color="var(--series-3)" height={92} />
+            <div className="mt-1 flex justify-between text-[10.5px] text-ink-3"><span>5 minutes ago</span><span>now</span></div>
+          </> : <div className="py-6 text-center text-[12.5px] text-ink-3">Nothing to show: models run on the machines with GPUs.</div>}
         </Card>
       </div>
 

@@ -103,6 +103,8 @@ export interface SystemInfo {
   budget: { budgetGb: number; usedGb: number; headroomGb: number; maxLoaded: number };
   series: { ts: number; mem_total_gb: number; mem_used_gb: number; mem_free_gb: number; swap_gb: number; pressure: number; mux_gb: number; loaded: string; cpu: number; disk_free_gb: number; cpu_pct: number | null; gpu_pct: number | null; net_in: number | null; net_out: number | null; disk_r: number | null; disk_w: number | null }[];
   version: string; uptimeS: number; role?: "all" | "gateway" | "node"; name?: string;
+  /** This machine ("") and the mux nodes it can show; `machine` is the one shown. */
+  machines?: { id: string; name: string; role?: string }[]; machine?: string;
 }
 /** GET /system/live: the machine every 2 s (server/src/runtime/live.ts). */
 export interface SystemLive {

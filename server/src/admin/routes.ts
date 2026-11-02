@@ -12,7 +12,7 @@ import { registerLens } from "../lens.js";
 import { deleteModel, deleteRoute, getModel, listModels, listRoutes, upsertModel, upsertRoute, type Model } from "../models.js";
 import { getRoute } from "../models.js";
 import { snapshot } from "../router/health.js";
-import { addCloudModel, addFreeTier, getProvider, joinNode, listProviders, PRESETS, remoteModels, removeProvider, saveProvider, syncNode, type Provider } from "../providers.js";
+import { addCloudModel, addFreeTier, getProvider, joinNode, listProviders, nodeApi, PRESETS, remoteModels, removeProvider, saveProvider, syncNode, type Provider } from "../providers.js";
 import { decide, features } from "../router/select.js";
 import { inflightNow } from "../router/limits.js";
 import { live } from "../router/metering.js";
@@ -57,7 +57,16 @@ export function registerAdmin(app: FastifyInstance) {
       const q = req.query as { range?: string; tenant?: string; model?: string; agent?: string; provider?: string; route?: string; tz?: string };
       return overview(q.range, q);
     });
-    api.get("/system", async (req) => {
+    // Another machine's System page, through this one: a gateway shows its nodes' (`?machine=<provider id>`).
+    const machines = () => [{ id: "", name: config.name, role: config.role }, ...listProviders().filter((p) => p.kind === "mux" && p.enabled).map((p) => ({ id: p.id, name: p.name, role: "node" as const }))];
+    const remote = (q: unknown) => {
+      const id = (q as { machine?: string }).machine;
+      return id ? listProviders().find((p) => p.id === id && p.kind === "mux") ?? null : undefined;
+    };
+    api.get("/system", async (req, reply) => {
+      const node = remote(req.query);
+      if (node === null) return reply.code(404).send({ error: "no such machine" });
+      if (node) return { ...(await nodeApi<Record<string, unknown>>(node, "GET", `/system?range=${encodeURIComponent((req.query as { range?: string }).range ?? "6h")}`)), machines: machines(), machine: node.id };
       const [sys, inst] = await Promise.all([systemStats(), status()]);
       const s = settings();
       return {
@@ -65,10 +74,14 @@ export function registerAdmin(app: FastifyInstance) {
         budget: { budgetGb: s.memoryBudgetGb, usedGb: inst.reduce((a, i) => a + i.estimateGb, 0), headroomGb: s.memoryHeadroomGb, maxLoaded: s.maxLoaded },
         series: systemSeries((req.query as { range?: string }).range),
         version: process.env.npm_package_version ?? "0.1.0", uptimeS: Math.round(process.uptime()), role: config.role, name: config.name,
-        presence: config.role === "gateway" ? null : presence(),
+        presence: config.role === "gateway" ? null : presence(), machines: machines(), machine: "",
       };
     });
-    api.get("/system/live", async () => liveSystem((await status()).map((i) => i.pid)));
+    api.get("/system/live", async (req, reply) => {
+      const node = remote(req.query);
+      if (node === null) return reply.code(404).send({ error: "no such machine" });
+      return node ? nodeApi(node, "GET", "/system/live", undefined, 5_000) : liveSystem((await status()).map((i) => i.pid));
+    });
     api.get("/events", async (req) => {
       const q = req.query as { limit?: string; level?: string };
       return db.prepare(`SELECT * FROM events ${q.level ? "WHERE level = ?" : ""} ORDER BY ts DESC LIMIT ?`).all(...(q.level ? [q.level] : []), Math.min(Math.max(Math.floor(Number(q.limit)) || 200, 1), 1000));

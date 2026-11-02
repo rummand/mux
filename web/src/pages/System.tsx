@@ -4,16 +4,23 @@ import { SERIES, TimeChart } from "../components/charts";
 import { SystemLivePanel } from "../components/SystemLive";
 import { Badge, Button, Card, ErrorNote, Field, Input, Meter, PageHeader, Segmented, StatusDot, Table, Td, Th, Toggle } from "../components/ui";
 import { fmtAgo, fmtBytes, fmtDuration, fmtGb, fmtTime } from "../format";
-import { useApi } from "../hooks";
+import { useApi, usePersisted } from "../hooks";
+
+/** What a machine is called on this page: the Railway gateway is "Railway mux". */
+export const machineLabel = (name: string) => (name === "railway" ? "Railway mux" : name);
 
 export default function SystemPage() {
   const [range, setRange] = useState("6h");
-  const { data, error } = useApi<SystemInfo>("/system", { range }, 10_000);
+  const [machine, setMachine] = usePersisted("mux.system.machine", "");
+  const { data, error } = useApi<SystemInfo>("/system", { range, machine }, 10_000);
   const events = useApi<MuxEvent[]>("/events", { limit: 150 }, 10_000);
   const [level, setLevel] = useState<"all" | MuxEvent["level"]>("all");
-  if (error) return <ErrorNote error={error} />;
+  if (error) return <><ErrorNote error={error} />{machine && <Button className="mt-3" onClick={() => setMachine("")}>Show this machine</Button>}</>;
   if (!data) return null;
   const s = data.system;
+  const here = data.machines?.find((m) => m.id === (data.machine ?? "")) ?? { id: "", name: data.name ?? "", role: data.role };
+  const remote = !!data.machine;
+  const shared = here.name === "railway";
   const series = data.series.map((p) => ({ t: p.ts, used: p.mem_used_gb, free: p.mem_free_gb, swap: p.swap_gb, mux: p.mux_gb, disk: p.disk_free_gb, load: p.cpu, cpuPct: p.cpu_pct, gpuPct: p.gpu_pct, netIn: p.net_in, netOut: p.net_out, diskR: p.disk_r, diskW: p.disk_w }));
   const models = Object.fromEntries(data.instances.map((i) => [i.pid, i.id]));
   const rate = (v: number) => `${fmtBytes(v)}/s`;
@@ -21,7 +28,7 @@ export default function SystemPage() {
   const pressure = s.pressure === 4 ? { tone: "bad" as const, label: "critical" } : s.pressure === 2 ? { tone: "warn" as const, label: "warn" } : { tone: "good" as const, label: "normal" };
   return (
     <>
-      <PageHeader title="System" subtitle={`${s.chip} · ${s.cores} cores · ${s.memTotalGb.toFixed(0)} GB unified memory · mux up ${fmtDuration(data.uptimeS)}`} actions={<Segmented value={range} onChange={setRange} options={[{ value: "1h", label: "1h" }, { value: "6h", label: "6h" }, { value: "24h", label: "24h" }]} />} />
+      <PageHeader title={`System · ${machineLabel(here.name)}`} subtitle={shared ? `a Linux container on Railway's shared server — the ${s.cores} cores and ${s.memTotalGb.toFixed(0)} GB are the whole server's, shared with others · no GPU · mux up ${fmtDuration(data.uptimeS)}` : `${s.chip} · ${s.cores} cores · ${s.memTotalGb.toFixed(0)} GB unified memory · mux up ${fmtDuration(data.uptimeS)}`} actions={<div className="flex gap-2">{(data.machines?.length ?? 0) > 1 && <Segmented value={data.machine ?? ""} onChange={setMachine} options={data.machines!.map((x) => ({ value: x.id, label: machineLabel(x.name) }))} />}<Segmented value={range} onChange={setRange} options={[{ value: "1h", label: "1h" }, { value: "6h", label: "6h" }, { value: "24h", label: "24h" }]} /></div>} />
       <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <Card><div className="text-[11px] uppercase tracking-wide text-ink-3">Memory pressure</div><div className="mt-2"><StatusDot tone={pressure.tone} label={pressure.label} /></div><div className="mt-1 text-[11.5px] text-ink-3">macOS's own reading; mux unloads idle models above normal</div></Card>
         <Card><div className="text-[11px] uppercase tracking-wide text-ink-3">Free memory</div><div className="mt-1 text-lg font-semibold num">{fmtGb(s.memFreeGb)}</div><Meter value={s.memUsedGb} max={s.memTotalGb} /></Card>
@@ -29,7 +36,7 @@ export default function SystemPage() {
         <Card><div className="text-[11px] uppercase tracking-wide text-ink-3">mux model budget</div><div className="mt-1 text-lg font-semibold num">{data.budget.usedGb.toFixed(1)} / {data.budget.budgetGb} GB</div><Meter value={data.budget.usedGb} max={data.budget.budgetGb} /></Card>
         <Card><div className="text-[11px] uppercase tracking-wide text-ink-3">Disk free · load</div><div className="mt-1 text-lg font-semibold num">{s.diskFreeGb.toFixed(0)} GB</div><div className="text-[11.5px] text-ink-3 num">load avg {s.load1.toFixed(2)}</div></Card>
       </div>
-      <SystemLivePanel models={models} />
+      <SystemLivePanel models={models} machine={data.machine ?? ""} />
       <div className="grid gap-4 lg:grid-cols-2">
         <Card title="CPU and GPU" subtitle="% busy, averaged over each 30 seconds">
           <TimeChart data={series} bucketMs={bucket} yFormat={(v) => `${Math.round(v)}`} series={[
@@ -78,7 +85,7 @@ export default function SystemPage() {
         </Table>
         {Object.keys(data.failures).length > 0 && <div className="border-t border-line p-4 text-[12px]">{Object.entries(data.failures).map(([id, f]) => <div key={id} className="text-bad"><b>{id}</b> failed {fmtAgo(f.at)}: {f.error.split("\n")[0]}</div>)}</div>}
       </Card>
-      <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_420px]">
+      {!remote && <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_420px]">
         <Card title="Events" pad={false} actions={<Segmented value={level} onChange={setLevel} options={[{ value: "all", label: "All" }, { value: "info", label: "Info" }, { value: "warn", label: "Warn" }, { value: "error", label: "Error" }]} />}>
           <div className="max-h-[520px] overflow-y-auto">
             {(events.data ?? []).filter((e) => level === "all" || e.level === level).map((e) => (
@@ -91,7 +98,7 @@ export default function SystemPage() {
           </div>
         </Card>
         <SettingsCard />
-      </div>
+      </div>}
     </>
   );
 }

@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { readdir, readFile } from "node:fs/promises";
 import { cpus, loadavg, totalmem, uptime } from "node:os";
 import { promisify } from "node:util";
 
@@ -12,6 +13,9 @@ const KEEP = 150; // 5 minutes of 2-second samples
  * without sudo — the GPU's utilisation and memory (the accelerator's PerformanceStatistics), memory as Activity Monitor
  * splits it (vm_stat), network and disk throughput, thermal warnings, and the processes using the most. The owner loves
  * data; the System page shows all of it. Power draw and temperatures need `sudo powermetrics`, so they are not here.
+ *
+ * On Linux (a gateway's container, a Linux node) the same comes from /proc: memory from meminfo, network from
+ * net/dev, disk from diskstats, processes from each /proc/<pid> — there is no GPU reading there.
  *
  * The cheap reading (cores) runs always; the commands run every 2 s while someone is looking (GET /system/live in the
  * last minute), and every 30 s otherwise so the long-range samples have them.
@@ -103,23 +107,54 @@ async function sampleMac() {
   let diskR = 0, diskW = 0;
   for (const m of disk.matchAll(/"Bytes \(Read\)"=(\d+)/g)) diskR += Number(m[1]);
   for (const m of disk.matchAll(/"Bytes \(Write\)"=(\d+)/g)) diskW += Number(m[1]);
-  const ts = Date.now();
-  if (prevIo) {
-    const s = (ts - prevIo.ts) / 1000;
-    const r = (a: number, b: number) => (s > 0 && a >= b ? (a - b) / s : 0);
-    rates = { netIn: r(netIn, prevIo.netIn), netOut: r(netOut, prevIo.netOut), diskR: r(diskR, prevIo.diskR), diskW: r(diskW, prevIo.diskW) };
-  }
-  prevIo = { ts, netIn, netOut, diskR, diskW };
+  ioRates({ netIn, netOut, diskR, diskW });
   if (therm != null) {
     const level = /CPU_Speed_Limit\s*=\s*(\d+)/.exec(therm)?.[1];
     thermal = /No thermal warning level has been recorded/.test(therm) ? "nominal" : level ? `CPU limited to ${level}%` : /thermal warning level/i.test(therm) ? therm.split("\n").find((l) => /warning level/i.test(l))?.trim() ?? "warning" : "nominal";
   }
 }
 
+const DISK = /^(sd[a-z]+|vd[a-z]+|xvd[a-z]+|nvme\d+n\d+|mmcblk\d+)$/;
+async function sampleLinux() {
+  const [mi, nd, ds] = await Promise.all(["/proc/meminfo", "/proc/net/dev", "/proc/diskstats"].map((f) => readFile(f, "utf8").catch(() => "")));
+  if (mi) {
+    const k = (name: string) => (num(new RegExp(`^${name}:\\s+(\\d+)`, "m"), mi) || 0) * 1024 / GB;
+    const total = k("MemTotal"), free = k("MemFree"), cached = k("Cached") + k("Buffers") + k("SReclaimable");
+    mem = { wired: k("Unevictable") + k("Mlocked"), apps: Math.max(0, total - free - cached), compressed: 0, cached, free };
+  }
+  let netIn = 0, netOut = 0;
+  for (const line of nd.split("\n").slice(2)) {
+    const [name, rest] = line.split(":");
+    if (!rest || name.trim() === "lo") continue;
+    const f = rest.trim().split(/\s+/).map(Number);
+    netIn += f[0] || 0; netOut += f[8] || 0;
+  }
+  let diskR = 0, diskW = 0;
+  for (const line of ds.split("\n")) {
+    const f = line.trim().split(/\s+/);
+    if (!DISK.test(f[2] ?? "")) continue;
+    diskR += Number(f[5]) * 512 || 0; diskW += Number(f[9]) * 512 || 0;
+  }
+  ioRates({ netIn, netOut, diskR, diskW });
+}
+
+function ioRates(io: { netIn: number; netOut: number; diskR: number; diskW: number }) {
+  const ts = Date.now();
+  if (prevIo) {
+    const s = (ts - prevIo.ts) / 1000;
+    const r = (a: number, b: number) => (s > 0 && a >= b ? (a - b) / s : 0);
+    rates = { netIn: r(io.netIn, prevIo.netIn), netOut: r(io.netOut, prevIo.netOut), diskR: r(io.diskR, prevIo.diskR), diskW: r(io.diskW, prevIo.diskW) };
+  }
+  prevIo = { ts, ...io };
+}
+
 async function tick() {
   sampleCores();
   const watched = Date.now() - lastAsk < 60_000;
-  if (process.platform === "darwin" && (watched || ticks % 15 === 0)) await sampleMac().catch(() => undefined);
+  if (watched || ticks % 15 === 0) {
+    if (process.platform === "darwin") await sampleMac().catch(() => undefined);
+    else if (process.platform === "linux") await sampleLinux().catch(() => undefined);
+  }
   ticks++;
   history.push({ ts: Date.now(), cores: current.map((v) => Math.round(v)), cpu: avg(current), gpu: gpu?.pct ?? null, ...rates });
   if (history.length > KEEP) history.splice(0, history.length - KEEP);
@@ -151,14 +186,39 @@ let procs: { ts: number; list: Proc[] } = { ts: 0, list: [] };
 /** The processes using the most CPU and the most memory (`ps`), and those in `keep` (mux's model servers), at most every 2 s. */
 async function topProcesses(keep: number[]): Promise<Proc[]> {
   if (Date.now() - procs.ts < TICK) return procs.list;
-  const out = await run("ps", ["-Aceo", "pid=,pcpu=,rss=,comm="], { maxBuffer: 8 * 1024 * 1024 }).then((r) => r.stdout).catch(() => "");
-  const all = out.split("\n").map((l) => /^\s*(\d+)\s+([\d.]+)\s+(\d+)\s+(.*)$/.exec(l)).filter((m): m is RegExpExecArray => !!m)
-    .map((m) => ({ pid: Number(m[1]), cpu: Number(m[2]), rssGb: (Number(m[3]) * 1024) / GB, name: m[4].trim() }));
+  const all = process.platform === "linux" ? await linuxProcesses() : await psProcesses();
   const byCpu = [...all].sort((a, b) => b.cpu - a.cpu).slice(0, 12);
   const byMem = [...all].sort((a, b) => b.rssGb - a.rssGb).slice(0, 12);
   const list = [...new Map([...byCpu, ...byMem, ...all.filter((p) => keep.includes(p.pid))].map((p) => [p.pid, p])).values()];
   procs = { ts: Date.now(), list };
   return list;
+}
+
+async function psProcesses(): Promise<Proc[]> {
+  const out = await run("ps", ["-Aceo", "pid=,pcpu=,rss=,comm="], { maxBuffer: 8 * 1024 * 1024 }).then((r) => r.stdout).catch(() => "");
+  const all = out.split("\n").map((l) => /^\s*(\d+)\s+([\d.]+)\s+(\d+)\s+(.*)$/.exec(l)).filter((m): m is RegExpExecArray => !!m)
+    .map((m) => ({ pid: Number(m[1]), cpu: Number(m[2]), rssGb: (Number(m[3]) * 1024) / GB, name: m[4].trim() }));
+  return all;
+}
+
+/** /proc/<pid>/stat: CPU from the change in its ticks since the last reading (100 a second), memory from its RSS pages. */
+let prevTicks = new Map<number, { ticks: number; ts: number }>();
+async function linuxProcesses(): Promise<Proc[]> {
+  const pids = (await readdir("/proc").catch(() => [] as string[])).filter((d) => /^\d+$/.test(d)).map(Number);
+  const ts = Date.now(), next = new Map<number, { ticks: number; ts: number }>();
+  const all = (await Promise.all(pids.map(async (pid) => {
+    const st = await readFile(`/proc/${pid}/stat`, "utf8").catch(() => "");
+    const m = /^\d+ \((.*)\) (.*)$/s.exec(st.trim());
+    if (!m) return null;
+    const f = m[2].split(" ");
+    const ticks = Number(f[11]) + Number(f[12]), rssPages = Number(f[21]);
+    next.set(pid, { ticks, ts });
+    const p = prevTicks.get(pid);
+    const cpu = p && ts > p.ts ? Math.max(0, ((ticks - p.ticks) / 100) / ((ts - p.ts) / 1000) * 100) : 0;
+    return { pid, name: m[1], cpu, rssGb: (rssPages * 4096) / GB };
+  }))).filter((p): p is Proc => !!p);
+  prevTicks = next;
+  return all;
 }
 
 export async function live(keep: number[] = []) {
