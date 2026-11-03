@@ -21,6 +21,7 @@ import BenchmarksPage from "./pages/Benchmarks";
 import SystemPage from "./pages/System";
 import PlaygroundPage from "./pages/Playground";
 import ProvidersPage from "./pages/Providers";
+import AgentsPage from "./pages/Agents";
 import ServicesPage from "./pages/Services";
 import HealthPage from "./pages/Health";
 import ModelDetailPage from "./pages/ModelDetail";
@@ -32,6 +33,7 @@ const icon = (d: string) => <svg viewBox="0 0 24 24" className="h-4 w-4" fill="n
 const NAV: { to: string; label: string; icon: ReactNode; group?: string }[] = [
   { to: "/", label: "Ask mux", icon: <span className="text-accent">{sparkle}</span> },
   { to: "/brain", label: "Brain", icon: brainIcon },
+  { to: "/agents", label: "Agents", icon: icon("M12 3v3M7 9h10a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2zM9.5 13h.01M14.5 13h.01M3 13v2M21 13v2") },
   { to: "/journal", label: "What mux changed", icon: icon("M12 8v4l3 2M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5") },
   { to: "/overview", label: "Overview", group: "Traffic", icon: icon("M3 13h4v8H3zM10 9h4v12h-4zM17 4h4v17h-4z") },
   { to: "/tenants", label: "Tenants", icon: icon("M4 20v-1a5 5 0 0 1 5-5h0a5 5 0 0 1 5 5v1M9 10a3 3 0 1 0 0-6 3 3 0 0 0 0 6M17 11a2.5 2.5 0 1 0 0-5M20 20v-1a4 4 0 0 0-3-3.9") },
@@ -165,6 +167,7 @@ function Shell() {
             <Route path="/journal" element={<JournalPage />} />
             <Route path="/providers" element={<ProvidersPage />} />
             <Route path="/services" element={<ServicesPage />} />
+            <Route path="/agents" element={<AgentsPage />} />
             <Route path="/providers/*" element={<ProviderDetailPage />} />
             <Route path="/benchmarks" element={<Scoped page={BenchmarksPage} />} />
             <Route path="/playground" element={<PlaygroundPage />} />

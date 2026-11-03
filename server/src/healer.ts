@@ -492,6 +492,9 @@ ${(await recall(`${inc.title} ${inc.subject} ${inc.kind}`)).block}`;
 
 /* ── Admin API ──────────────────────────────────────────────────────────────────────────────────────────────── */
 
+/** For the Agents page: when the healer last looked, what is failing now, and the doctor. */
+export const healerState = () => ({ lastTick, ticks, doctorBusy, doctorLast, failing: [...checks.values()].filter((c) => !c.ok).map((c) => ({ label: c.label, detail: c.detail })), checks: checks.size });
+
 export function registerHealer(api: FastifyInstance) {
   api.get("/healer", async () => {
     const s = settings();

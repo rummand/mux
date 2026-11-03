@@ -35,6 +35,7 @@ import { modelResources, providerResources, tenantResources } from "./resources.
 import { entries, journal } from "../journal.js";
 import { registerKeeper } from "../keeper.js";
 import { registerServices } from "../services.js";
+import { registerAgents } from "../agents.js";
 
 const ok = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 
@@ -324,6 +325,7 @@ export function registerAdmin(app: FastifyInstance) {
     registerBrain(api);
     registerKeeper(api);
     registerServices(api);
+    registerAgents(api);
     registerPresence(api);
     registerJoin(api);
     registerExperiments(api);

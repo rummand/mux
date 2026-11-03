@@ -155,6 +155,7 @@ export const API_REFERENCE = `Admin API (paths under /api/admin). Tenants, route
 - GET /overview?range=15m|1h|6h|24h|7d|30d&tenant=&model=&agent= — totals, latency/ttft/tps percentiles, cost, breakdowns by tenant/provider/model/route/endpoint/agent/user/error
 - GET /system?range= — memory, swap, pressure, disk, loaded instances, model health and cooldowns, failures, in-flight, memory budget, role and name
 - GET /system/live — every core's load (performance/efficiency), GPU %, memory split, network, disk, top processes, now and the last 5 minutes
+- GET /agents — your agents that act on mux (healer & doctor, experiments autopilot, Lens watches, brain keeper): on/off, schedule, last run and its outcome, what each changed; run one with the POST path it lists (a change: needs the owner's approval)
 - GET /services?range= — shared services (not models): web search via SearXNG (/v1/search) and the page reader (/v1/read): health and uptime, calls, errors, latency, tenants, per search engine how often it answered, how fast, and why it failed
 - GET /events?limit=&level=info|warn|error — mux's event log (loads, unloads, failures, settings, providers)
 - GET /models — every model with its instance, provider, last benchmark, 24h usage

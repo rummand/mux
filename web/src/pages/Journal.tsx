@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { askAssistant, Markdown } from "../components/Assistant";
 import { Badge, Card, Empty, PageHeader, Select } from "../components/ui";
 import { fmtAgo, fmtTime } from "../format";
@@ -19,7 +19,8 @@ export const actorTone = (a: string) => (a === "healer" || a === "doctor" ? "war
 const link = (e: JournalEntry) => e.kind === "brain" && e.ref ? `/brain?page=${encodeURIComponent(e.ref)}` : e.kind === "experiment" ? "/experiments" : e.kind === "route" ? "/routes" : e.kind === "model" && e.ref ? `/models/${e.ref}` : e.kind === "repair" ? "/health" : e.kind === "keeper" ? "/brain" : null;
 
 export default function JournalPage() {
-  const [actor, setActor] = useState("");
+  const [params] = useSearchParams();
+  const [actor, setActor] = useState(params.get("actor") ?? "");
   const [kind, setKind] = useState("");
   const { data } = useApi<JournalEntry[]>("/journal", { limit: 300, actor, kind }, 15_000);
   return (

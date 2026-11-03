@@ -198,7 +198,12 @@ export async function tickExperiments() {
 /* ── The autopilot: mux choosing what to try ────────────────────────────────────────────────────────────────── */
 
 export interface Pilot { at: number; actions: string[]; blocked: string[] }
-let pilot: Pilot = { at: 0, actions: [], blocked: [] };
+// The last run, kept across restarts (the Agents page shows it)
+db.exec("CREATE TABLE IF NOT EXISTS autopilot_runs (ts INTEGER PRIMARY KEY, actions TEXT NOT NULL, blocked TEXT NOT NULL)");
+let pilot: Pilot = (() => {
+  const r = db.prepare("SELECT * FROM autopilot_runs ORDER BY ts DESC LIMIT 1").get() as { ts: number; actions: string; blocked: string } | undefined;
+  return r ? { at: r.ts, actions: json<string[]>(r.actions, []), blocked: json<string[]>(r.blocked, []) } : { at: 0, actions: [], blocked: [] };
+})();
 export const lastPilot = () => pilot;
 
 /** The same pair was judged in the last week: let it be. */
@@ -274,6 +279,8 @@ async function autopilotAs(): Promise<Pilot> {
   }
   for (const a of out.actions) event("info", "experiments", `autopilot: ${a}`);
   pilot = out;
+  db.prepare("INSERT OR REPLACE INTO autopilot_runs(ts, actions, blocked) VALUES(?, ?, ?)").run(out.at, JSON.stringify(out.actions), JSON.stringify(out.blocked));
+  db.prepare("DELETE FROM autopilot_runs WHERE ts < ?").run(now() - 30 * 86400_000);
   return out;
 }
 
