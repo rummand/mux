@@ -117,12 +117,17 @@ export interface SystemLive {
 }
 export interface Settings { memoryBudgetGb: number; memoryHeadroomGb: number; diskReserveGb: number; keepAliveMin: number; maxLoaded: number; retentionDays: number; pressureGuard: boolean; logBodies: boolean; assistantModel?: string; selfHeal?: boolean; selfHealAi?: boolean }
 export interface MuxEvent { id: number; ts: number; level: "info" | "warn" | "error"; source: string; message: string; data: string | null }
-export interface Finding { key: string; title: string; kind: "needs-attention" | "pattern"; priority: "high" | "medium" | "low"; description: string; suggestion: string; evidence: { request_id: string; quote: string }[]; source: "rules" | "model"; status?: "new" | "ongoing" }
+export interface Finding { key: string; title: string; kind: "needs-attention" | "pattern"; priority: "high" | "medium" | "low"; description: string; suggestion: string; evidence: { request_id: string; quote: string }[]; source: "rules" | "model"; status?: "new" | "ongoing";
+  /** A model's finding: "checked" when its claims held against mux's own data, "guess" when none could be checked. */
+  confidence?: "checked" | "guess"; checks?: LensCheck[] }
+export interface LensCheck { claim: string; ok: boolean | null; actual: string }
 export interface LensMetrics { requests: number; errorRate: number; latencyP95: number | null; ttftP50: number | null; tokensPerRequest: number; costUsd: number }
 export interface LensFilters { tenantId?: string; agent?: string; model?: string; hours?: number; sample?: number }
 export interface LensRun {
   id: string; ts: number; status: string; title: string; filters: LensFilters; criteria: string; model_id: string | null; coverage: { eligible: number; screened: number; errors: number } | null;
   findings: Finding[]; duration_ms: number | null; error: string | null; watch_id: string | null; resolved: { key: string; title: string }[]; baseline: { now: LensMetrics; before: LensMetrics } | null; muted: number | null;
+  /** The model's findings whose claims did not hold against the traffic: thrown away, and why. */
+  rejected?: { title: string; reason: string; checks: LensCheck[] }[];
 }
 export interface LensWatch { id: string; title: string; filters: LensFilters; criteria: string; every_hours: number; use_model: boolean; model_id: string | null; enabled: boolean; last_run: number | null; last_run_id: string | null; next_run: number | null }
 export interface LensMute { key: string; title: string; until: number | null; created_at: number }

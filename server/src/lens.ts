@@ -6,6 +6,7 @@ import { getModel, getRoute, listModels } from "./models.js";
 import { acquire, release } from "./runtime/manager.js";
 import { getTenant } from "./tenants.js";
 import { outside } from "./router/border.js";
+import { CLAIM_SCHEMA, CLAIMS_HELP, ground, type Check, type Claim } from "./lens-checks.js";
 
 /**
  * Lens (after LiteLLM's): an investigation reads a slice of traffic — a tenant, an agent, a time window — and writes
@@ -21,6 +22,8 @@ import { outside } from "./router/border.js";
 export interface Finding {
   key: string; title: string; kind: "needs-attention" | "pattern"; priority: "high" | "medium" | "low";
   description: string; suggestion: string; evidence: { request_id: string; quote: string }[]; source: "rules" | "model"; status?: "new" | "ongoing";
+  /** A model's finding: "checked" when its claims held against the traffic, "guess" when none could be checked. */
+  confidence?: "checked" | "guess"; checks?: Check[];
 }
 export interface LensFilters { tenantId?: string; agent?: string; model?: string; hours?: number; sample?: number }
 export interface Metrics { requests: number; errorRate: number; latencyP95: number | null; ttftP50: number | null; tokensPerRequest: number; costUsd: number }
@@ -201,17 +204,19 @@ function lastUser(body: string): string {
 }
 
 const FINDINGS_SCHEMA = {
-  type: "object", required: ["findings"], properties: { findings: { type: "array", maxItems: 6, items: { type: "object", required: ["title", "kind", "priority", "description", "suggestion", "evidence"], properties: {
+  type: "object", required: ["findings"], properties: { findings: { type: "array", maxItems: 6, items: { type: "object", required: ["title", "kind", "priority", "description", "suggestion", "evidence", "claims"], properties: {
     title: { type: "string" }, kind: { enum: ["needs-attention", "pattern"] }, priority: { enum: ["high", "medium", "low"] }, description: { type: "string" }, suggestion: { type: "string" },
-    evidence: { type: "array", maxItems: 4, items: { type: "object", required: ["request_id", "quote"], properties: { request_id: { type: "string" }, quote: { type: "string" } } } } } } } },
+    evidence: { type: "array", maxItems: 4, items: { type: "object", required: ["request_id", "quote"], properties: { request_id: { type: "string" }, quote: { type: "string" } } } },
+    claims: { type: "array", maxItems: 4, items: CLAIM_SCHEMA } } } } },
 };
 
 /** A model's finding, named the same way twice, is the same finding: its title without numbers. */
 export const modelKey = (title: string) => `model|${title.toLowerCase().replace(/\d+([.,]\d+)?/g, "#").replace(/[^\p{L}#]+/gu, " ").trim().slice(0, 80)}`;
 
-async function modelFindings(rows: Row[], criteria: string, modelId: string | undefined): Promise<{ findings: Finding[]; model: string | null }> {
+export type Rejected = { title: string; reason: string; checks: Check[] };
+async function modelFindings(rows: Row[], criteria: string, modelId: string | undefined): Promise<{ findings: Finding[]; rejected: Rejected[]; model: string | null }> {
   const pick = modelId ? getModel(modelId) : (getRoute("smart")?.candidates ?? []).concat(getRoute("auto")?.candidates ?? []).map(getModel).find((m) => m?.enabled && m.kind === "chat") ?? listModels().find((m) => m.enabled && m.kind === "chat");
-  if (!pick) return { findings: [], model: null };
+  if (!pick) return { findings: [], rejected: [], model: null };
   const top = (k: (r: Row) => string | null) => [...groupBy(rows, (r) => k(r) ?? "")].sort((a, b) => b[1].length - a[1].length).slice(0, 5).map(([v]) => v).filter(Boolean).join(" ");
   const mem = await recall(`${criteria} ${top((r) => r.tenant_id)} ${top((r) => r.model_id)}`, 6);
   const up = await acquire(pick);
@@ -222,7 +227,9 @@ async function modelFindings(rows: Row[], criteria: string, modelId: string | un
       messages: [
         { role: "system", content: `You review the traffic of an LLM gateway serving SaaS agents. Find recurring problems and notable patterns in the digest. Each finding must cite request ids from the digest (samples or tenantModels examples) as evidence, quoting what shows the problem. Be specific and practical; do not invent requests. Reply as JSON.
 
-mux's brain holds what its operators decided and expect: rules for tenants, preferences, known problems. Check the traffic against it — a tenant on a provider or model it must not use, a known problem coming back — and make each breach a high-priority finding that needs attention, naming the brain page. Do not report what the brain says when the traffic keeps to it.
+mux's brain holds what its operators decided and expect: rules for tenants, preferences, known problems. Check the traffic against it — a tenant on a provider or model it must not use, a known problem coming back — and make each breach a high-priority finding that needs attention, naming the brain page — with a claim that shows the breach. Do not report what the brain says when the traffic keeps to it, and do not report what you cannot show.
+
+${CLAIMS_HELP}
 
 ## From the brain
 ${mem.block}` },
@@ -231,8 +238,11 @@ ${mem.block}` },
     if (!r.ok) throw new Error(`${r.status} ${(await r.text()).slice(0, 200)}`);
     const j = (await r.json()) as { choices: { message: { content: string } }[] };
     const ids = new Set(rows.map((x) => x.id));
-    const found = (JSON.parse(j.choices[0].message.content).findings as Omit<Finding, "key" | "source">[]).map((f) => ({ ...f, key: modelKey(f.title), source: "model" as const, evidence: f.evidence.filter((e) => ids.has(e.request_id)) }));
-    return { findings: found, model: pick.id };
+    const raw = (JSON.parse(j.choices[0].message.content).findings as (Omit<Finding, "key" | "source"> & { claims?: Claim[] })[]).map((f) => ({ ...f, key: modelKey(f.title), source: "model" as const, evidence: f.evidence.filter((e) => ids.has(e.request_id)) }));
+    // Each finding against mux's own data before anyone sees it (lens-checks.ts)
+    const findings: Finding[] = [], rejected: Rejected[] = [];
+    for (const f of raw) { const g = ground(f, rows); if ("finding" in g) findings.push(g.finding); else rejected.push(g.rejected); }
+    return { findings, rejected, model: pick.id };
   } finally { release(pick.id); }
 }
 
@@ -272,8 +282,9 @@ export function startInvestigation(input: { title?: string; filters: LensFilters
       if (filters.sample && filters.sample < 100) rows = rows.filter(() => Math.random() * 100 < filters.sample!);
       let found = rules(rows, t0);
       let model: string | null = null;
+      let rejected: Rejected[] = [];
       if (input.useModel !== false && rows.length) {
-        try { const m = await modelFindings(rows, input.criteria || "Is the gateway serving its tenants well? What fails, what is slow, what wastes tokens?", input.modelId); found.push(...m.findings); model = m.model; }
+        try { const m = await modelFindings(rows, input.criteria || "Is the gateway serving its tenants well? What fails, what is slow, what wastes tokens?", input.modelId); found.push(...m.findings); rejected = m.rejected; model = m.model; }
         catch (e) { event("warn", "lens", `${id}: the model's pass failed: ${(e as Error).message}`); }
       }
       const mutes = muted();
@@ -283,8 +294,8 @@ export function startInvestigation(input: { title?: string; filters: LensFilters
       const prev = db.prepare("SELECT findings FROM lens_runs WHERE scope = ? AND status = 'done' AND id != ? ORDER BY ts DESC LIMIT 1").get(scope, id) as { findings: string } | undefined;
       const c = compare(found, prev ? json<Finding[]>(prev.findings, []) : null, { muted: mutes, modelRan: model !== null });
       const baseline = { now: metrics(rows), before: metrics(select(filters, t0 - 2 * span, t0 - span)) };
-      db.prepare("UPDATE lens_runs SET status = 'done', findings = ?, resolved = ?, baseline = ?, muted = ?, coverage = ?, model_id = ?, duration_ms = ? WHERE id = ?")
-        .run(JSON.stringify(c.findings), JSON.stringify(c.resolved), JSON.stringify(baseline), hidden, JSON.stringify({ eligible, screened: rows.length, errors: rows.filter((r) => r.status >= 400).length }), model, Date.now() - t0, id);
+      db.prepare("UPDATE lens_runs SET status = 'done', findings = ?, resolved = ?, baseline = ?, muted = ?, coverage = ?, model_id = ?, duration_ms = ?, rejected = ? WHERE id = ?")
+        .run(JSON.stringify(c.findings), JSON.stringify(c.resolved), JSON.stringify(baseline), hidden, JSON.stringify({ eligible, screened: rows.length, errors: rows.filter((r) => r.status >= 400).length }), model, Date.now() - t0, JSON.stringify(rejected), id);
       // A watch speaks up when something new needs attention: the event reaches the assistant's and the healer's view.
       const fresh = c.findings.filter((f) => f.status === "new" && (f.priority === "high" || (f.kind === "needs-attention" && f.priority === "medium")));
       if (input.watchId && fresh.length) event("warn", "lens", `${input.title ?? "Watch"}: ${fresh.length} new finding(s) — ${fresh.slice(0, 3).map((f) => f.title).join("; ")}`, { run: id, keys: fresh.map((f) => f.key) });
@@ -295,7 +306,7 @@ export function startInvestigation(input: { title?: string; filters: LensFilters
   return id;
 }
 
-const fromRun = (r: Record<string, string>) => ({ ...r, filters: json(r.filters, {}), coverage: json(r.coverage, null), findings: json(r.findings, []), resolved: json(r.resolved, []), baseline: json(r.baseline, null) });
+const fromRun = (r: Record<string, string>) => ({ ...r, filters: json(r.filters, {}), coverage: json(r.coverage, null), findings: json(r.findings, []), resolved: json(r.resolved, []), baseline: json(r.baseline, null), rejected: json(r.rejected, []) });
 export const listInvestigations = (watchId?: string, limit = 50) =>
   (db.prepare(`SELECT * FROM lens_runs ${watchId ? "WHERE watch_id = ?" : ""} ORDER BY ts DESC LIMIT ?`).all(...(watchId ? [watchId] : []), Math.min(Math.max(limit, 1), 200)) as Record<string, string>[]).map(fromRun);
 

@@ -125,6 +125,14 @@ function RunView({ run, onOpen, onMuted }: { run: LensRun; onOpen: (id: string) 
         <Section title="Needs attention" findings={attention} run={run} onOpen={onOpen} onMuted={onMuted} />
         <Section title="Patterns" findings={patterns} run={run} onOpen={onOpen} onMuted={onMuted} />
         {!run.findings.length && run.status === "done" && <Empty>Nothing found — the slice looks healthy.</Empty>}
+        {!!run.rejected?.length && (
+          <div>
+            <h3 className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-ink-3">Thrown away · {run.rejected.length} — the model said so, mux's data says otherwise</h3>
+            <Card><ul className="space-y-2 text-[12.5px]">{run.rejected.map((r, i) => (
+              <li key={i}><div className="text-ink-2 line-through decoration-ink-3">{r.title}</div><div className="text-[12px] text-ink-3">{r.reason}</div></li>
+            ))}</ul></Card>
+          </div>
+        )}
         {!!run.resolved?.length && (
           <div>
             <h3 className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-ink-3">Resolved since the last run · {run.resolved.length}</h3>
@@ -199,10 +207,19 @@ function FindingCard({ f, run, onOpen, onMuted }: { f: Finding; run: LensRun; on
     <Card title={f.title} actions={<>
       {f.status && <Badge tone={f.status === "new" ? "accent" : "muted"}>{f.status}</Badge>}
       <Badge tone={f.priority === "high" ? "bad" : f.priority === "medium" ? "warn" : "muted"}>{f.priority}</Badge>
-      <Badge tone="muted">{f.source === "model" ? "model" : "rules"}</Badge>
+      {f.source === "model" && f.confidence === "guess" ? <Badge tone="muted" title="None of its claims could be checked against mux's own data: low priority at most">model · guess</Badge>
+        : f.source === "model" ? <Badge tone="good" title="Its claims were checked against mux's own data and held">model · checked</Badge> : <Badge tone="muted">rules</Badge>}
     </>}>
       <p className="text-[12.5px] text-ink-2">{f.description}</p>
       {f.suggestion && <p className="mt-2 rounded-md bg-accent-soft px-3 py-2 text-[12.5px]"><b>Next step:</b> {f.suggestion}</p>}
+      {!!f.checks?.length && (
+        <div className="mt-3">
+          <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-ink-3">Checked against mux</div>
+          <ul className="space-y-0.5">{f.checks.map((c, i) => (
+            <li key={i} className="flex gap-2 text-[12px]"><span className={c.ok ? "text-good" : "text-ink-3"}>{c.ok ? "✓" : "?"}</span><span className="text-ink-2">{c.claim}</span><span className="text-ink-3">— {c.actual}</span></li>
+          ))}</ul>
+        </div>
+      )}
       {f.evidence.length > 0 && (
         <div className="mt-3">
           <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-ink-3">Evidence</div>
