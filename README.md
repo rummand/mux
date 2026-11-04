@@ -61,7 +61,7 @@ client.messages.create(model="claude-sonnet-4-5", max_tokens=512, messages=[{"ro
 `model` is a route (`auto`, `fast`, `agent`, `smart`, `code`, `multilingual`, `vision`), a model id, or anything
 else (`gpt-4o`, `claude-sonnet-4-5`) — unknown names go to the tenant's default route, and a tenant can alias names.
 
-Optional headers: `x-mux-trace-id` (groups an agent run into a trace), `x-mux-agent` (which agent), `x-mux-tags`
+Optional headers: `x-mux-affinity` (keeps one run's calls on one model; without it, a run's `x-mux-trace-id`, else the conversation's opening, keeps them together), `x-mux-trace-id` (groups an agent run into a trace), `x-mux-agent` (which agent), `x-mux-tags`
 (comma list), `x-mux-user` (end user), `x-mux-no-fallback: 1`. Every answer carries `x-mux-request-id`,
 `x-mux-model`, `x-mux-route`, `x-mux-fallbacks`, `x-mux-cold-start`.
 

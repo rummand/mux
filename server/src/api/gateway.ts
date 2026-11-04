@@ -41,6 +41,7 @@ function begin(req: FastifyRequest, reply: FastifyReply, endpoint: string, flavo
   const tags = [...(header(req, "x-mux-tags")?.split(",") ?? []), ...(body.metadata?.tags ?? [])].map((t) => t.trim()).filter(Boolean);
   const ctx = newCtx(who.tenant, who.key, endpoint, req.ip, header(req, "user-agent") ?? "", tags);
   ctx.traceId = header(req, "x-mux-trace-id") ?? header(req, "x-request-id");
+  ctx.affinity = header(req, "x-mux-affinity") ?? header(req, "x-mux-trace-id");
   ctx.agent = header(req, "x-mux-agent");
   ctx.endUser = body.user ?? body.metadata?.user_id ?? header(req, "x-mux-user");
   ctx.noFallback = header(req, "x-mux-no-fallback") === "1";

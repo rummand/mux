@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { unit } from "./router/affinity.js";
 import type { FastifyInstance } from "fastify";
 import { advise, ROUTE_CASES, usageOf } from "./advisor.js";
 import { runBenchmark } from "./bench.js";
@@ -56,14 +57,15 @@ reload();
  * The route's candidates for one request, if an experiment runs on it: arm B tries the challenger first, arm A the
  * champion; the other model always stays behind. Null when no experiment runs here.
  */
-export function split(route: string, ordered: Model[]): { candidates: Model[]; experiment: { id: string; arm: "A" | "B" } } | null {
+export function split(route: string, ordered: Model[], affinity?: string | null): { candidates: Model[]; experiment: { id: string; arm: "A" | "B" } } | null {
   const ex = running.get(route);
   if (!ex) return null;
   const champ = ordered.find((m) => m.id === ex.champion);
   const chall = ordered.find((m) => m.id === ex.challenger);
   if (!champ || !chall) return null; // one of them cannot take this request (cooling down, too small a context…): no split
   const rest = ordered.filter((m) => m !== champ && m !== chall);
-  const arm = Math.random() < ex.share ? "B" : "A";
+  // One run, one arm: the run's affinity key decides it (affinity.ts); a request without one is a coin toss.
+  const arm = (affinity ? unit(affinity, ex.id) : Math.random()) < ex.share ? "B" : "A";
   return { candidates: arm === "B" ? [chall, champ, ...rest] : [champ, ...rest, chall], experiment: { id: ex.id, arm } };
 }
 

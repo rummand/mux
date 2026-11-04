@@ -8,6 +8,7 @@ import { outside } from "./border.js";
 import { split } from "../experiments.js";
 import { freePlan, quotaBlock } from "../quota.js";
 import { settings } from "../db.js";
+import { stick, stuck } from "./affinity.js";
 
 /** What a request needs, read from the request itself. */
 export interface Features {
@@ -42,7 +43,7 @@ export function features(body: ChatLike): Features {
   return { inputTokens, maxTokens, tools, forcedTool, vision, code, reasoning, danish, json, simple: !tools && !code && !reasoning && !vision && inputTokens < 600 && maxTokens <= 1024 };
 }
 
-export interface Decision { route: Route | null; candidates: Model[]; reason: string; requested: string; experiment?: { id: string; arm: "A" | "B" } }
+export interface Decision { route: Route | null; candidates: Model[]; reason: string; requested: string; experiment?: { id: string; arm: "A" | "B" }; sticky?: boolean }
 
 export class RouteError extends Error {
   constructor(message: string, public status = 404, public type = "model_not_found") { super(message); }
@@ -136,7 +137,7 @@ export function waiting(m: Model): number {
 const describe = (f: Features) => [f.tools && (f.forcedTool ? "forced tool" : "tools"), f.code && "code", f.reasoning && "reasoning", f.danish && "danish", f.vision && "vision", f.json && "json", f.simple && "simple", `~${f.inputTokens} tok`].filter(Boolean).join("+");
 
 /** The models to try, best first, and why. */
-export function decide(tenant: Tenant, requested: string | undefined, kind: Kind, f: Features | null): Decision {
+export function decide(tenant: Tenant, requested: string | undefined, kind: Kind, f: Features | null, affinity?: string | null): Decision {
   const { route, model, via } = resolve(tenant, requested, kind);
   const feats = f ?? features({});
   if (model) {
@@ -168,15 +169,24 @@ export function decide(tenant: Tenant, requested: string | undefined, kind: Kind
     ordered = [...fit].sort((a, b) => cap(b, "quality") - cap(a, "quality"));
   }
   // An experiment on this route splits its traffic: arm B tries the challenger first, arm A the champion.
-  const sp = split(r.name, ordered);
+  const sp = split(r.name, ordered, affinity);
   if (sp) ordered = sp.candidates;
+  // Affinity: a run stays on the model it started on — while that model can still take it and has no queue to speak of.
+  let sticky = false;
+  if (affinity && ordered.length > 1) {
+    const prev = stuck(affinity, r.name);
+    const m = prev ? ordered.find((x) => x.id === prev) : undefined;
+    if (m && m !== ordered[0] && waiting(m) < 2) { ordered = [m, ...ordered.filter((x) => x !== m)]; sticky = true; }
+    else if (m === ordered[0]) sticky = true;
+  }
+  if (affinity && ordered[0]) stick(affinity, r.name, ordered[0].id);
   // Free tiers, last: they answer when everything of ours failed or is out.
   const rescue = rescueModels(kind, feats, tenant, ordered);
   ordered = [...ordered, ...rescue];
   if (rescue.length) skipped.push(`rescue if all fail: ${rescue.map((m) => m.id).join(", ")}`);
-  const reason = [via, `route ${r.name}: ${how}`, sp ? `experiment ${sp.experiment.id}, arm ${sp.experiment.arm}` : "", skipped.length ? `skipped ${skipped.join("; ")}` : ""].filter(Boolean).join("; ");
+  const reason = [via, `route ${r.name}: ${how}`, sp ? `experiment ${sp.experiment.id}, arm ${sp.experiment.arm}` : "", sticky ? `kept on ${ordered[0].id} for this run` : "", skipped.length ? `skipped ${skipped.join("; ")}` : ""].filter(Boolean).join("; ");
   if (!ordered.length) throw new RouteError(`route ${r.name} has no model that can take this request${skipped.length ? ` (${skipped.join("; ")})` : ""}`, 503, "no_capable_model");
-  return { route: r, candidates: ordered, reason, requested: requested ?? "", ...(sp ? { experiment: sp.experiment } : {}) };
+  return { route: r, candidates: ordered, reason, requested: requested ?? "", ...(sp ? { experiment: sp.experiment } : {}), ...(sticky ? { sticky } : {}) };
 }
 
 /**

@@ -11,6 +11,8 @@ export interface Ctx {
   id: string; t0: number; tenant: Tenant; key: ApiKey; endpoint: string; ip: string; userAgent: string; tags: string[];
   noFallback?: boolean;
   traceId?: string | null; agent?: string | null; endUser?: string | null;
+  /** The caller's own key for one run (x-mux-affinity or x-mux-trace-id): its calls stay on one model. */
+  affinity?: string | null;
   requested?: string; route?: string | null; modelId?: string; reason?: string; stream?: boolean; tools?: boolean; forcedTool?: boolean;
   promptTokens?: number; completionTokens?: number; cachedTokens?: number;
   ttftMs?: number | null; queueMs?: number; upstreamMs?: number; tps?: number | null; coldStart?: boolean; fallbacks?: number; finish?: string | null;

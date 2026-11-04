@@ -1,4 +1,5 @@
 import { acquire, release } from "../runtime/manager.js";
+import { affinityKey } from "./affinity.js";
 import type { Model } from "../models.js";
 import { MuxError } from "./errors.js";
 import { recordFailure, recordSuccess } from "./health.js";
@@ -66,7 +67,7 @@ export async function runChat(ctx: Ctx, body: ChatBody, signal: AbortSignal, onC
   const f = features(body);
   const forced = forcedTools(body);
   ctx.tools = f.tools; ctx.forcedTool = !!forced; ctx.stream = !!onChunk; ctx.requested = body.model;
-  const d = decide(ctx.tenant, body.model, "chat", f);
+  const d = decide(ctx.tenant, body.model, "chat", f, affinityKey(ctx.tenant.id, ctx.affinity, body.messages));
   ctx.experiment = d.experiment ?? null;
   ctx.route = d.route?.name ?? null;
   ctx.reason = d.reason;
