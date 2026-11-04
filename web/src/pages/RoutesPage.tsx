@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { api, type Model, type Route, type Tenant } from "../api";
+import { api, type IntentRouting, type Model, type Route, type Tenant } from "../api";
 import { Badge, Button, Card, Empty, ErrorNote, Field, Input, KeyValue, Modal, PageHeader, Select, StatusDot, Textarea, Toggle } from "../components/ui";
 import { useApi } from "../hooks";
 
@@ -28,7 +28,10 @@ export default function RoutesPage() {
         <div className="grid gap-3 lg:grid-cols-2">
           {routes.data?.map((r) => <RouteCard key={r.name} route={r} models={models ?? []} onSave={save} onDelete={async () => { if (confirm(`Delete route ${r.name}?`)) { await api(`/routes/${r.name}`, { method: "DELETE" }); void routes.reload(true); } }} />)}
         </div>
-        <Explain routes={routes.data ?? []} />
+        <div className="space-y-4 xl:sticky xl:top-16 xl:self-start">
+          <IntentCard routes={routes.data ?? []} onSave={save} />
+          <Explain routes={routes.data ?? []} />
+        </div>
       </div>
       <NewRoute open={creating} onClose={() => setCreating(false)} onSave={async (r) => { await save(r); setCreating(false); }} />
     </>
@@ -119,7 +122,7 @@ function Explain({ routes }: { routes: Route[] }) {
     } catch (e) { setErr((e as Error).message); }
   };
   return (
-    <Card title="Explain a decision" subtitle="What the router would do with a request — nothing is sent." className="xl:sticky xl:top-16 xl:self-start">
+    <Card title="Explain a decision" subtitle="What the router would do with a request — nothing is sent.">
       <ErrorNote error={err} />
       <div className="space-y-3">
         <div className="grid grid-cols-2 gap-2">
@@ -141,6 +144,54 @@ function Explain({ routes }: { routes: Route[] }) {
           {!out.candidates.length && <Empty>No candidate.</Empty>}
         </div>
       )}
+    </Card>
+  );
+}
+
+/** Arch-Router on auto routes: whether it is on, what it decided, and the words it matches requests against. */
+function IntentCard({ routes, onSave }: { routes: Route[]; onSave: (r: Route) => void }) {
+  const { data } = useApi<IntentRouting>("/routes/intent", undefined, 10_000);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [text, setText] = useState("");
+  if (!data) return null;
+  const total = data.routed + data.other + data.failed;
+  return (
+    <Card title="Intent router" subtitle={data.model ? `${data.model} picks the route for requests on auto routes, from what the conversation is about — once per user turn. When it says “other” or is slow, the auto route's own scoring decides.` : "Off: auto routes score models by the request's features. Set intentRouterModel to turn Arch-Router on."}
+      actions={<StatusDot tone={data.model ? "good" : "muted"} label={data.model ? "on" : "off"} />}>
+      {data.model && (
+        <div className="mb-3 grid grid-cols-4 gap-2 text-[12px]">
+          <div><div className="text-[10.5px] uppercase tracking-wide text-ink-3">Decided</div><div className="text-[15px] font-semibold num">{data.routed}</div></div>
+          <div><div className="text-[10.5px] uppercase tracking-wide text-ink-3">Other</div><div className="text-[15px] font-semibold num">{data.other}</div></div>
+          <div><div className="text-[10.5px] uppercase tracking-wide text-ink-3">Failed</div><div className={`text-[15px] font-semibold num ${data.failed ? "text-warn" : ""}`}>{data.failed}</div></div>
+          <div><div className="text-[10.5px] uppercase tracking-wide text-ink-3">p50 · p95</div><div className="text-[15px] font-semibold num">{data.p50Ms ?? "—"}<span className="text-[11px] text-ink-3"> · {data.p95Ms ?? "—"} ms</span></div></div>
+        </div>
+      )}
+      {data.lastError && <div className="mb-2 truncate text-[11.5px] text-warn" title={data.lastError}>Last failure: {data.lastError}</div>}
+      <div className="space-y-2">
+        {data.routes.map((r) => {
+          const route = routes.find((x) => x.name === r.name);
+          return (
+            <div key={r.name} className="text-[12px]">
+              <div className="flex items-center gap-2">
+                <span className="font-mono font-medium">{r.name}</span>
+                {total > 0 && <span className="text-ink-3 num">{data.byRoute[r.name] ?? 0}×</span>}
+                {!r.own && <Badge tone="muted" title="mux's built-in words for this route; write your own to replace them">default</Badge>}
+                {route && editing !== r.name && <button className="ml-auto text-accent hover:underline" onClick={() => { setEditing(r.name); setText(route.intent || r.intent); }}>Edit</button>}
+              </div>
+              {editing === r.name && route ? (
+                <div className="mt-1 space-y-1">
+                  <Textarea rows={3} value={text} onChange={(e) => setText(e.target.value)} />
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="primary" onClick={() => { onSave({ ...route, intent: text.trim() }); setEditing(null); }}>Save</Button>
+                    {r.own && <Button size="sm" onClick={() => { onSave({ ...route, intent: "" }); setEditing(null); }}>Use the default</Button>}
+                    <Button size="sm" variant="ghost" onClick={() => setEditing(null)}>Cancel</Button>
+                  </div>
+                </div>
+              ) : <div className="text-ink-2">{r.intent}</div>}
+            </div>
+          );
+        })}
+      </div>
     </Card>
   );
 }

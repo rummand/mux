@@ -1,10 +1,11 @@
 import { acquire, release } from "../runtime/manager.js";
 import { affinityKey } from "./affinity.js";
+import { intentRoute } from "./intent.js";
 import type { Model } from "../models.js";
 import { MuxError } from "./errors.js";
 import { recordFailure, recordSuccess } from "./health.js";
 import type { Ctx } from "./metering.js";
-import { decide, features } from "./select.js";
+import { decide, features, resolve } from "./select.js";
 import { asToolCall, forcedTools, guarded, isGoodNativeCall, type Tool } from "./toolguard.js";
 import { noteHeaders } from "../quota.js";
 
@@ -67,7 +68,12 @@ export async function runChat(ctx: Ctx, body: ChatBody, signal: AbortSignal, onC
   const f = features(body);
   const forced = forcedTools(body);
   ctx.tools = f.tools; ctx.forcedTool = !!forced; ctx.stream = !!onChunk; ctx.requested = body.model;
-  const d = decide(ctx.tenant, body.model, "chat", f, affinityKey(ctx.tenant.id, ctx.affinity, body.messages));
+  const affinity = affinityKey(ctx.tenant.id, ctx.affinity, body.messages);
+  // On an auto route, Arch-Router may pick the route by what the conversation is about (intent.ts)
+  const asked = resolve(ctx.tenant, body.model, "chat");
+  const intent = asked.route?.strategy === "auto" && !asked.model ? await intentRoute(body.messages ?? [], affinity, f.vision) : null;
+  const d = decide(ctx.tenant, intent?.route ?? body.model, "chat", f, affinity);
+  if (intent) d.reason = `${asked.route!.name} → ${intent.why}; ${d.reason}`;
   ctx.experiment = d.experiment ?? null;
   ctx.route = d.route?.name ?? null;
   ctx.reason = d.reason;

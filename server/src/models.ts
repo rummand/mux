@@ -59,7 +59,9 @@ export function upsertModel(m: Partial<Model> & Pick<Model, "id" | "backend">): 
 
 export const deleteModel = (id: string) => db.prepare("DELETE FROM models WHERE id = ?").run(id);
 
-export interface Route { name: string; description: string; kind: Kind; strategy: "priority" | "auto" | "fastest" | "quality"; candidates: string[]; created_at: number }
+export interface Route { name: string; description: string; kind: Kind; strategy: "priority" | "auto" | "fastest" | "quality"; candidates: string[]; created_at: number;
+  /** For Arch-Router: what kinds of requests belong on this route, in plain words (router/intent.ts). */
+  intent?: string }
 type RouteRow = Omit<Route, "candidates"> & { candidates: string };
 export const listRoutes = (): Route[] => (db.prepare("SELECT * FROM routes ORDER BY name").all() as RouteRow[]).map((r) => ({ ...r, candidates: json(r.candidates, []) }));
 export const getRoute = (name: string): Route | undefined => {
@@ -68,9 +70,9 @@ export const getRoute = (name: string): Route | undefined => {
 };
 export function upsertRoute(r: Partial<Route> & { name: string }) {
   const prev = getRoute(r.name);
-  const next = { description: "", kind: "chat", strategy: "priority", candidates: [], created_at: now(), ...prev, ...r } as Route;
-  db.prepare(`INSERT INTO routes(name, description, kind, strategy, candidates, created_at) VALUES(@name, @description, @kind, @strategy, @candidates, @created_at)
-    ON CONFLICT(name) DO UPDATE SET description=excluded.description, kind=excluded.kind, strategy=excluded.strategy, candidates=excluded.candidates`)
+  const next = { description: "", intent: "", kind: "chat", strategy: "priority", candidates: [], created_at: now(), ...prev, ...r } as Route;
+  db.prepare(`INSERT INTO routes(name, description, intent, kind, strategy, candidates, created_at) VALUES(@name, @description, @intent, @kind, @strategy, @candidates, @created_at)
+    ON CONFLICT(name) DO UPDATE SET description=excluded.description, intent=excluded.intent, kind=excluded.kind, strategy=excluded.strategy, candidates=excluded.candidates`)
     .run({ ...next, candidates: JSON.stringify(next.candidates) });
   if (JSON.stringify(prev?.candidates) !== JSON.stringify(next.candidates) || prev?.strategy !== next.strategy)
     journal({ kind: "route", ref: next.name, title: prev ? `Route ${next.name}: ${next.candidates[0] ?? "nothing"} first` : `New route ${next.name}`,

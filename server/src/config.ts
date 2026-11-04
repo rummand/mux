@@ -81,6 +81,11 @@ export const defaultSettings = {
    */
   freeRescue: true,
   freeRescueTraining: false,
+  /**
+   * Intent routing on "auto" routes: the model that reads a conversation and picks the route for it (Arch-Router):
+   * "arch-router" on the Mac, "mac-studio/arch-router" on a gateway; "" leaves it to the auto route's own scoring.
+   */
+  intentRouterModel: "",
 };
 export type Settings = typeof defaultSettings;
 

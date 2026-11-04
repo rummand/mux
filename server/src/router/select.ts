@@ -136,6 +136,10 @@ export function waiting(m: Model): number {
 
 const describe = (f: Features) => [f.tools && (f.forcedTool ? "forced tool" : "tools"), f.code && "code", f.reasoning && "reasoning", f.danish && "danish", f.vision && "vision", f.json && "json", f.simple && "simple", `~${f.inputTokens} tok`].filter(Boolean).join("+");
 
+/** Arch-Router, here or on a node: it picks routes, it does not answer. */
+export const isRouterModel = (m: Model, router = settings().intentRouterModel) =>
+  m.id === router || /arch-router/i.test(m.id) || /arch-router/i.test(m.upstream_model ?? "");
+
 /** The models to try, best first, and why. */
 export function decide(tenant: Tenant, requested: string | undefined, kind: Kind, f: Features | null, affinity?: string | null): Decision {
   const { route, model, via } = resolve(tenant, requested, kind);
@@ -153,7 +157,9 @@ export function decide(tenant: Tenant, requested: string | undefined, kind: Kind
   const r = route!;
   // A route that lists no models takes every model of its kind — but not a free tier's: those answer only when named,
   // or as the rescue below.
-  const pool = (r.candidates.length ? r.candidates.map(getModel) : listModels().filter((m) => m.kind === kind && !freePlan(m))).filter((m): m is Model => !!m && m.kind === kind);
+  // The intent router answers no chat itself
+  const router = settings().intentRouterModel;
+  const pool = (r.candidates.length ? r.candidates.map(getModel) : listModels().filter((m) => m.kind === kind && !freePlan(m))).filter((m): m is Model => !!m && m.kind === kind && !isRouterModel(m, router));
   const skipped: string[] = [];
   const fit = pool.filter((m) => { const why = unfit(m, feats, tenant); if (why) skipped.push(`${m.id}: ${why}`); return !why; });
   let ordered = fit;

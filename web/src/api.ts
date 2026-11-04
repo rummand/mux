@@ -59,7 +59,9 @@ export interface Model {
   keep_alive_min: number | null; pinned: boolean; enabled: boolean; notes: string; created_at: number; estimateGb: number;
   instance?: Instance | null; bench?: Bench | null; provider_id?: string | null; provider?: string | null; cost_in?: number; cost_out?: number; usage24h?: { n: number; errors: number; tokens: number; tps: number | null } | null; onDisk?: boolean | null;
 }
-export interface Route { name: string; description: string; kind: Model["kind"]; strategy: "priority" | "auto" | "fastest" | "quality"; candidates: string[]; created_at: number }
+export interface Route { name: string; description: string; kind: Model["kind"]; strategy: "priority" | "auto" | "fastest" | "quality"; candidates: string[]; created_at: number; intent?: string }
+/** GET /routes/intent: Arch-Router on auto routes — how often it decided, where to, how fast, and the words it reads. */
+export interface IntentRouting { model: string | null; asked: number; routed: number; other: number; failed: number; byRoute: Record<string, number>; p50Ms: number | null; p95Ms: number | null; lastError: string | null; routes: { name: string; intent: string; own: boolean }[] }
 export interface Tenant {
   id: string; name: string; description: string; color: string; status: "active" | "paused"; rpm_limit: number; tpm_limit: number; monthly_token_budget: number; monthly_usd_budget?: number;
   default_route: string; allowed: string[]; aliases: Record<string, string>; log_bodies: boolean; max_parallel: number; created_at: number;
