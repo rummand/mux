@@ -1,16 +1,24 @@
 #!/bin/sh
-# Set up a tenant on this Mac's mux and give it a key, then send one request as it through the public gateway.
+# Set up a tenant on the public gateway (Railway; it keeps its own tenants) and give it a key, then send one request as
+# it. MUX_TARGET=mac does it on this Mac's mux instead, for callers on the Mac or its network.
 #   ./deploy/tenant.sh <id> <name> <key name> [tenant json]
 #   ./deploy/tenant.sh knitlabs-desk "knitlabs desk" "railway web" '{"monthly_usd_budget":20,"data_border":"any"}'
 # The tenant is saved with default_route auto and status active unless the json says otherwise (again: it updates
 # it). Every run makes a new key: mux keeps only its hash, so the key is printed this once — paste it straight where
-# it goes. The gateway's URL is MUX_GATEWAY_URL, else the Railway gateway.
+# it goes. The gateway's URL is MUX_GATEWAY_URL, else the Railway gateway; its admin token is read with the logged-in
+# railway CLI (run from the repo) and never printed.
 set -eu
-[ $# -ge 3 ] || { sed -n 2,6p "$0" >&2; exit 2; }
+[ $# -ge 3 ] || { sed -n 2,9p "$0" >&2; exit 2; }
 ID=$1 NAME=$2 KEY_NAME=$3 EXTRA=${4:-'{}'}
-. "$HOME/.mux/mux.env"
-BASE="http://127.0.0.1:${MUX_PORT:-7070}/api/admin"
 GATEWAY=${MUX_GATEWAY_URL:-https://mux-production-0b55.up.railway.app}
+if [ "${MUX_TARGET:-gateway}" = mac ]; then
+  . "$HOME/.mux/mux.env"
+  GATEWAY="http://127.0.0.1:${MUX_PORT:-7070}"
+else
+  MUX_ADMIN_TOKEN=$(cd "$(dirname "$0")/.." && railway variables --kv | sed -n 's/^MUX_ADMIN_TOKEN=//p')
+  [ -n "$MUX_ADMIN_TOKEN" ] || { echo "no MUX_ADMIN_TOKEN from railway variables: is the CLI logged in and linked?" >&2; exit 1; }
+fi
+BASE="$GATEWAY/api/admin"
 
 api() { curl -sf -X "$1" -H "Authorization: Bearer $MUX_ADMIN_TOKEN" -H "content-type: application/json" --data-binary @- "$BASE$2"; }
 field() { python3 -c 'import sys, json; print(json.load(sys.stdin)[sys.argv[1]])' "$1"; }
