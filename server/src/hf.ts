@@ -55,6 +55,7 @@ export async function startDownload(req: DownloadRequest): Promise<DownloadRow> 
   if (process.env.MUX_NO_DOWNLOADS) throw new Error("downloads are off here (MUX_NO_DOWNLOADS)");
   journal({ kind: "download", ref: req.catalogId ?? req.repo, title: `Download ${req.catalogId ?? `${req.repo}/${req.file}`}` });
   const entry = req.catalogId ? catalogEntry(req.catalogId) : undefined;
+  if (entry?.needs) throw new Error(`${entry.name} cannot be installed from the Library yet: ${entry.needs}`);
   const repo = req.repo ?? entry?.repo;
   const file = req.file ?? entry?.file;
   if (!repo || !file) throw new Error("a catalog id, or a repo and a file, is required");
@@ -194,7 +195,7 @@ export function importLocal(path: string, opts: { id?: string; kind?: Kind; cata
 export function adoptDownloaded() {
   const registered = new Set(listModels().map((m) => m.catalog_id).filter(Boolean));
   for (const c of CATALOG) {
-    if (registered.has(c.id) || getModel(c.id)) continue;
+    if (c.needs || registered.has(c.id) || getModel(c.id)) continue;
     const dir = join(config.modelsDir, c.repo.replace("/", "--"));
     const path = join(dir, c.file);
     if (!existsSync(path)) continue;

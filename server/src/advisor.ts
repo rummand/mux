@@ -78,7 +78,7 @@ export async function advise(useCase: UseCase, priority: "quality" | "balanced" 
   if (priority === "quality") w.quality = (w.quality ?? 0) + 1.2;
   if (priority === "speed") w.speed = (w.speed ?? 0) + 1.2;
   const wantEmbedding = useCase === "rag";
-  const entries: CatalogEntry[] = CATALOG.filter((c) => (wantEmbedding ? c.kind === "embedding" : c.kind === "chat"));
+  const entries: CatalogEntry[] = CATALOG.filter((c) => !c.needs && (wantEmbedding ? c.kind === "embedding" : c.kind === "chat"));
   const ranked = entries.map((c): Advice => {
     const mineAll = instancesOf(c, installed);
     const mine = mineAll.find((m) => m.enabled) ?? mineAll[0];

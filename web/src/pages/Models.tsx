@@ -121,7 +121,7 @@ function Installed({ models, error, reload }: { models: Model[] | null; error: s
             <Meter value={sys.system.diskTotalGb - sys.system.diskFreeGb} max={sys.system.diskTotalGb} tone={sys.system.diskFreeGb < 40 ? "warn" : "accent"} /></Card>
         </div>
       )}
-      <div className="mb-3"><Segmented value={kind} onChange={setKind} options={[{ value: "all", label: "All" }, { value: "chat", label: "Chat" }, { value: "embedding", label: "Embedding" }, { value: "rerank", label: "Rerank" }, { value: "systemone", label: "System One" }]} /></div>
+      <div className="mb-3"><Segmented value={kind} onChange={setKind} options={[{ value: "all", label: "All" }, { value: "chat", label: "Chat" }, { value: "embedding", label: "Embedding" }, { value: "rerank", label: "Rerank" }, { value: "systemone", label: "System One" }, { value: "transcription", label: "Transcription" }]} /></div>
       {!list.length ? <Empty>No models yet — download one from the Library, or import a GGUF already on this Mac.</Empty> : (
         <div className="grid gap-3 xl:grid-cols-2">
           {list.map((m) => {
@@ -275,15 +275,17 @@ function Library({ downloads, onStarted }: { downloads: Download[]; onStarted: (
                   <div className="font-medium">{c.name} <span className="ml-1 text-[11px] text-ink-3">{c.released}</span></div>
                   <div className="mt-0.5 max-w-[46ch] text-[11.5px] text-ink-3">{c.notes}</div>
                   <div className="mt-0.5 font-mono text-[10.5px] text-ink-3">{c.repo} · {c.file}</div>
+                  {c.needs && <div className="mt-0.5 max-w-[46ch] text-[11.5px] text-warn">Needs: {c.needs}</div>}
                 </Td>
                 <Td><Badge>{c.kind}</Badge></Td>
                 <Td><div className="flex max-w-40 flex-wrap gap-1">{c.routes.map((r) => <Badge key={r} tone="muted">{r}</Badge>)}</div></Td>
                 <Td right>{c.sizeGb.toFixed(1)} GB</Td>
                 <Td className="whitespace-nowrap">{c.params}{c.activeParams && <div className="text-[11px] text-ink-3">{c.activeParams} active</div>}</Td>
-                <Td className="num">{fmtCompact(c.ctx)}</Td>
+                <Td className="num">{c.ctx ? fmtCompact(c.ctx) : "—"}</Td>
                 <Td className="text-[11.5px]">{c.license}{c.minLlama && <div className="text-[11px] text-ink-3">llama.cpp ≥ {c.minLlama}</div>}</Td>
                 <Td right>
                   {c.installed ? <Badge tone="good">installed</Badge>
+                    : c.needs ? <Badge tone="muted">not runnable yet</Badge>
                     : busy.has(c.id) ? <Badge tone="accent">downloading</Badge>
                     : <Button size="sm" variant="primary" disabled={starting === c.id} onClick={() => start(c)}>{starting === c.id ? <Spinner /> : "Download"}</Button>}
                 </Td>

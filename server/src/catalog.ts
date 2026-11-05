@@ -1,6 +1,7 @@
 import type { Caps, Kind } from "./models.js";
 import { RESEARCH } from "./catalog-research.js";
 import { NEW_MODELS, PATCHES } from "./catalog-research-2026-11.js";
+import { DECISION_SPEECH_MODELS } from "./catalog-decision-speech.js";
 
 /**
  * Models mux knows how to fetch and what they are good for. Repos, files and sizes were read off the Hugging Face API
@@ -29,6 +30,11 @@ export interface CatalogEntry {
   experimental?: string;
   /** What the latest research found about it. */
   research?: string;
+  /**
+   * What mux still lacks to run it (a runtime that is not llama-server): the Library lists it with this note instead
+   * of a Download button, the downloader refuses it, and the advisor never recommends it.
+   */
+  needs?: string;
 }
 
 export const CATALOG: CatalogEntry[] = [
@@ -123,7 +129,7 @@ export const CATALOG: CatalogEntry[] = [
     notes: "Higher retrieval scores than BGE-M3 on MTEB, longer inputs, instruction-aware queries." },
 ];
 
-CATALOG.push(...RESEARCH, ...NEW_MODELS);
+CATALOG.push(...RESEARCH, ...NEW_MODELS, ...DECISION_SPEECH_MODELS);
 
 // What the 2026-11 research changed about models already here: benchmarks, successors, better uploads, routes.
 for (const c of CATALOG) {
