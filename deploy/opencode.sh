@@ -35,6 +35,7 @@ agent() { # label, log name, program arguments…
 </dict></plist>
 PL
   launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
+  while launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; do sleep 1; done # bootout returns before it is gone
   launchctl bootstrap "gui/$(id -u)" "$plist"
 }
 
@@ -47,6 +48,6 @@ echo "→ tailnet node opencode"
 agent com.mux.opencode-ts opencode-ts "$TAILSCALED" --tun=userspace-networking --statedir="$TS_DIR" --socket="$SOCK" --port=0
 ts() { tailscale --socket="$SOCK" "$@"; }
 i=0; until ts status >/dev/null 2>&1 || ts status 2>&1 | grep -q -i "logged out\|needs login"; do i=$((i+1)); [ $i -lt 30 ] || { echo "tailscaled did not start: see $MUX_HOME/logs/opencode-ts.log" >&2; exit 1; }; sleep 1; done
-ts status >/dev/null 2>&1 || { echo "  sign the node in (once):"; ts up --hostname=opencode --timeout=10m; }
+ts status >/dev/null 2>&1 || { echo "  sign the node in (once):"; ts up --hostname=opencode; }
 ts funnel --bg --https=443 http://127.0.0.1:$PORT >/dev/null
 echo "https://$(ts status --json | python3 -c 'import sys, json; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))')"
