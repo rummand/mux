@@ -1,8 +1,9 @@
 import type { CatalogEntry } from "./catalog.js";
 
 /**
- * The decision and speech models in Baseten's model library, run here instead of on Baseten. Repos, files, sizes and
- * licenses were read off the Hugging Face API on 2026-11-03; benchmarks are the makers' own, from each model card.
+ * The decision and speech models in Baseten's model library, run here instead of on Baseten, plus Microsoft's
+ * VibeVoice-ASR beside the speech models. Repos, files, sizes and licenses were read off the Hugging Face API on
+ * 2026-11-03 (VibeVoice-ASR on 2026-11-07); benchmarks are the makers' own, from each model card.
  * Only elephant-1 runs on llama-server today; the rest carry `needs`, so the Library lists them without a Download.
  * Danish coverage is in each note because it decides most of what we would use them for.
  */
@@ -90,6 +91,18 @@ export const DECISION_SPEECH_MODELS: CatalogEntry[] = [
       { name: "Open ASR Leaderboard mean WER", value: 5.17, url: "https://huggingface.co/OpenMOSS-Team/MOSS-Transcribe-Diarize" },
     ],
     needs: "CrispASR (`crispasr --server --backend moss-diarize`) or mlx-audio as a transcription backend. whisper.cpp does not run it.",
+  },
+  {
+    id: "vibevoice-asr", name: "VibeVoice-ASR 7B", family: "Microsoft VibeVoice", kind: "transcription",
+    repo: "cstr/vibevoice-asr-GGUF", file: "vibevoice-asr-q8_0.gguf", sizeGb: 9.45,
+    params: "8.7B", arch: "vibevoice", ctx: 65536, license: "mit", routes: ["transcribe"], defaultCtx: 0, released: "2026-01",
+    caps: { quality: 8, speed: 5, multilingual: 7.5 },
+    notes: "Up to 60 minutes in one pass, with speakers, timestamps and text as JSON segments, plus hotwords (names, terms) as context. 50+ languages with code-switching; Danish and Kalaallisut are on the card, untested here. Wants 24 kHz mono. Community GGUF of microsoft/VibeVoice-ASR (Q4_K 4.8 GB, F16 16.7 GB also there); the streaming 7B and 1.5B successors cover 10 languages without Danish.",
+    benchmarks: [
+      { name: "DER, cpWER and tcpWER (charts only, no table)", value: "see card", url: "https://huggingface.co/microsoft/VibeVoice-ASR" },
+      { name: "Technical report", value: "arXiv 2601.18184", url: "https://arxiv.org/abs/2601.18184" },
+    ],
+    needs: "CrispASR (`crispasr --server --backend vibevoice`, Metal build) or mlx-audio (mlx-community/VibeVoice-ASR-8bit) as a transcription backend, and a way to pass its speaker JSON through /v1/audio/transcriptions. whisper.cpp and llama-server do not run it.",
   },
   {
     id: "voxtral-mini-4b-realtime", name: "Voxtral Mini 4B Realtime", family: "Voxtral", kind: "transcription",
