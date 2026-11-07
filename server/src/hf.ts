@@ -15,11 +15,18 @@ const headers = (): Record<string, string> => (config.hfToken ? { authorization:
 export const downloadsBus = new EventEmitter();
 
 export interface RepoFile { path: string; size: number }
-export async function repoFiles(repo: string): Promise<RepoFile[]> {
+/** A repo's GGUF files, or with `all` every file a runtime may read (weights, config, tokenizer; no card images). */
+export async function repoFiles(repo: string, all = false): Promise<RepoFile[]> {
   const r = await fetch(`${HF}/api/models/${repo}/tree/main?recursive=true`, { headers: headers() });
   if (!r.ok) throw new Error(`Hugging Face: ${repo}: ${r.status}`);
-  return ((await r.json()) as { path: string; size?: number; lfs?: { size: number } }[]).filter((f) => f.path.endsWith(".gguf")).map((f) => ({ path: f.path, size: f.lfs?.size ?? f.size ?? 0 }));
+  return ((await r.json()) as { type?: string; path: string; size?: number; lfs?: { size: number } }[])
+    .filter((f) => (all ? f.type !== "directory" && !/(^|\/)\.git|\.(png|jpe?g|gif|webp|mp4)$/i.test(f.path) : f.path.endsWith(".gguf")))
+    .map((f) => ({ path: f.path, size: f.lfs?.size ?? f.size ?? 0 }));
 }
+
+/** Where a catalog entry's files land, and whether its main file is there: a files-only download has no model row. */
+export const entryDir = (c: CatalogEntry) => join(config.modelsDir, c.repo.replace("/", "--"));
+export const onDisk = (c: CatalogEntry) => existsSync(join(entryDir(c), c.file));
 
 /** GGUF repos on Hugging Face matching a search, most downloaded first, for models the catalog does not have. */
 export async function searchHf(q: string) {
@@ -55,12 +62,13 @@ export async function startDownload(req: DownloadRequest): Promise<DownloadRow> 
   if (process.env.MUX_NO_DOWNLOADS) throw new Error("downloads are off here (MUX_NO_DOWNLOADS)");
   journal({ kind: "download", ref: req.catalogId ?? req.repo, title: `Download ${req.catalogId ?? `${req.repo}/${req.file}`}` });
   const entry = req.catalogId ? catalogEntry(req.catalogId) : undefined;
-  if (entry?.needs) throw new Error(`${entry.name} cannot be installed from the Library yet: ${entry.needs}`);
+  if (entry?.needs && !entry.downloadable) throw new Error(`${entry.name} cannot be installed from the Library yet: ${entry.needs}`);
   const repo = req.repo ?? entry?.repo;
   const file = req.file ?? entry?.file;
   if (!repo || !file) throw new Error("a catalog id, or a repo and a file, is required");
-  const files = await repoFiles(repo);
-  const parts = partsOf(files, file);
+  const snapshot = !!entry?.downloadable && !file.endsWith(".gguf");
+  const files = await repoFiles(repo, snapshot);
+  const parts = snapshot ? (files.some((f) => f.path === file) ? files : []) : partsOf(files, file);
   if (!parts.length) throw new Error(`${repo} has no ${file}`);
   const mmprojName = req.mmproj === null ? undefined : req.mmproj ?? entry?.mmproj;
   const mm = mmprojName ? files.find((f) => f.path === mmprojName) : undefined;
@@ -116,6 +124,12 @@ async function run(dl: DownloadRow, files: RepoFile[], main: string, mmproj: str
       update(dl.id, { done_bytes: base });
     }
     const size = files.filter((f) => f.path !== mmproj).reduce((a, f) => a + f.size, 0);
+    if (entry?.needs) {
+      // Files only: nothing here runs it yet, so no model is registered (it would never start).
+      update(dl.id, { status: "done", finished_at: now(), done_bytes: dl.total_bytes, bps: 0 });
+      event("info", "download", `downloaded ${dl.repo} to ${dir} (files only; it needs ${entry.needs})`);
+      return;
+    }
     upsertModel({
       id: dl.model_id!, display_name: entry?.name ?? dl.model_id!, backend: "llamacpp", kind: entry?.kind ?? kind ?? "chat",
       path: join(dir, main), mmproj: mmproj ? join(dir, mmproj) : null, catalog_id: entry?.id ?? null, size_bytes: size,

@@ -94,15 +94,23 @@ export const DECISION_SPEECH_MODELS: CatalogEntry[] = [
   },
   {
     id: "vibevoice-asr", name: "VibeVoice-ASR 7B", family: "Microsoft VibeVoice", kind: "transcription",
-    repo: "cstr/vibevoice-asr-GGUF", file: "vibevoice-asr-q8_0.gguf", sizeGb: 9.45,
+    repo: "microsoft/VibeVoice-ASR", file: "model-00001-of-00008.safetensors", sizeGb: 17.35, downloadable: true,
     params: "8.7B", arch: "vibevoice", ctx: 65536, license: "mit", routes: ["transcribe"], defaultCtx: 0, released: "2026-01",
     caps: { quality: 8, speed: 5, multilingual: 7.5 },
-    notes: "Up to 60 minutes in one pass, with speakers, timestamps and text as JSON segments, plus hotwords (names, terms) as context. 50+ languages with code-switching; Danish and Kalaallisut are on the card, untested here. Wants 24 kHz mono. Community GGUF of microsoft/VibeVoice-ASR (Q4_K 4.8 GB, F16 16.7 GB also there); the streaming 7B and 1.5B successors cover 10 languages without Danish.",
+    notes: "Microsoft's own release (bf16 safetensors, 8 shards). Up to 60 minutes in one pass, with speakers, timestamps and text as JSON segments, plus hotwords (names, terms) as context. 50+ languages with code-switching; Danish and Kalaallisut are on the card, untested here. The streaming 7B and 1.5B successors cover 10 languages without Danish.",
     benchmarks: [
       { name: "DER, cpWER and tcpWER (charts only, no table)", value: "see card", url: "https://huggingface.co/microsoft/VibeVoice-ASR" },
       { name: "Technical report", value: "arXiv 2601.18184", url: "https://arxiv.org/abs/2601.18184" },
     ],
-    needs: "CrispASR (`crispasr --server --backend vibevoice`, Metal build) or mlx-audio (mlx-community/VibeVoice-ASR-8bit) as a transcription backend, and a way to pass its speaker JSON through /v1/audio/transcriptions. whisper.cpp and llama-server do not run it.",
+    needs: "a transcription backend for safetensors: Microsoft's VibeVoice code (transformers or vLLM; vLLM wants CUDA) or mlx-audio, and a way to pass its speaker JSON through /v1/audio/transcriptions. The Library downloads the whole repo; no model is registered until that backend exists.",
+  },
+  {
+    id: "vibevoice-asr-gguf", name: "VibeVoice-ASR 7B (GGUF Q8_0)", family: "Microsoft VibeVoice", kind: "transcription",
+    repo: "cstr/vibevoice-asr-GGUF", file: "vibevoice-asr-q8_0.gguf", sizeGb: 9.45, downloadable: true,
+    params: "8.7B", arch: "vibevoice", ctx: 65536, license: "mit", routes: ["transcribe"], defaultCtx: 0, released: "2026-04",
+    caps: { quality: 8, speed: 5.5, multilingual: 7.5 },
+    notes: "Community GGUF of microsoft/VibeVoice-ASR for CrispASR (Q4_K 4.8 GB and F16 16.7 GB are in the repo too). Same model as vibevoice-asr; wants 24 kHz mono.",
+    needs: "CrispASR (`crispasr --server --backend vibevoice`, Metal build) as a transcription backend. whisper.cpp and llama-server do not run it.",
   },
   {
     id: "voxtral-mini-4b-realtime", name: "Voxtral Mini 4B Realtime", family: "Voxtral", kind: "transcription",

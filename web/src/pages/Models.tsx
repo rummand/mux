@@ -262,7 +262,7 @@ function Library({ downloads, onStarted }: { downloads: Download[]; onStarted: (
     <>
       <ErrorNote error={error ?? err} />
       <div className="mb-3 flex flex-wrap gap-2">
-        <Segmented value={kind} onChange={setKind} options={[{ value: "all", label: "All" }, { value: "chat", label: "Chat" }, { value: "embedding", label: "Embedding" }, { value: "rerank", label: "Rerank" }, { value: "systemone", label: "System One" }]} />
+        <Segmented value={kind} onChange={setKind} options={[{ value: "all", label: "All" }, { value: "chat", label: "Chat" }, { value: "embedding", label: "Embedding" }, { value: "rerank", label: "Rerank" }, { value: "systemone", label: "System One" }, { value: "transcription", label: "Transcription" }]} />
         <Input className="w-64" placeholder="Search name, route, notes…" value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
       <Card pad={false}>
@@ -285,9 +285,10 @@ function Library({ downloads, onStarted }: { downloads: Download[]; onStarted: (
                 <Td className="text-[11.5px]">{c.license}{c.minLlama && <div className="text-[11px] text-ink-3">llama.cpp ≥ {c.minLlama}</div>}</Td>
                 <Td right>
                   {c.installed ? <Badge tone="good">installed</Badge>
-                    : c.needs ? <Badge tone="muted">not runnable yet</Badge>
+                    : c.onDisk ? <Badge tone="good">files on disk</Badge>
+                    : c.needs && !c.downloadable ? <Badge tone="muted">not runnable yet</Badge>
                     : busy.has(c.id) ? <Badge tone="accent">downloading</Badge>
-                    : <Button size="sm" variant="primary" disabled={starting === c.id} onClick={() => start(c)}>{starting === c.id ? <Spinner /> : "Download"}</Button>}
+                    : <Button size="sm" variant="primary" disabled={starting === c.id} onClick={() => start(c)} title={c.needs ? "Downloads the files only; mux cannot run it yet" : undefined}>{starting === c.id ? <Spinner /> : c.needs ? "Download files" : "Download"}</Button>}
                 </Td>
               </tr>
             ))}

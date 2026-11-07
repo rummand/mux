@@ -7,7 +7,7 @@ import { benchBus, runBenchmark } from "../bench.js";
 import { CATALOG } from "../catalog.js";
 import { config } from "../config.js";
 import { db, event, json, now, saveSettings, settings } from "../db.js";
-import { cancelDownload, downloadsBus, importLocal, listDownloads, repoFiles, scanLocal, searchHf, startDownload } from "../hf.js";
+import { cancelDownload, downloadsBus, importLocal, listDownloads, onDisk, repoFiles, scanLocal, searchHf, startDownload } from "../hf.js";
 import { registerLens } from "../lens.js";
 import { deleteModel, deleteRoute, getModel, listModels, listRoutes, upsertModel, upsertRoute, type Model } from "../models.js";
 import { getRoute } from "../models.js";
@@ -209,7 +209,7 @@ export function registerAdmin(app: FastifyInstance) {
     // ── Catalog, advisor, Hugging Face, downloads, local files ─────────────────────────────────────────────────
     api.get("/catalog", async () => {
       const installed = listModels();
-      return CATALOG.map((c) => ({ ...c, installed: installed.find((m) => m.catalog_id === c.id)?.id ?? null }));
+      return CATALOG.map((c) => ({ ...c, installed: installed.find((m) => m.catalog_id === c.id)?.id ?? null, onDisk: c.downloadable ? onDisk(c) : undefined }));
     });
     api.get("/advisor/use-cases", async () => Object.entries(USE_CASES).map(([id, u]) => ({ id, label: u.label, weights: u.w })));
     api.get("/advisor", async (req) => {

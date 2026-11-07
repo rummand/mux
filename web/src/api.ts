@@ -73,7 +73,7 @@ export interface ApiKey { id: string; tenant_id: string; name: string; prefix: s
 export interface CatalogEntry {
   id: string; name: string; family: string; kind: Model["kind"]; repo: string; file: string; mmproj?: string; sizeGb: number; params: string; activeParams?: string;
   arch: string; ctx: number; license: string; routes: string[]; caps: Caps; defaultCtx: number; notes: string; released: string; minLlama?: string; installed?: string | null;
-  needs?: string;
+  needs?: string; downloadable?: boolean; onDisk?: boolean;
 }
 export interface Download { id: string; catalog_id: string | null; repo: string; files: string; quant: string | null; model_id: string | null; total_bytes: number; done_bytes: number; status: string; error: string | null; bps: number; started_at: number; finished_at: number | null }
 export interface LocalFile { path: string; real: string; name: string; sizeGb: number; repo: string | null; registeredAs: string | null; mmproj: string | null }

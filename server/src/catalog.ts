@@ -35,6 +35,11 @@ export interface CatalogEntry {
    * of a Download button, the downloader refuses it, and the advisor never recommends it.
    */
   needs?: string;
+  /**
+   * With `needs`: the Library still downloads its files, ready for the runtime it needs, but registers no model. A
+   * `file` that is not a GGUF means the whole repo is the model (safetensors, config, tokenizer), fetched as it is.
+   */
+  downloadable?: boolean;
 }
 
 export const CATALOG: CatalogEntry[] = [
