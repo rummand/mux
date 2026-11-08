@@ -202,6 +202,9 @@ model loads on the first request (~9 GB at 8-bit) and is let go after 10 idle mi
 images (`image` or `image[]`); without a `size` it keeps the first image's shape at about a megapixel. Images and their
 prompts are never logged. The script ends with a test image in `~/.mux/logs/images-test.png`.
 
+All of it at once — this Mac, the Railway gateway and LBS Studio — is `./deploy/setup-images.sh` (it hands itself to
+launchd, so Ask mux can start it although it restarts mux; follow `~/.mux/logs/setup-images.log`).
+
 Danish speech: `./deploy/speech-da.sh` registers Record's Danish engines on this Mac (Record's `speech-da` service,
 :8798) as `roest-v3` (CoRal's Røst v3, a Danish Whisper large-v3), `hviske-v5` and `whisper-turbo`, and the route
 `transcribe-da` (Røst first, whisper.cpp last). The model is read from `?model=` or, as OpenAI's clients send it, from
