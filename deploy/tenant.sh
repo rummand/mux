@@ -6,7 +6,8 @@
 # The tenant is saved with default_route auto and status active unless the json says otherwise (again: it updates
 # it). Every run makes a new key: mux keeps only its hash, so the key is printed this once — paste it straight where
 # it goes. The gateway's URL is MUX_GATEWAY_URL, else the Railway gateway; its admin token is read with the logged-in
-# railway CLI (run from the repo) and never printed.
+# railway CLI (run from the repo) and never printed. MUX_KEY_VALUE=mux-sk-… registers that key instead of making one (a
+# key handed out before the tenant existed); keep it out of the repo, which is public.
 set -eu
 [ $# -ge 3 ] || { sed -n 2,9p "$0" >&2; exit 2; }
 ID=$1 NAME=$2 KEY_NAME=$3 EXTRA=${4:-'{}'}
@@ -29,7 +30,7 @@ print(json.dumps({"name": sys.argv[1], "default_route": "auto", "status": "activ
 PY
 echo "tenant $ID saved"
 
-KEY=$(python3 -c 'import sys, json; print(json.dumps({"name": sys.argv[1]}))' "$KEY_NAME" | api POST "/tenants/$ID/keys" | field key)
+KEY=$(python3 -c 'import sys, json; print(json.dumps({"name": sys.argv[1], **({"value": sys.argv[2]} if sys.argv[2] else {})}))' "$KEY_NAME" "${MUX_KEY_VALUE:-}" | api POST "/tenants/$ID/keys" | field key)
 echo "key ($KEY_NAME): $KEY"
 
 echo "test request through $GATEWAY:"
