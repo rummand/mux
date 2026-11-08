@@ -45,6 +45,15 @@ export const DECISION_SPEECH_MODELS: CatalogEntry[] = [
     ],
     needs: "a decision GGUF. The published GGUFs are plain text models (llama.cpp answers 501), and the MLX port skips the bidirectional attention it was trained with.",
   },
+  // ── Images: text to image and editing, for LBS Studio (deploy/images.sh, server/images/image_server.py) ─────
+  {
+    id: "flux2-klein-4b", name: "FLUX.2 [klein] 4B", family: "Black Forest Labs FLUX.2", kind: "image",
+    repo: "black-forest-labs/FLUX.2-klein-4B", file: "transformer/diffusion_pytorch_model.safetensors", sizeGb: 16.0,
+    params: "4B (+4B text encoder)", arch: "flux2", ctx: 0, license: "apache-2.0", routes: ["image", "image-edit"], defaultCtx: 0, released: "2026-01",
+    caps: { quality: 7.5, speed: 9 },
+    notes: "Text to image and editing from one or more input images in one model, 4 steps; ~9 GB loaded at 8-bit. The klein 9B is better but under the FLUX non-commercial license, and Qwen-Image 2.1 under Qwen's research license, so this is the one we may use for work.",
+    needs: "mflux, run by ./deploy/images.sh on the Mac (launchd com.mux.images on :8312), which fetches these weights itself; the Library does not install it.",
+  },
   // ── Speech: transcription and diarization ─────────────────────────────────────────────────────────────────────
   {
     id: "nemotron-3.5-asr", name: "Nemotron 3.5 ASR 0.6B", family: "NVIDIA Nemotron Speech", kind: "transcription",

@@ -53,7 +53,7 @@ export interface Instance {
 }
 export interface Bench { id: string; model_id: string; ts: number; status: string; results: { name: string; pass: boolean; ms: number; detail: string }[] | string; score: number | null; tps: number | null; prompt_tps: number | null; ttft_ms: number | null; load_ms: number | null; error: string | null }
 export interface Model {
-  id: string; display_name: string; kind: "chat" | "embedding" | "rerank" | "systemone" | "transcription" | "speech"; backend: "llamacpp" | "mlx" | "external" | "laya" | "jev" | "node";
+  id: string; display_name: string; kind: "chat" | "embedding" | "rerank" | "systemone" | "transcription" | "speech" | "image"; backend: "llamacpp" | "mlx" | "external" | "laya" | "jev" | "node";
   path: string | null; mmproj: string | null; base_url: string | null; api_key: string | null; upstream_model: string | null; catalog_id: string | null;
   size_bytes: number; ctx: number; parallel: number; extra_args: string[]; reasoning: "off" | "on" | "auto"; caps: Caps;
   keep_alive_min: number | null; pinned: boolean; enabled: boolean; notes: string; created_at: number; estimateGb: number;

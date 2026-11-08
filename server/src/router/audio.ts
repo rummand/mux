@@ -1,3 +1,4 @@
+import type { Kind } from "../models.js";
 import { acquire, release } from "../runtime/manager.js";
 import { MuxError } from "./errors.js";
 import { recordFailure, recordSuccess } from "./health.js";
@@ -51,13 +52,26 @@ export function setFormField(body: Buffer, contentType: string, name: string, va
   return Buffer.from(`${text.slice(0, close)}${sep}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${v}\r\n${text.slice(close)}`, "latin1");
 }
 
-export async function runAudio(ctx: Ctx, kind: AudioKind, requested: string | undefined, body: Buffer, contentType: string, signal: AbortSignal): Promise<Response> {
+export function runAudio(ctx: Ctx, kind: AudioKind, requested: string | undefined, body: Buffer, contentType: string, signal: AbortSignal): Promise<Response> {
+  return passThrough(ctx, kind, kind === "transcription" ? "audio/transcriptions" : "audio/speech", kind === "speech", requested, body, contentType, signal);
+}
+
+/** OpenAI's image API: /v1/images/generations (JSON) and /v1/images/edits (multipart, the images passed on untouched). */
+export type ImageOp = "generations" | "edits";
+export function runImage(ctx: Ctx, op: ImageOp, requested: string | undefined, body: Buffer, contentType: string, signal: AbortSignal): Promise<Response> {
+  return passThrough(ctx, "image", `images/${op}`, op === "generations", requested, body, contentType, signal);
+}
+
+/**
+ * A request an upstream answers as it came — audio or images — on the route's models in turn: the body goes on with
+ * the upstream's own model name in it (a JSON field, or the multipart form's `model`), and the answer comes back as is.
+ */
+async function passThrough(ctx: Ctx, kind: Kind, path: string, isJson: boolean, requested: string | undefined, body: Buffer, contentType: string, signal: AbortSignal): Promise<Response> {
   const d = decide(ctx.tenant, requested, kind, null);
   ctx.experiment = d.experiment ?? null;
   ctx.route = d.route?.name ?? null;
   ctx.reason = d.reason;
   ctx.requested = requested;
-  const path = kind === "transcription" ? "audio/transcriptions" : "audio/speech";
   let last = "";
   for (const [i, m] of (ctx.noFallback ? d.candidates.slice(0, 1) : d.candidates).entries()) {
     if (i > 0) ctx.fallbacks = i;
@@ -66,7 +80,7 @@ export async function runAudio(ctx: Ctx, kind: AudioKind, requested: string | un
     ctx.modelId = m.id;
     const tu = performance.now();
     try {
-      const payload = kind === "speech" ? Buffer.from(JSON.stringify({ ...JSON.parse(body.toString("utf8") || "{}"), model: up.model })) : setFormField(body, contentType, "model", up.model);
+      const payload = isJson ? Buffer.from(JSON.stringify({ ...JSON.parse(body.toString("utf8") || "{}"), model: up.model })) : setFormField(body, contentType, "model", up.model);
       const res = await fetch(`${up.baseUrl}/${path}?model=${encodeURIComponent(up.model)}`, {
         method: "POST", headers: { ...up.headers, "content-type": contentType }, body: new Uint8Array(payload), signal,
       });

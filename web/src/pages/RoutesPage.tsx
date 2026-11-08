@@ -95,7 +95,7 @@ function NewRoute({ open, onClose, onSave }: { open: boolean; onClose: () => voi
       <div className="space-y-3">
         <Field label="Name" hint="What a SaaS puts in model: e.g. support-da"><Input value={r.name} onChange={(e) => setR({ ...r, name: e.target.value })} className="font-mono" /></Field>
         <Field label="Description"><Input value={r.description} onChange={(e) => setR({ ...r, description: e.target.value })} /></Field>
-        <Field label="Kind"><Select value={r.kind} onChange={(e) => setR({ ...r, kind: e.target.value as Route["kind"] })}>{["chat", "embedding", "rerank", "systemone", "transcription", "speech"].map((k) => <option key={k}>{k}</option>)}</Select></Field>
+        <Field label="Kind"><Select value={r.kind} onChange={(e) => setR({ ...r, kind: e.target.value as Route["kind"] })}>{["chat", "embedding", "rerank", "systemone", "transcription", "speech", "image"].map((k) => <option key={k}>{k}</option>)}</Select></Field>
         <Field label="Strategy"><Select value={r.strategy} onChange={(e) => setR({ ...r, strategy: e.target.value as Route["strategy"] })}>{STRATEGIES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}</Select></Field>
       </div>
     </Modal>

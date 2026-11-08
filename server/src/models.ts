@@ -3,7 +3,7 @@ import { journal } from "./journal.js";
 
 /** llamacpp, mlx, laya run on this machine; node is a model on another mux; external and jev are APIs elsewhere. */
 export type Backend = "llamacpp" | "mlx" | "external" | "laya" | "jev" | "node";
-export type Kind = "chat" | "embedding" | "rerank" | "systemone" | "transcription" | "speech";
+export type Kind = "chat" | "embedding" | "rerank" | "systemone" | "transcription" | "speech" | "image";
 
 /** What a model is good at, 0–10, as the catalog estimates it until a benchmark on this Mac says otherwise. */
 export interface Caps {

@@ -34,6 +34,7 @@ SaaS (OpenAI / Anthropic SDK, curl)          Nexus (Railway → Funnel → Caddy
    ├─ /v1/messages           Anthropic Messages, streaming, tool_use
    ├─ /v1/embeddings  /v1/rerank
    ├─ /v1/audio/transcriptions  /v1/audio/speech   OpenAI audio: Whisper in, Piper (Danish) out
+   ├─ /v1/images/generations  /v1/images/edits     OpenAI images: FLUX.2 klein 4B through mflux (LBS Studio)
    ├─ /v1/systemone          Jev's System One (Laya / Clef / d3 / d1, or hosted Jev)
    ├─ keys · tenants · RPM/TPM · monthly budgets · max parallel
    ├─ router: routes (auto · fast · agent · smart · code · multilingual · vision · embed · rerank · systemone),
@@ -192,6 +193,14 @@ Speech: `./deploy/audio.sh` installs whisper.cpp (large-v3-turbo, `whisper` on r
 with the Danish voice da_DK-talesyntese-medium (`piper-da` on route `speak`, :8311, `server/tts/piper_server.py`) as
 launchd agents com.mux.whisper and com.mux.tts, and registers them; the gateway gets them as `mac-studio/…` on its
 next sync. Callers use OpenAI's audio API on mux; audio is never logged.
+
+Images: `./deploy/images.sh` first unloads every loaded model that is neither pinned nor first on `agent` (`--keep`
+skips that; nothing is deleted), then installs mflux in `~/.mux/images-venv`, fetches FLUX.2 [klein] 4B (Apache-2.0,
+~16 GB, into `~/.mux/models/hf`) and runs `server/images/image_server.py` as launchd agent com.mux.images (:8312). It
+becomes `flux2-klein-4b` on the routes `image` and `image-edit`, the names LBS Studio's ComfyUI nodes ask for. The
+model loads on the first request (~9 GB at 8-bit) and is let go after 10 idle minutes. An edit takes one or more
+images (`image` or `image[]`); without a `size` it keeps the first image's shape at about a megapixel. Images and their
+prompts are never logged. The script ends with a test image in `~/.mux/logs/images-test.png`.
 
 Danish speech: `./deploy/speech-da.sh` registers Record's Danish engines on this Mac (Record's `speech-da` service,
 :8798) as `roest-v3` (CoRal's Røst v3, a Danish Whisper large-v3), `hviske-v5` and `whisper-turbo`, and the route

@@ -121,7 +121,7 @@ function Installed({ models, error, reload }: { models: Model[] | null; error: s
             <Meter value={sys.system.diskTotalGb - sys.system.diskFreeGb} max={sys.system.diskTotalGb} tone={sys.system.diskFreeGb < 40 ? "warn" : "accent"} /></Card>
         </div>
       )}
-      <div className="mb-3"><Segmented value={kind} onChange={setKind} options={[{ value: "all", label: "All" }, { value: "chat", label: "Chat" }, { value: "embedding", label: "Embedding" }, { value: "rerank", label: "Rerank" }, { value: "systemone", label: "System One" }, { value: "transcription", label: "Transcription" }]} /></div>
+      <div className="mb-3"><Segmented value={kind} onChange={setKind} options={[{ value: "all", label: "All" }, { value: "chat", label: "Chat" }, { value: "embedding", label: "Embedding" }, { value: "rerank", label: "Rerank" }, { value: "systemone", label: "System One" }, { value: "transcription", label: "Transcription" }, { value: "image", label: "Image" }]} /></div>
       {!list.length ? <Empty>No models yet — download one from the Library, or import a GGUF already on this Mac.</Empty> : (
         <div className="grid gap-3 xl:grid-cols-2">
           {list.map((m) => {
@@ -207,7 +207,7 @@ function EditModel({ model, onClose, onSaved }: { model: Model; onClose: () => v
       <p className="mb-3 text-[12px] text-ink-3">Changes to context, slots, reasoning or arguments restart the model server on its next request.</p>
       <div className="grid gap-3 sm:grid-cols-3">
         <Field label="Display name" className="sm:col-span-2"><Input value={m.display_name} onChange={(e) => set("display_name", e.target.value)} /></Field>
-        <Field label="Kind"><Select value={m.kind} onChange={(e) => set("kind", e.target.value as Model["kind"])}>{["chat", "embedding", "rerank", "systemone", "transcription", "speech"].map((k) => <option key={k}>{k}</option>)}</Select></Field>
+        <Field label="Kind"><Select value={m.kind} onChange={(e) => set("kind", e.target.value as Model["kind"])}>{["chat", "embedding", "rerank", "systemone", "transcription", "speech", "image"].map((k) => <option key={k}>{k}</option>)}</Select></Field>
         {local && <>
           <Field label="Context (tokens)" hint="KV cache costs memory: ~0.06 GB per 1k"><Input type="number" value={m.ctx} onChange={(e) => set("ctx", Number(e.target.value))} /></Field>
           <Field label="Parallel slots"><Input type="number" min={1} value={m.parallel} onChange={(e) => set("parallel", Number(e.target.value))} /></Field>
@@ -262,7 +262,7 @@ function Library({ downloads, onStarted }: { downloads: Download[]; onStarted: (
     <>
       <ErrorNote error={error ?? err} />
       <div className="mb-3 flex flex-wrap gap-2">
-        <Segmented value={kind} onChange={setKind} options={[{ value: "all", label: "All" }, { value: "chat", label: "Chat" }, { value: "embedding", label: "Embedding" }, { value: "rerank", label: "Rerank" }, { value: "systemone", label: "System One" }, { value: "transcription", label: "Transcription" }]} />
+        <Segmented value={kind} onChange={setKind} options={[{ value: "all", label: "All" }, { value: "chat", label: "Chat" }, { value: "embedding", label: "Embedding" }, { value: "rerank", label: "Rerank" }, { value: "systemone", label: "System One" }, { value: "transcription", label: "Transcription" }, { value: "image", label: "Image" }]} />
         <Input className="w-64" placeholder="Search name, route, notes…" value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
       <Card pad={false}>
@@ -343,7 +343,7 @@ function ImportModal({ file, catalog, onClose, onDone }: { file: LocalFile; cata
           <option value="">none</option>{catalog.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </Select></Field>
         <Field label="Model id"><Input value={id} onChange={(e) => setId(e.target.value)} className="font-mono" /></Field>
-        <Field label="Kind"><Select value={kind} onChange={(e) => setKind(e.target.value as Model["kind"])}>{["chat", "embedding", "rerank", "systemone", "transcription", "speech"].map((k) => <option key={k}>{k}</option>)}</Select></Field>
+        <Field label="Kind"><Select value={kind} onChange={(e) => setKind(e.target.value as Model["kind"])}>{["chat", "embedding", "rerank", "systemone", "transcription", "speech", "image"].map((k) => <option key={k}>{k}</option>)}</Select></Field>
         {file.mmproj && <Toggle checked={mm} onChange={setMm} label="Use the vision projector found beside it" />}
       </div>
     </Modal>
@@ -428,7 +428,7 @@ function AddExternal({ onAdded }: { onAdded: () => void }) {
           <Field label="API key"><Input type="password" value={f.api_key} onChange={(e) => set("api_key", e.target.value)} /></Field>
           <Field label="Upstream model name"><Input value={f.upstream_model} onChange={(e) => set("upstream_model", e.target.value)} className="font-mono" placeholder="as the provider names it" /></Field>
           {backend === "external" && <>
-            <Field label="Kind"><Select value={f.kind} onChange={(e) => set("kind", e.target.value)}>{["chat", "embedding", "rerank", "systemone", "transcription", "speech"].map((k) => <option key={k}>{k}</option>)}</Select></Field>
+            <Field label="Kind"><Select value={f.kind} onChange={(e) => set("kind", e.target.value)}>{["chat", "embedding", "rerank", "systemone", "transcription", "speech", "image"].map((k) => <option key={k}>{k}</option>)}</Select></Field>
             <Field label="Context"><Input type="number" value={f.ctx} onChange={(e) => set("ctx", Number(e.target.value))} /></Field>
           </>}
         </div>

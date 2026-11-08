@@ -41,6 +41,8 @@ function seed() {
       ["systemone", "Jev's System One: fast closed decisions between agent moves (Laya here, Jev hosted)", "systemone", "priority"],
       ["transcribe", "Speech to text: OpenAI's /v1/audio/transcriptions (Whisper)", "transcription", "priority"],
       ["speak", "Text to speech: OpenAI's /v1/audio/speech", "speech", "priority"],
+      ["image", "Text to image: OpenAI's /v1/images/generations", "image", "priority"],
+      ["image-edit", "Image editing: OpenAI's /v1/images/edits (images and a prompt; LBS Studio's Harmonize)", "image", "priority"],
     ];
     // Any route missing (a first boot, or one added in a newer mux) is created empty; existing ones are left as they are.
     for (const [name, description, kind, strategy] of routes) if (!getRoute(name)) upsertRoute({ name, description, kind, strategy, candidates: [] });
