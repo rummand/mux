@@ -54,6 +54,15 @@ export const DECISION_SPEECH_MODELS: CatalogEntry[] = [
     notes: "Text to image and editing from one or more input images in one model, 4 steps; ~9 GB loaded at 8-bit. The klein 9B is better but under the FLUX non-commercial license, and Qwen-Image 2.1 under Qwen's research license, so this is the one we may use for work.",
     needs: "mflux, run by ./deploy/images.sh on the Mac (launchd com.mux.images on :8312), which fetches these weights itself; the Library does not install it.",
   },
+  {
+    id: "flux1-dev-abliterated", name: "FLUX.1 [dev] abliterated (v2)", family: "Black Forest Labs FLUX.1", kind: "image",
+    repo: "georgesung/flux.1-dev-abliterated-merged", file: "flux_ablit_v2.safetensors", sizeGb: 33.74, downloadable: true,
+    files: ["flux_ablit_v2.safetensors", "t5_xxl_ablit_v2.safetensors", "clip_l_ablit_v2.safetensors", "ae_ablit_v2.safetensors"],
+    params: "12B (+4.7B T5)", arch: "flux", ctx: 0, license: "flux-1-dev-non-commercial", routes: [], defaultCtx: 0, released: "2025-02",
+    caps: { quality: 7.5, speed: 4 },
+    notes: "FLUX.1 [dev] with its refusal direction removed (aoxo's abliterated v1 and v2, merged by georgesung), bf16 single files in ComfyUI's layout: transformer 23.8 GB, T5-XXL 9.5 GB, CLIP-L and the VAE. The Library fetches the v2 set only (the repo also holds v1, 69.5 GB in all). The repo names no license and aoxo's card says Apache-2.0, but FLUX.1 [dev] is under Black Forest Labs' non-commercial license, and that carries over: not for work products (LBS Studio uses FLUX.2 klein 4B). Prompts the original refuses are answered: keep it off shared routes.",
+    needs: "a runtime for ComfyUI-layout FLUX.1 files: ComfyUI itself, or a conversion to diffusers' layout for mflux (`mflux-generate --model dev --model-path` reads diffusers folders). The Library downloads the files; no model is registered.",
+  },
   // ── Speech: transcription and diarization ─────────────────────────────────────────────────────────────────────
   {
     id: "nemotron-3.5-asr", name: "Nemotron 3.5 ASR 0.6B", family: "NVIDIA Nemotron Speech", kind: "transcription",

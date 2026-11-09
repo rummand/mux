@@ -40,6 +40,8 @@ export interface CatalogEntry {
    * `file` that is not a GGUF means the whole repo is the model (safetensors, config, tokenizer), fetched as it is.
    */
   downloadable?: boolean;
+  /** For a downloadable entry that is not a GGUF: only these files of the repo, not all of it (one set of several). */
+  files?: string[];
 }
 
 export const CATALOG: CatalogEntry[] = [

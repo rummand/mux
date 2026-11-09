@@ -68,7 +68,9 @@ export async function startDownload(req: DownloadRequest): Promise<DownloadRow> 
   if (!repo || !file) throw new Error("a catalog id, or a repo and a file, is required");
   const snapshot = !!entry?.downloadable && !file.endsWith(".gguf");
   const files = await repoFiles(repo, snapshot);
-  const parts = snapshot ? (files.some((f) => f.path === file) ? files : []) : partsOf(files, file);
+  const wanted = snapshot && entry?.files ? files.filter((f) => entry.files!.includes(f.path)) : files;
+  if (entry?.files && wanted.length !== entry.files.length) throw new Error(`${repo} lacks ${entry.files.filter((p) => !files.some((f) => f.path === p)).join(", ")}`);
+  const parts = snapshot ? (wanted.some((f) => f.path === file) ? wanted : []) : partsOf(files, file);
   if (!parts.length) throw new Error(`${repo} has no ${file}`);
   const mmprojName = req.mmproj === null ? undefined : req.mmproj ?? entry?.mmproj;
   const mm = mmprojName ? files.find((f) => f.path === mmprojName) : undefined;
