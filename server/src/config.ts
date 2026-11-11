@@ -86,6 +86,8 @@ export const defaultSettings = {
    * "arch-router" on the Mac, "mac-studio/arch-router" on a gateway; "" leaves it to the auto route's own scoring.
    */
   intentRouterModel: "",
+  /** The page reader (/v1/read): how many reads one tenant may have in flight at once, beside its max_parallel. */
+  readerParallel: 8,
 };
 export type Settings = typeof defaultSettings;
 

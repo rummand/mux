@@ -36,6 +36,7 @@ SaaS (OpenAI / Anthropic SDK, curl)          Nexus (Railway → Funnel → Caddy
    ├─ /v1/audio/transcriptions  /v1/audio/speech   OpenAI audio: Whisper in, Piper (Danish) out
    ├─ /v1/images/generations  /v1/images/edits     OpenAI images: FLUX.2 klein 4B through mflux (LBS Studio)
    ├─ /v1/systemone          Jev's System One (Laya / Clef / d3 / d1, or hosted Jev)
+   ├─ /v1/search  /v1/read   shared services: web search (SearXNG), the page reader (pages, links, files)
    ├─ keys · tenants · RPM/TPM · monthly budgets · max parallel
    ├─ router: routes (auto · fast · agent · smart · code · multilingual · vision · embed · rerank · systemone),
    │          fallbacks, cooldowns, context/vision pre-checks, forced-tool guard
@@ -65,6 +66,53 @@ else (`gpt-4o`, `claude-sonnet-4-5`) — unknown names go to the tenant's defaul
 Optional headers: `x-mux-affinity` (keeps one run's calls on one model; without it, a run's `x-mux-trace-id`, else the conversation's opening, keeps them together), `x-mux-trace-id` (groups an agent run into a trace), `x-mux-agent` (which agent), `x-mux-tags`
 (comma list), `x-mux-user` (end user), `x-mux-no-fallback: 1`. Every answer carries `x-mux-request-id`,
 `x-mux-model`, `x-mux-route`, `x-mux-fallbacks`, `x-mux-cold-start`.
+
+## Web search and the page reader
+
+Every product searches and reads the web through mux with its own key, metered and limited like any call (rate,
+budgets and `max_parallel`; the reader also takes at most `readerParallel` reads per tenant at once, 8 by default,
+a setting). The Services page shows both: calls, errors, latency, tenants, sites, bytes read and what was read.
+
+`POST /v1/search {query, limit?, language?}` → `{object: "search", query, results: [{title, url, snippet, engine, published}]}`.
+
+`POST /v1/read` (`server/src/router/reader.ts`, route `web.read`, metered as model `reader`):
+
+```
+request  { url, max_chars?, links?: boolean, files?: boolean, max_bytes?, robots_txt?: boolean }
+answer   { object: "page", url, final_url, status, content_type, fetched_at,
+           title, text,
+           links?: [{ href, text, rel }],                 // with links: true
+           robots?: { meta, x_robots_tag },
+           canonical?, lang?,
+           redirects: [url…],                              // each hop's address, in order; the last is final_url
+           file?: { mime, size, sha256, name, bytes_base64 },   // with files: true, for anything not HTML
+           etag?, last_modified? }
+```
+
+- **Old callers** (`{url, max_chars}` → `title`, `text`) get the same answer; the other fields come beside it. `url`
+  is the address asked for, `final_url` where the redirects ended. `max_chars` 1000–100 000, default 20 000.
+- **Text**: a page's title and main content as headings (`# …`), paragraphs and list items; scripts, menus,
+  headers, footers and forms left out. Plain text as it is.
+- **Links** (`links: true`): every `<a href>` on the page — menus too — absolute, the fragment stripped, each once
+  (`javascript:` and `data:` left out), with its text (an image's alt) and its `rel`; plus `<link rel=canonical|alternate|next>`
+  (an alternate's `text` is its title or hreflang). At most 5000.
+- **Files** (`files: true`): a PDF, docx/xlsx/pptx, doc/xls/ppt, odt/ods/odp, csv, txt, rtf, an image or a zip comes
+  back in `file`: the **exact bytes** as base64, their SHA-256 (hex) for the caller to check and keep as a provenance
+  artifact, the type (the server's, or from the name and the bytes when it only says octet-stream) and the name
+  (Content-Disposition's, else the address's). `text` is extracted where mux does it cheaply (txt, csv, docx, pptx,
+  xlsx's strings, OpenDocument), else `""` and the caller extracts it (PDF, the old Office formats, images). Without
+  `files: true` anything but HTML and plain text is refused with 415, as before.
+- **Size**: `max_bytes` defaults to 25 MB and is capped at 50 MB. Above it: **413** `file_too_large` with the size the
+  server gave, never a cut file. Timeout 15 s for a page, 30 s when `files: true`.
+- **Redirects**: followed by hand, at most 5 (`502 too_many_redirects`), each new address checked for the public
+  web again; a loop is `502 redirect_loop`, naming the hops.
+- **Robots**: the page's `<meta name=robots>` and the `X-Robots-Tag` header come back in `robots`. mux does **not**
+  decide on robots.txt; the caller does. `robots_txt: true` fetches the site's `/robots.txt` (for `url`'s origin) as
+  raw text, at most 512 KB, with its status: a 404 is an answer (`status: 404`, `text: ""`), not an error.
+- **User agent**: `Mozilla/5.0 (compatible; mux-reader/2.0; +https://github.com/rummand/mux; <x-mux-agent>)` — the
+  caller's `x-mux-agent` (letters, digits, `.`, `-`, `_`) in the comment, e.g. `bloom-site-reader`.
+- **Safety**: public addresses only (loopback, private, link-local, CGNAT and `.local`/`.internal` refused), no
+  cookies, no JavaScript run. A page that is not 2xx is `502 upstream_error` naming its status.
 
 ## Routing
 

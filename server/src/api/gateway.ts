@@ -8,7 +8,8 @@ import { check, enter, leave } from "../router/limits.js";
 import { finish, newCtx, type Ctx } from "../router/metering.js";
 import { features } from "../router/select.js";
 import { runSystemOne } from "../router/systemone.js";
-import { runRead, runSearch } from "../router/web.js";
+import { runSearch } from "../router/web.js";
+import { runRead } from "../router/reader.js";
 import { authenticate } from "../tenants.js";
 import { anthropicErrorType, fromOpenAI, StreamTranslator, toOpenAI, type MessagesBody } from "./anthropic.js";
 

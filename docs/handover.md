@@ -48,6 +48,17 @@ Tests: `cd server && npm test` (74 pass). They never touch `~/.mux/mux.db` (`tes
 
 Outside the repo: LongCat-Video staged in `~/.mux/longcat` (see below).
 
+## 2026-11-12: the page reader reads whole sites (reader v2)
+
+`/v1/read` moved to `server/src/router/reader.ts` and grew, backward compatible, for bloom for business (the owner:
+"it can return files to bloom for business so it can use them for provenance"): `links: true` (every link, absolute),
+`files: true` (a document's exact bytes, base64, with their SHA-256; 413 above `max_bytes`, 25 MB default, 50 MB cap),
+at most 5 redirects each re-checked (loop and cap are clear errors), status, content type, redirects, meta robots and
+X-Robots-Tag, canonical, lang, ETag, Last-Modified, and `robots_txt: true` (raw; mux does not decide on robots.txt).
+The user agent carries `x-mux-agent`. `service_calls` gained `bytes` and `mime`; the Services page shows bytes read and
+what was read. Setting `readerParallel` (8): reads in flight per tenant. Contract in `README.md`; tests in
+`server/test/reader.test.ts` (a fixture server on loopback).
+
 ## Live state (2026-11-06)
 
 - Railway intent router: 19 decisions, 17 routed, 2 "other", 0 failed; **p50 436 ms, p95 1.8 s** — the p95 is close

@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { api } from "../api";
 import { BarList, SERIES, TimeChart } from "../components/charts";
 import { Badge, Button, Card, Empty, ErrorNote, Input, PageHeader, Segmented, StatusDot, Table, Td, Th } from "../components/ui";
-import { fmtAgo, fmtInt, fmtMs, fmtPct, fmtTime } from "../format";
+import { fmtAgo, fmtBytes, fmtInt, fmtMs, fmtPct, fmtTime } from "../format";
 import { useApi } from "../hooks";
 
 /**
@@ -20,9 +20,10 @@ interface Service {
   } | null;
   stats: {
     calls: number; errors: number; errorRate: number; p50: number | null; p95: number | null; avgResults: number | null; empty: number; avgChars: number | null;
+    bytes: number; avgBytes: number | null; kinds: Count[];
     series: { t: number; calls: number; errors: number; p50: number | null }[]; tenants: { id: string; name: string; calls: number; errors: number }[];
     engines: { name: string; answered: number; failed: number; avgS: number | null; reasons: { reason: string; n: number }[] }[]; hosts: Count[]; errorKinds: Count[];
-    recent: { id: string; ts: number; tenant: string; status: number; latencyMs: number; error: string | null; results: number | null; engines: string[]; missing: string[]; host: string | null; chars: number | null }[];
+    recent: { id: string; ts: number; tenant: string; status: number; latencyMs: number; error: string | null; results: number | null; engines: string[]; missing: string[]; host: string | null; chars: number | null; bytes: number | null; mime: string | null }[];
   };
 }
 
@@ -74,6 +75,7 @@ function ServiceView({ s, bucket }: { s: Service; bucket: number }) {
           <Kpi label="Latency p50 · p95" value={fmtMs(st.p50)} sub={`p95 ${fmtMs(st.p95)}`} />
           {search ? <Kpi label="Results per search" value={st.avgResults == null ? "—" : st.avgResults.toFixed(1)} sub={`${st.empty} came back empty`} tone={st.empty > 0 ? "warn" : undefined} />
             : <Kpi label="Text per page" value={st.avgChars == null ? "—" : `${fmtInt(st.avgChars)} chars`} sub={st.avgChars == null ? undefined : `≈ ${fmtInt(st.avgChars / 4)} tokens`} />}
+          {!search && <Kpi label="Bytes read" value={fmtBytes(st.bytes)} sub={st.avgBytes == null ? undefined : `${fmtBytes(st.avgBytes)} per call`} />}
           {h && <Kpi label="Uptime · 24 h" value={h.uptime24h == null ? "—" : fmtPct(h.uptime24h)} sub={h.latencyMs != null ? `health check ${fmtMs(h.latencyMs)} · ${fmtAgo(h.checked)}` : undefined} tone={h.uptime24h != null && h.uptime24h < 0.99 ? "warn" : undefined} />}
         </div>
         {h && h.checks.length > 0 && (
@@ -104,6 +106,7 @@ function ServiceView({ s, bucket }: { s: Service; bucket: number }) {
         {search ? <Engines h={h} st={st} /> : (
           <Card title="Sites read" subtitle="by calls">
             {st.hosts.length ? <BarList items={st.hosts.map((x) => ({ label: x.name, value: x.n }))} /> : <Empty>No pages read in this range.</Empty>}
+            {st.kinds.length > 0 && <div className="mt-3 border-t border-line pt-2 text-[11.5px] text-ink-3">What was read: {st.kinds.map((k) => `${k.name} ${k.n}`).join(" · ")}</div>}
           </Card>
         )}
         <Card title="What failed" subtitle="errors, grouped">
@@ -122,7 +125,7 @@ function ServiceView({ s, bucket }: { s: Service; bucket: number }) {
                   <Td>{r.tenant}</Td>
                   <Td>{r.status < 400 ? <Badge tone="good">{r.status}</Badge> : <Badge tone="bad" title={r.error ?? undefined}>{r.status}</Badge>}</Td>
                   <Td right>{fmtMs(r.latencyMs)}</Td>
-                  <Td className="text-[12px] text-ink-2">{r.status >= 400 ? <span className="text-bad">{r.error}</span> : search ? <>{r.results ?? "—"} results{r.engines.length ? ` · ${r.engines.join(", ")}` : ""}{r.missing.length ? <span className="text-warn"> · no answer: {r.missing.join(", ")}</span> : null}</> : <>{r.host ?? "—"}{r.chars != null ? ` · ${fmtInt(r.chars)} chars` : ""}</>}</Td>
+                  <Td className="text-[12px] text-ink-2">{r.status >= 400 ? <span className="text-bad">{r.error}</span> : search ? <>{r.results ?? "—"} results{r.engines.length ? ` · ${r.engines.join(", ")}` : ""}{r.missing.length ? <span className="text-warn"> · no answer: {r.missing.join(", ")}</span> : null}</> : <>{r.host ?? "—"}{r.mime ? ` · ${r.mime}` : ""}{r.bytes != null ? ` · ${fmtBytes(r.bytes)}` : ""}{r.chars != null ? ` · ${fmtInt(r.chars)} chars` : ""}</>}</Td>
                 </tr>
               ))}
               {!st.recent.length && <tr><Td className="text-ink-3">No calls in this range.</Td></tr>}

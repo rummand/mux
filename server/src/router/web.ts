@@ -1,5 +1,3 @@
-import { lookup } from "node:dns/promises";
-import { isIP } from "node:net";
 import { config } from "../config.js";
 import { MuxError } from "./errors.js";
 import type { Ctx } from "./metering.js";
@@ -8,8 +6,9 @@ import { noteCall } from "../services.js";
 /**
  * Search and read the web for every product (mux's shared services, the owner 2026-11-02: "SearXNG on mux, a
  * general service across all our products"). `/v1/search` asks the SearXNG beside mux (MUX_SEARXNG_URL, on
- * Railway's private network) and gives back titles, links and the engines' extracts; `/v1/read` fetches one page
- * and gives back its words as plain, AI-readable text – headings, paragraphs and lists, no scripts, menus or ads.
+ * Railway's private network) and gives back titles, links and the engines' extracts; `/v1/read` (reader.ts) fetches one
+ * page or file and gives back its words as plain, AI-readable text – headings, paragraphs and lists, no scripts, menus
+ * or ads – and, when asked, its links and the file's exact bytes.
  * Both sit behind a mux key, so they are metered and limited like any call. Free: no search vendor, no key.
  */
 
@@ -70,7 +69,7 @@ export function enginesFromHtml(html: string): EngineReport {
 }
 
 const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", aelig: "æ", oslash: "ø", aring: "å", AElig: "Æ", Oslash: "Ø", Aring: "Å", ndash: "–", mdash: "—", hellip: "…", laquo: "«", raquo: "»" };
-const decode = (s: string) =>
+export const decode = (s: string) =>
   s.replace(/&(#x?[0-9a-f]+|[a-z]+);/gi, (m, e: string) => {
     if (e[0] === "#") {
       const n = e[1].toLowerCase() === "x" ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
@@ -117,21 +116,6 @@ export function privateAddress(ip: string): boolean {
   return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224;
 }
 
-async function publicUrl(raw: string): Promise<URL> {
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    throw new MuxError(400, "invalid_request_error", "url must be an http(s) address");
-  }
-  if (!/^https?:$/.test(url.protocol) || url.username || url.password) throw new MuxError(400, "invalid_request_error", "url must be an http(s) address");
-  const host = url.hostname.replace(/^\[|\]$/g, "");
-  const ips = isIP(host) ? [host] : (await lookup(host, { all: true }).catch(() => [])).map((a) => a.address);
-  if (!ips.length) throw new MuxError(400, "invalid_request_error", "the address could not be found");
-  if (ips.some(privateAddress) || /(^|\.)(internal|local|localhost)$/i.test(host)) throw new MuxError(400, "invalid_request_error", "only pages on the public web can be read");
-  return url;
-}
-
 export async function runSearch(ctx: Ctx, body: { query?: unknown; q?: unknown; limit?: unknown; language?: unknown }, signal: AbortSignal) {
   ctx.modelId = "searxng";
   ctx.route = "web.search";
@@ -166,30 +150,4 @@ export async function runSearch(ctx: Ctx, body: { query?: unknown; q?: unknown; 
   const results = resultsFromHtml(page, limit);
   noteCall(ctx, { service: "web.search", results: results.length, engines: enginesFromHtml(page) });
   return { object: "search", query, results };
-}
-
-export async function runRead(ctx: Ctx, body: { url?: unknown; max_chars?: unknown }, signal: AbortSignal) {
-  ctx.modelId = "reader";
-  ctx.route = "web.read";
-  const url = await publicUrl(String(body.url ?? ""));
-  const max = Math.min(Math.max(Number(body.max_chars) || 20_000, 1000), 100_000);
-  const res = await fetch(url, {
-    redirect: "manual",
-    headers: { accept: "text/html,application/xhtml+xml,text/plain;q=0.9", "user-agent": "Mozilla/5.0 (compatible; mux-reader/1.0; +https://github.com/rummand/mux)", "accept-language": "da,en;q=0.8" },
-    signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
-  }).catch((e) => {
-    throw new MuxError(502, "upstream_error", `the page could not be fetched (${e instanceof Error ? e.name : "error"})`);
-  });
-  // A redirect is followed once, checked again – so a public page cannot hand the reader to a private one
-  if (res.status >= 300 && res.status < 400 && res.headers.get("location")) {
-    return runRead(ctx, { url: new URL(res.headers.get("location")!, url).toString(), max_chars: max }, signal);
-  }
-  if (!res.ok) throw new MuxError(502, "upstream_error", `the page answered ${res.status}`);
-  const type = res.headers.get("content-type") ?? "";
-  if (!/text\/html|application\/xhtml|text\/plain/.test(type)) throw new MuxError(415, "unsupported_media", `the page is ${type.split(";")[0] || "not text"}, not a web page`);
-  const buf = await res.arrayBuffer();
-  const html = new TextDecoder(/charset=([\w-]+)/i.exec(type)?.[1] ?? "utf-8").decode(buf.slice(0, 3_000_000));
-  const page = type.includes("text/plain") ? { title: "", text: html.slice(0, max) } : pageText(html, max);
-  noteCall(ctx, { service: "web.read", host: url.hostname.replace(/^www\./, ""), chars: page.text.length });
-  return { object: "page", url: res.url || url.toString(), title: page.title, text: page.text };
 }

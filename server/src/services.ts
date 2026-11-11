@@ -3,7 +3,8 @@ import { config } from "./config.js";
 import { db, now } from "./db.js";
 import { RANGES } from "./admin/stats.js";
 import type { Ctx } from "./router/metering.js";
-import { runRead, runSearch, type EngineReport } from "./router/web.js";
+import { runSearch, type EngineReport } from "./router/web.js";
+import { runRead } from "./router/reader.js";
 
 /**
  * mux's shared services — not models, but things every product calls through mux with its key: web search (the
@@ -21,17 +22,23 @@ CREATE TABLE IF NOT EXISTS service_calls (
 CREATE INDEX IF NOT EXISTS service_calls_ts ON service_calls(ts);
 CREATE TABLE IF NOT EXISTS service_checks (ts INTEGER NOT NULL, service TEXT NOT NULL, ok INTEGER NOT NULL, latency_ms INTEGER, error TEXT, PRIMARY KEY (service, ts));
 `);
+// What the reader fetched (bytes) and what it was (a page's or a file's type, or "robots.txt"), since 2026-11-12
+{
+  const have = new Set((db.prepare("PRAGMA table_info(service_calls)").all() as { name: string }[]).map((c) => c.name));
+  if (!have.has("bytes")) db.exec("ALTER TABLE service_calls ADD COLUMN bytes INTEGER");
+  if (!have.has("mime")) db.exec("ALTER TABLE service_calls ADD COLUMN mime TEXT");
+}
 
 export const SERVICES = [
   { id: "web.search", name: "Web search", engine: "SearXNG", model: "searxng", endpoint: "POST /v1/search", about: "Searches the web through the SearXNG beside mux: titles, links and extracts from many engines at once. No vendor, no key, free." },
-  { id: "web.read", name: "Page reader", engine: "built into mux", model: "reader", endpoint: "POST /v1/read", about: "Fetches one public web page and gives back its words as plain, AI-readable text: headings, paragraphs and lists, without scripts, menus or ads." },
+  { id: "web.read", name: "Page reader", engine: "built into mux", model: "reader", endpoint: "POST /v1/read", about: "Fetches one public web page or file. A page comes back as plain, AI-readable text (headings, paragraphs and lists, without scripts, menus or ads), with its links if asked; a document (PDF, Office, CSV, images, zip) as its exact bytes and their SHA-256, for the caller's provenance. Status, redirects and robots signals come with it; robots.txt itself on request." },
 ] as const;
 
-const put = db.prepare("INSERT OR REPLACE INTO service_calls(request_id, ts, service, results, engines, missing, host, chars) VALUES(?, ?, ?, ?, ?, ?, ?, ?)");
+const put = db.prepare("INSERT OR REPLACE INTO service_calls(request_id, ts, service, results, engines, missing, host, chars, bytes, mime) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
 /** What a call found, written by router/web.ts. */
-export function noteCall(ctx: Pick<Ctx, "id">, c: { service: string; results?: number; engines?: EngineReport; host?: string; chars?: number }) {
+export function noteCall(ctx: Pick<Ctx, "id">, c: { service: string; results?: number; engines?: EngineReport; host?: string; chars?: number; bytes?: number; mime?: string }) {
   if (ctx.id.startsWith("test_")) return; // the owner trying it from the dashboard
-  try { put.run(ctx.id, now(), c.service, c.results ?? null, c.engines ? JSON.stringify(c.engines.answered) : null, c.engines?.failed.length ? JSON.stringify(c.engines.failed) : null, c.host ?? null, c.chars ?? null); } catch { /* metering never fails a call */ }
+  try { put.run(ctx.id, now(), c.service, c.results ?? null, c.engines ? JSON.stringify(c.engines.answered) : null, c.engines?.failed.length ? JSON.stringify(c.engines.failed) : null, c.host ?? null, c.chars ?? null, c.bytes ?? null, c.mime?.slice(0, 120) ?? null); } catch { /* metering never fails a call */ }
 }
 
 // ── SearXNG itself ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -79,9 +86,9 @@ type Failed = { name: string; reason: string };
 function stats(service: (typeof SERVICES)[number], range: string) {
   const r = RANGES[range] ?? RANGES["24h"];
   const since = now() - r.ms;
-  const rows = db.prepare(`SELECT r.id, r.ts, r.tenant_id, r.status, r.latency_ms, r.error, c.results, c.engines, c.missing, c.host, c.chars
+  const rows = db.prepare(`SELECT r.id, r.ts, r.tenant_id, r.status, r.latency_ms, r.error, c.results, c.engines, c.missing, c.host, c.chars, c.bytes, c.mime
     FROM requests r LEFT JOIN service_calls c ON c.request_id = r.id WHERE r.route = ? AND r.ts >= ? ORDER BY r.ts DESC`).all(service.id, since) as
-    { id: string; ts: number; tenant_id: string; status: number; latency_ms: number; error: string | null; results: number | null; engines: string | null; missing: string | null; host: string | null; chars: number | null }[];
+    { id: string; ts: number; tenant_id: string; status: number; latency_ms: number; error: string | null; results: number | null; engines: string | null; missing: string | null; host: string | null; chars: number | null; bytes: number | null; mime: string | null }[];
   const ok = rows.filter((x) => x.status < 400);
   const lat = ok.map((x) => x.latency_ms).sort((a, b) => a - b);
   const buckets = new Map<number, { t: number; calls: number; errors: number; lat: number[] }>();
@@ -100,6 +107,9 @@ function stats(service: (typeof SERVICES)[number], range: string) {
     avgResults: withResults.length ? withResults.reduce((a, x) => a + (x.results ?? 0), 0) / withResults.length : null,
     empty: withResults.filter((x) => x.results === 0).length,
     avgChars: ok.some((x) => x.chars != null) ? ok.reduce((a, x) => a + (x.chars ?? 0), 0) / ok.filter((x) => x.chars != null).length : null,
+    bytes: ok.reduce((a, x) => a + (x.bytes ?? 0), 0),
+    avgBytes: ok.some((x) => x.bytes != null) ? ok.reduce((a, x) => a + (x.bytes ?? 0), 0) / ok.filter((x) => x.bytes != null).length : null,
+    kinds: count(ok.map((x) => x.mime).filter((m): m is string => !!m)).slice(0, 10).map(([name, n]) => ({ name, n })),
     series: [...buckets.values()].map((b) => ({ t: b.t, calls: b.calls, errors: b.errors, p50: pct(b.lat.sort((a, c) => a - c), 50) })),
     tenants,
     // Per engine, over the searches in range: how often it answered and how fast, how often it failed and why
@@ -116,7 +126,7 @@ function stats(service: (typeof SERVICES)[number], range: string) {
     hosts: count(ok.map((x) => x.host).filter((h): h is string => !!h)).slice(0, 15).map(([name, n]) => ({ name, n })),
     errorKinds: count(rows.filter((x) => x.status >= 400).map((x) => (x.error ?? `status ${x.status}`).replace(/\d{3,}/g, "…").slice(0, 120))).slice(0, 8).map(([name, n]) => ({ name, n })),
     recent: rows.slice(0, 25).map((x) => ({ id: x.id, ts: x.ts, tenant: x.tenant_id, status: x.status, latencyMs: x.latency_ms, error: x.error, results: x.results,
-      engines: parse<Answered | string>(x.engines).map((a) => (typeof a === "string" ? a : a.name)), missing: parse<Failed | string>(x.missing).map((f) => (typeof f === "string" ? f : `${f.name} (${f.reason})`)), host: x.host, chars: x.chars })),
+      engines: parse<Answered | string>(x.engines).map((a) => (typeof a === "string" ? a : a.name)), missing: parse<Failed | string>(x.missing).map((f) => (typeof f === "string" ? f : `${f.name} (${f.reason})`)), host: x.host, chars: x.chars, bytes: x.bytes, mime: x.mime })),
   };
 }
 
