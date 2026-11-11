@@ -78,10 +78,12 @@ a setting). The Services page shows both: calls, errors, latency, tenants, sites
 `POST /v1/read` (`server/src/router/reader.ts`, route `web.read`, metered as model `reader`):
 
 ```
-request  { url, max_chars?, links?: boolean, files?: boolean, max_bytes?, robots_txt?: boolean }
+request  { url, max_chars?, links?: boolean, files?: boolean, max_bytes?, robots_txt?: boolean,
+           html?: boolean, max_html_chars? }
 answer   { object: "page", url, final_url, status, content_type, fetched_at,
            title, text,
            links?: [{ href, text, rel }],                 // with links: true
+           html?, html_truncated?,                        // with html: true, for a web page
            robots?: { meta, x_robots_tag },
            canonical?, lang?,
            redirects: [url…],                              // each hop's address, in order; the last is final_url
@@ -102,6 +104,10 @@ answer   { object: "page", url, final_url, status, content_type, fetched_at,
   (Content-Disposition's, else the address's). `text` is extracted where mux does it cheaply (txt, csv, docx, pptx,
   xlsx's strings, OpenDocument), else `""` and the caller extracts it (PDF, the old Office formats, images). Without
   `files: true` anything but HTML and plain text is refused with 415, as before.
+- **Markup** (`html: true`): a web page's HTML as it came, decoded (scripts and styles left in as text; nothing is
+  run), at most `max_html_chars` characters (1000–2 000 000, default 200 000), with `html_truncated` saying whether it
+  was cut. Only for a web page: plain text, robots.txt and files get no `html`. Metered with the text (the characters
+  returned). `links` and `file` are unchanged by it.
 - **Size**: `max_bytes` defaults to 25 MB and is capped at 50 MB. Above it: **413** `file_too_large` with the size the
   server gave, never a cut file. Timeout 15 s for a page, 30 s when `files: true`.
 - **Redirects**: followed by hand, at most 5 (`502 too_many_redirects`), each new address checked for the public

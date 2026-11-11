@@ -18,7 +18,10 @@ import { decode, pageText, privateAddress } from "./web.js";
  *    base64, with their SHA-256 – text extracted where that is cheap (text, CSV, docx/xlsx/pptx/odt), else empty;
  *  - what a crawler must know to behave: the status, content type, redirects (at most 5, each one checked for a public
  *    address again), the page's meta robots and X-Robots-Tag, the canonical, ETag and Last-Modified;
- *  - with `robots_txt: true`, the site's /robots.txt as it is. mux does not decide on robots.txt: the caller does.
+ *  - with `robots_txt: true`, the site's /robots.txt as it is. mux does not decide on robots.txt: the caller does;
+ *  - with `html: true`, a web page's markup as it came (decoded, scripts left in as text, never run), capped at
+ *    `max_html_chars` (200 000 default, 2 000 000 at most) with `html_truncated` saying whether it was cut
+ *    (2026-11-12: bloom for business ranks a company's colours by the elements its start page shows).
  * Old callers ({url, max_chars} → {title, text}) get the same answer, with more fields beside it.
  * Safety: public addresses only, no cookies, no JavaScript, a size cap (413 above it, never a cut file), a timeout.
  */
@@ -28,15 +31,19 @@ const MAX_HOPS = 5;
 const PAGE_TIMEOUT_MS = 15_000;
 const FILE_TIMEOUT_MS = 30_000;
 const ROBOTS_MAX_BYTES = 512 * 1024; // what Google reads of a robots.txt
+const HTML_DEFAULT_CHARS = 200_000;
+const HTML_MAX_CHARS = 2_000_000;
 
 export interface ReadBody {
   url?: unknown; max_chars?: unknown; links?: unknown; files?: unknown; max_bytes?: unknown; robots_txt?: unknown;
+  html?: unknown; max_html_chars?: unknown;
 }
 export type Link = { href: string; text: string; rel: string | null };
 export interface PageAnswer {
   object: "page"; url: string; final_url: string; status: number; content_type: string; fetched_at: string;
   title: string; text: string;
   links?: Link[];
+  html?: string; html_truncated?: boolean;
   robots?: { meta: string | null; x_robots_tag: string | null };
   canonical?: string | null; lang?: string | null;
   redirects: string[];
@@ -256,7 +263,8 @@ export async function runRead(ctx: Ctx, b: ReadBody, signal: AbortSignal, opts: 
   const requested = await publicUrl(String(b.url ?? ""), isPrivate);
   const maxChars = Math.min(Math.max(Number(b.max_chars) || 20_000, 1000), 100_000);
   const maxBytes = Math.min(Math.max(Number(b.max_bytes) || 25 * MB, 1024), 50 * MB);
-  const wantLinks = b.links === true, wantFiles = b.files === true, robotsTxt = b.robots_txt === true;
+  const wantLinks = b.links === true, wantFiles = b.files === true, robotsTxt = b.robots_txt === true, wantHtml = b.html === true;
+  const maxHtml = Math.min(Math.max(Number(b.max_html_chars) || HTML_DEFAULT_CHARS, 1000), HTML_MAX_CHARS);
 
   const tenant = ctx.tenant?.id ?? "";
   const limit = Math.max(1, Number(settings().readerParallel) || 8);
@@ -303,8 +311,10 @@ export async function runRead(ctx: Ctx, b: ReadBody, signal: AbortSignal, opts: 
       const html = decodeText(bytes.subarray(0, 5_000_000), charset);
       const page = pageText(html, maxChars);
       const meta = pageMeta(html, final);
-      note(bytes.length, page.text.length, header || "text/html");
-      return { ...base, title: page.title, text: page.text, ...(wantLinks ? { links: meta.links } : {}), robots: { ...base.robots, meta: meta.robots }, canonical: meta.canonical, lang: meta.lang };
+      // The markup, when asked: metered as characters returned, like the text
+      const markup = wantHtml ? (html.length > maxHtml ? { html: html.slice(0, maxHtml), html_truncated: true } : { html, html_truncated: false }) : {};
+      note(bytes.length, page.text.length + (markup.html?.length ?? 0), header || "text/html");
+      return { ...base, title: page.title, text: page.text, ...(wantLinks ? { links: meta.links } : {}), ...markup, robots: { ...base.robots, meta: meta.robots }, canonical: meta.canonical, lang: meta.lang };
     };
     if (isHtml(header) || (!header && !wantFiles)) return asPage(await body(res, maxBytes));
     if (!wantFiles) {

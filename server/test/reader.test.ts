@@ -51,6 +51,8 @@ const PAGE = `<!doctype html><html lang="da"><head><title>Om os</title>
   <a href="/kontakt">Kontakt igen</a><a href="#top">Til toppen</a><a href="javascript:void(0)">Nej</a><a href="mailto:hej@example.org">Skriv</a>
   <a href="https://other.example/x"><img src="a.png" alt="Partner"></a></main></body></html>`;
 
+const LONG = `<!doctype html><html><head><title>Long</title></head><body><header class="top"><a class="btn">Book</a></header>${"<p>words</p>".repeat(300)}</body></html>`;
+
 let server: Server;
 let base = "";
 const seenUA: string[] = [];
@@ -62,6 +64,7 @@ before(async () => {
     switch (u.pathname) {
       case "/page": return send(200, "text/html; charset=utf-8", PAGE, { "x-robots-tag": "noarchive", etag: '"v1"', "last-modified": "Tue, 10 Nov 2026 08:00:00 GMT" });
       case "/x.css": return send(200, "text/css; charset=utf-8", ":root{--brand:#c2410c} body{font-family:Georgia,serif}");
+      case "/long": return send(200, "text/html; charset=utf-8", LONG);
       case "/plain": return send(200, "text/plain; charset=utf-8", "just words");
       case "/report.pdf": return send(200, "application/pdf", PDF);
       case "/download": return send(200, "application/octet-stream", PDF, { "content-disposition": 'attachment; filename="aarsrapport 2025.pdf"' });
@@ -130,6 +133,27 @@ test("files: a stylesheet comes back as text/css, its exact bytes and its words;
   assert.equal(p.file!.sha256, createHash("sha256").update(css).digest("hex"));
   assert.equal(p.text, css);
   await assert.rejects(read({ url: `${base}/x.css` }), (e: unknown) => (e as { status?: number }).status === 415);
+});
+
+test("html: the page's markup only when asked, capped with html_truncated, links and files unchanged", async () => {
+  const plain = await read({ url: `${base}/page`, links: true });
+  assert.equal(plain.html, undefined);
+  assert.equal(plain.html_truncated, undefined);
+  const p = await read({ url: `${base}/page`, html: true, links: true });
+  assert.equal(p.html, PAGE);
+  assert.equal(p.html_truncated, false);
+  assert.deepEqual(p.links, plain.links, "links as before");
+  assert.equal(p.text, plain.text);
+  const cut = await read({ url: `${base}/long`, html: true, max_html_chars: 1000 });
+  assert.equal(cut.html!.length, 1000);
+  assert.equal(cut.html_truncated, true);
+  assert.equal(cut.html, LONG.slice(0, 1000));
+  // Not a page: no markup, the file as before
+  const css = await read({ url: `${base}/x.css`, files: true, html: true });
+  assert.equal(css.html, undefined);
+  assert.equal(css.file!.mime, "text/css");
+  const t = await read({ url: `${base}/plain`, html: true });
+  assert.equal(t.html, undefined);
 });
 
 test("robots: the meta robots and X-Robots-Tag come back; robots_txt: true returns /robots.txt raw", async () => {

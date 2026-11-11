@@ -64,6 +64,10 @@ approved the reader returning links and files): `links: true` also returns `<lin
 `rel: "stylesheet"`, and `files: true` returns a stylesheet as a file (`text/css`, exact bytes, SHA-256, its words as
 `text`). Without `files: true` a stylesheet is still refused (415), as before. Tests in `server/test/reader.test.ts`.
 
+Then (bloom for business ranks a company's colours by the elements its start page shows): `html: true` returns a web
+page's markup as it came, capped at `max_html_chars` (200 000 default, 2 000 000 at most) with `html_truncated`;
+metered with the text. `links` and `file` unchanged. Contract in `README.md`; test in `server/test/reader.test.ts`.
+
 ## Live state (2026-11-06)
 
 - Railway intent router: 19 decisions, 17 routed, 2 "other", 0 failed; **p50 436 ms, p95 1.8 s** — the p95 is close
