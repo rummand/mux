@@ -94,9 +94,9 @@ answer   { object: "page", url, final_url, status, content_type, fetched_at,
 - **Text**: a page's title and main content as headings (`# …`), paragraphs and list items; scripts, menus,
   headers, footers and forms left out. Plain text as it is.
 - **Links** (`links: true`): every `<a href>` on the page — menus too — absolute, the fragment stripped, each once
-  (`javascript:` and `data:` left out), with its text (an image's alt) and its `rel`; plus `<link rel=canonical|alternate|next>`
+  (`javascript:` and `data:` left out), with its text (an image's alt) and its `rel`; plus `<link rel=canonical|alternate|next|stylesheet>`
   (an alternate's `text` is its title or hreflang). At most 5000.
-- **Files** (`files: true`): a PDF, docx/xlsx/pptx, doc/xls/ppt, odt/ods/odp, csv, txt, rtf, an image or a zip comes
+- **Files** (`files: true`): a PDF, docx/xlsx/pptx, doc/xls/ppt, odt/ods/odp, csv, txt, css, rtf, an image or a zip comes
   back in `file`: the **exact bytes** as base64, their SHA-256 (hex) for the caller to check and keep as a provenance
   artifact, the type (the server's, or from the name and the bytes when it only says octet-stream) and the name
   (Content-Disposition's, else the address's). `text` is extracted where mux does it cheaply (txt, csv, docx, pptx,

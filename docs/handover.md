@@ -59,6 +59,11 @@ The user agent carries `x-mux-agent`. `service_calls` gained `bytes` and `mime`;
 what was read. Setting `readerParallel` (8): reads in flight per tenant. Contract in `README.md`; tests in
 `server/test/reader.test.ts` (a fixture server on loopback).
 
+Later the same day (bloom for business's design system reads a company's look from its own stylesheets; the owner
+approved the reader returning links and files): `links: true` also returns `<link rel=stylesheet>` hrefs with
+`rel: "stylesheet"`, and `files: true` returns a stylesheet as a file (`text/css`, exact bytes, SHA-256, its words as
+`text`). Without `files: true` a stylesheet is still refused (415), as before. Tests in `server/test/reader.test.ts`.
+
 ## Live state (2026-11-06)
 
 - Railway intent router: 19 decisions, 17 routed, 2 "other", 0 failed; **p50 436 ms, p95 1.8 s** — the p95 is close

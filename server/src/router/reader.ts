@@ -12,8 +12,9 @@ import { decode, pageText, privateAddress } from "./web.js";
  * `/v1/read`, mux's page reader (route `web.read`, metered as model `reader`). It fetches one public address and
  * gives back what a caller needs to read a whole site and keep its sources (the owner 2026-11-12: "it can return
  * files to bloom for business so it can use them for provenance"):
- *  - a web page's words as plain text (web.ts `pageText`), and with `links: true` every link on it, absolute;
- *  - with `files: true`, a document (PDF, Office, OpenDocument, CSV, text, RTF, images, zip) as its exact bytes,
+ *  - a web page's words as plain text (web.ts `pageText`), and with `links: true` every link on it, absolute, and
+ *    its stylesheets (`rel: "stylesheet"`, 2026-11-12: bloom for business reads a company's look from them);
+ *  - with `files: true`, a document (PDF, Office, OpenDocument, CSV, text, CSS, RTF, images, zip) as its exact bytes,
  *    base64, with their SHA-256 – text extracted where that is cheap (text, CSV, docx/xlsx/pptx/odt), else empty;
  *  - what a crawler must know to behave: the status, content type, redirects (at most 5, each one checked for a public
  *    address again), the page's meta robots and X-Robots-Tag, the canonical, ETag and Last-Modified;
@@ -54,7 +55,7 @@ const ODS = "application/vnd.oasis.opendocument.spreadsheet";
 const ODP = "application/vnd.oasis.opendocument.presentation";
 const BY_EXT: Record<string, string> = {
   pdf: "application/pdf", docx: DOCX, xlsx: XLSX, pptx: PPTX, doc: "application/msword", xls: "application/vnd.ms-excel",
-  ppt: "application/vnd.ms-powerpoint", odt: ODT, ods: ODS, odp: ODP, csv: "text/csv", txt: "text/plain", rtf: "application/rtf",
+  ppt: "application/vnd.ms-powerpoint", odt: ODT, ods: ODS, odp: ODP, csv: "text/csv", txt: "text/plain", css: "text/css", rtf: "application/rtf",
   zip: "application/zip", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp",
   svg: "image/svg+xml", tif: "image/tiff", tiff: "image/tiff", bmp: "image/bmp", avif: "image/avif", heic: "image/heic",
 };
@@ -115,7 +116,7 @@ const byNumber = (a: string, b: string) => Number(/(\d+)\.xml$/.exec(a)?.[1] ?? 
 
 /** The text of a file, where that is cheap: plain text and CSV, and the XML inside docx/xlsx/pptx/OpenDocument. Else "". */
 export function fileText(mime: string, bytes: Buffer, charset: string | null): string {
-  if (mime === "text/plain" || mime === "text/csv") return decodeText(bytes, charset);
+  if (mime === "text/plain" || mime === "text/csv" || mime === "text/css") return decodeText(bytes, charset);
   try {
     if (mime === DOCX) return xmlText(unzip(bytes, (n) => n === "word/document.xml").get("word/document.xml")?.toString("utf8") ?? "", /<\/w:p>/g);
     if (mime === PPTX) {
@@ -169,7 +170,7 @@ export function pageMeta(html: string, pageUrl: URL, maxLinks = 5000) {
     const rels = (a.rel ?? "").toLowerCase().split(/\s+/);
     const href = a.href != null ? absolute(a.href, base) : null;
     if (rels.includes("canonical") && href && !canonical) canonical = href;
-    const rel = rels.find((r) => r === "canonical" || r === "alternate" || r === "next");
+    const rel = rels.find((r) => r === "canonical" || r === "alternate" || r === "next" || r === "stylesheet");
     if (rel) add(href, (a.title ?? a.hreflang ?? "").trim(), a.rel.trim());
   }
   for (const m of clean.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/gi)) {
@@ -266,7 +267,7 @@ export async function runRead(ctx: Ctx, b: ReadBody, signal: AbortSignal, opts: 
     const target = robotsTxt ? new URL("/robots.txt", requested.origin) : requested;
     const init: RequestInit = {
       headers: {
-        accept: robotsTxt ? "text/plain,*/*;q=0.5" : wantFiles ? "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8" : "text/html,application/xhtml+xml,text/plain;q=0.9",
+        accept: robotsTxt ? "text/plain,*/*;q=0.5" : wantFiles ? "text/html,application/xhtml+xml,text/plain;q=0.9,text/css;q=0.9,*/*;q=0.8" : "text/html,application/xhtml+xml,text/plain;q=0.9",
         "user-agent": userAgent(ctx.agent),
         "accept-language": "da,en;q=0.8",
       },

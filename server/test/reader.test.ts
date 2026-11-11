@@ -61,6 +61,7 @@ before(async () => {
     const send = (status: number, type: string, body: string | Buffer, headers: Record<string, string> = {}) => { res.writeHead(status, { "content-type": type, ...headers }); res.end(body); };
     switch (u.pathname) {
       case "/page": return send(200, "text/html; charset=utf-8", PAGE, { "x-robots-tag": "noarchive", etag: '"v1"', "last-modified": "Tue, 10 Nov 2026 08:00:00 GMT" });
+      case "/x.css": return send(200, "text/css; charset=utf-8", ":root{--brand:#c2410c} body{font-family:Georgia,serif}");
       case "/plain": return send(200, "text/plain; charset=utf-8", "just words");
       case "/report.pdf": return send(200, "application/pdf", PDF);
       case "/download": return send(200, "application/octet-stream", PDF, { "content-disposition": 'attachment; filename="aarsrapport 2025.pdf"' });
@@ -101,11 +102,11 @@ test("old callers: {url, max_chars} gives title and text as before, the new fiel
   assert.equal(t.text, "just words");
 });
 
-test("links: every <a href> absolute, fragments stripped, no doubles, plus alternate, next and the canonical", async () => {
+test("links: every <a href> absolute, fragments stripped, no doubles, plus alternate, next, stylesheets and the canonical", async () => {
   const p = await read({ url: `${base}/page`, links: true });
   const hrefs = p.links!.map((l) => l.href);
   assert.deepEqual(hrefs, [
-    `${base}/om-os`, "https://example.org/en/about", `${base}/page?page=2`,
+    `${base}/om-os`, "https://example.org/en/about", `${base}/page?page=2`, `${base}/x.css`,
     `${base}/`, `${base}/kontakt`, `${base}/rapport.pdf`, "mailto:hej@example.org", "https://other.example/x",
   ]);
   const by = Object.fromEntries(p.links!.map((l) => [l.href, l]));
@@ -115,9 +116,20 @@ test("links: every <a href> absolute, fragments stripped, no doubles, plus alter
   assert.equal(by["https://example.org/en/about"].rel, "alternate");
   assert.equal(by["https://example.org/en/about"].text, "en");
   assert.equal(by["https://other.example/x"].text, "Partner");
-  assert.ok(!hrefs.some((h) => /from-script|javascript|x\.css/.test(h)));
+  assert.ok(!hrefs.some((h) => /from-script|javascript/.test(h)));
+  assert.equal(by[`${base}/x.css`].rel, "stylesheet", "a page's stylesheets come back as links (2026-11-12)");
   assert.equal(p.canonical, `${base}/om-os`);
   assert.equal(p.lang, "da");
+});
+
+test("files: a stylesheet comes back as text/css, its exact bytes and its words; without files: true it is refused as before", async () => {
+  const p = await read({ url: `${base}/x.css`, files: true });
+  assert.equal(p.file!.mime, "text/css");
+  const css = ":root{--brand:#c2410c} body{font-family:Georgia,serif}";
+  assert.equal(Buffer.from(p.file!.bytes_base64, "base64").toString("utf8"), css);
+  assert.equal(p.file!.sha256, createHash("sha256").update(css).digest("hex"));
+  assert.equal(p.text, css);
+  await assert.rejects(read({ url: `${base}/x.css` }), (e: unknown) => (e as { status?: number }).status === 415);
 });
 
 test("robots: the meta robots and X-Robots-Tag come back; robots_txt: true returns /robots.txt raw", async () => {
