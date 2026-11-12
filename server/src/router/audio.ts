@@ -1,5 +1,5 @@
 import type { Kind } from "../models.js";
-import { acquire, release } from "../runtime/manager.js";
+import { acquire, ModelUnavailable, release } from "../runtime/manager.js";
 import { MuxError } from "./errors.js";
 import { recordFailure, recordSuccess } from "./health.js";
 import type { Ctx } from "./metering.js";
@@ -76,7 +76,12 @@ async function passThrough(ctx: Ctx, kind: Kind, path: string, isJson: boolean, 
   for (const [i, m] of (ctx.noFallback ? d.candidates.slice(0, 1) : d.candidates).entries()) {
     if (i > 0) ctx.fallbacks = i;
     let up;
-    try { up = await acquire(m); } catch (e) { recordFailure(m.id); last = `${m.id}: ${(e as Error).message}`; continue; }
+    try { up = await acquire(m); } catch (e) {
+      // This machine resting (presence) is not the model failing: no cooldown for it
+      if (!(e instanceof ModelUnavailable && e.type === "node_resting")) recordFailure(m.id);
+      last = `${m.id}: ${(e as Error).message}`;
+      continue;
+    }
     ctx.modelId = m.id;
     const tu = performance.now();
     try {

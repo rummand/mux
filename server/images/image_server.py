@@ -2,18 +2,24 @@
 
 Runs in ~/.mux/images-venv (python3.12 -m venv ~/.mux/images-venv && ~/.mux/images-venv/bin/pip install mflux).
 The model is FLUX.2 [klein] 4B (Black Forest Labs, Apache-2.0): text to image, and editing from one or more input
-images, in 4 steps. One loaded model answers both endpoints: with no input image the edit model is plain text to
-image. Weights come from Hugging Face into HF_HUB_CACHE (deploy/images.sh points it at ~/.mux/models/hf and
+images, in 4 steps. Text to image runs mflux's Flux2Klein, edits its Flux2KleinEdit (0.24's edit pipeline needs an input
+image), one of them in memory at a time. Weights come from Hugging Face into HF_HUB_CACHE (deploy/images.sh points it at ~/.mux/models/hf and
 fetches them first). The model loads on the first request and is let go after MUX_IMAGE_IDLE_MIN idle minutes, so
 its ~9 GB (8-bit) go back to the chat models. One image at a time: the GPU does one well, not two at half speed.
 Started by deploy/images.sh as launchd agent com.mux.images on 127.0.0.1:8312. Images are never written to disk.
+
+A pre-quantised local copy instead of the Hugging Face cache: MUX_IMAGE_MODEL_PATH (a directory of mflux weights, e.g.
+~/.mux/models/flux2-klein-4b-mflux-q4, 4.6 GB, from deploy/images.sh --q4), MUX_IMAGE_BASE_MODEL the architecture it
+is (flux2-klein-4b), MUX_IMAGE_MODEL the name it answers as (flux2-klein-4b-q4). Its quantisation is in the weights.
 """
 import base64, email.parser, email.policy, gc, io, json, os, random, sys, tempfile, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(os.environ.get("MUX_IMAGES_PORT", "8312"))
 MODEL = os.environ.get("MUX_IMAGE_MODEL", "flux2-klein-4b")
-QUANTIZE = int(os.environ.get("MUX_IMAGE_QUANTIZE", "8")) or None
+BASE_MODEL = os.environ.get("MUX_IMAGE_BASE_MODEL", MODEL)
+MODEL_PATH = os.path.expanduser(os.environ.get("MUX_IMAGE_MODEL_PATH", "")) or None
+QUANTIZE = None if MODEL_PATH else (int(os.environ.get("MUX_IMAGE_QUANTIZE", "8")) or None)
 STEPS = int(os.environ.get("MUX_IMAGE_STEPS", "4"))
 IDLE_MIN = float(os.environ.get("MUX_IMAGE_IDLE_MIN", "10"))
 MAX_SIDE = 2048
@@ -21,18 +27,25 @@ MAX_N = 4
 MAX_BODY = 48 * 1024 * 1024
 
 _model = None
+_model_kind = None  # "edit" or "txt2img": mflux 0.24's edit pipeline needs an input image, so text to image has its own
 _last_used = 0.0
 _gpu = threading.Lock()  # one generation at a time; also guards loading and letting go
 
 
-def model():
-    global _model
+def model(kind="txt2img"):
+    """The pipeline for this kind, loaded once; the other kind's is let go first, so only one is ever in memory."""
+    global _model, _model_kind
+    if _model is not None and _model_kind != kind:
+        _model = None
+        gc.collect()
     if _model is None:
         from mflux.models.common.config import ModelConfig
-        from mflux.models.flux2.variants import Flux2KleinEdit
+        from mflux.models.flux2.variants import Flux2Klein, Flux2KleinEdit
         t = time.time()
-        _model = Flux2KleinEdit(quantize=QUANTIZE, model_config=ModelConfig.from_name(MODEL))
-        print(f"loaded {MODEL} (q{QUANTIZE or 'bf16'}) in {time.time() - t:.0f} s", file=sys.stderr, flush=True)
+        cls = Flux2KleinEdit if kind == "edit" else Flux2Klein
+        _model = cls(quantize=QUANTIZE, model_path=MODEL_PATH, model_config=ModelConfig.from_name(BASE_MODEL))
+        _model_kind = kind
+        print(f"loaded {MODEL} {kind} ({MODEL_PATH or f'q{QUANTIZE or 'bf16'}'}) in {time.time() - t:.0f} s", file=sys.stderr, flush=True)
     return _model
 
 
@@ -82,11 +95,12 @@ def generate(prompt, size, n, seed, steps, images=None):
     global _last_used
     out = []
     with _gpu:
-        m = model()
+        m = model("edit" if images else "txt2img")
         w, h = edit_dims(images) if images and size in (None, "", "auto") else dims(size)
         for i in range(n):
-            img = m.generate_image(seed=(seed + i) if seed is not None else random.randrange(2**31), prompt=prompt,
-                                   num_inference_steps=steps, width=w, height=h, image_paths=images or None)
+            s = (seed + i) if seed is not None else random.randrange(2**31)
+            extra = {"image_paths": images} if images else {}
+            img = m.generate_image(seed=s, prompt=prompt, num_inference_steps=steps, width=w, height=h, **extra)
             buf = io.BytesIO()
             img.image.save(buf, format="PNG")
             out.append({"b64_json": base64.b64encode(buf.getvalue()).decode()})
@@ -161,7 +175,7 @@ class Handler(BaseHTTPRequestHandler):
             seed = int(b["seed"]) if str(b.get("seed", "")).strip().lstrip("-").isdigit() else None
             steps = max(1, min(50, int(b.get("steps") or STEPS)))
             data = generate(prompt, b.get("size"), n, seed, steps, images)
-            self._send(200, {"created": int(time.time()), "data": data})
+            self._send(200, {"created": int(time.time()), "model": MODEL, "data": data})
         except Exception as e:  # noqa: BLE001 – the caller gets the reason, mux falls through to the next model
             self._error(500, str(e)[:300])
         finally:
@@ -180,5 +194,5 @@ if __name__ == "__main__":
     if "--warm" in sys.argv:  # deploy/images.sh: fetch the weights and load once, then exit
         model()
         sys.exit(0)
-    print(f"mflux images on 127.0.0.1:{PORT}: {MODEL} q{QUANTIZE or 'bf16'}, {STEPS} steps, idle {IDLE_MIN:g} min", file=sys.stderr, flush=True)
+    print(f"mflux images on 127.0.0.1:{PORT}: {MODEL} {MODEL_PATH or f'q{QUANTIZE or 'bf16'}'}, {STEPS} steps, idle {IDLE_MIN:g} min", file=sys.stderr, flush=True)
     ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()

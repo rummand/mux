@@ -286,3 +286,21 @@ Suggested mux shape: `guards: { pre: ["qwen3guard-0.6b", "privacy-filter"], post
   {"id":"privasis-cleaner-0.6b","name":"Privasis Cleaner 0.6B","repo":"mradermacher/Privasis-Cleaner-0.6B-GGUF","file":"Privasis-Cleaner-0.6B.Q8_0.gguf","sizeGb":0.64,"arch":"qwen3","ctx":40960,"license":"nvidia-other","kind":"guard","routes":["guard"],"caps":{"quality":6,"speed":9.5,"tools":0,"code":0,"reasoning":0,"multilingual":3,"vision":0},"notes":"Instruction-driven PII sanitisation (rewrites text). For span masking use openai/privacy-filter ONNX (onnx/model_q4.onnx, ~0.92 GB) in-process; it has no llama.cpp support."}
 ]
 ```
+
+## Local image generation on the Mac Studio (2026-11-12)
+
+The owner (bloom for business: how Composer's images can be tested with a real model): "Local image model: install an
+open image model on the Mac Studio's Mux. Free and local." Limits: ~8 GB download at most (the disk had ~25 GB free),
+an open licence that allows commercial use, a launchd service on loopback, presence rules as for the other local models.
+
+| Candidate | Files | Licence (of the files) | Verdict |
+|---|---|---|---|
+| **FLUX.2 [klein] 4B, mflux Q4** — `mflux-community/flux2-klein-4b-mflux-q4` @ `794cd15` | 4.62 GB (transformer 2.18, Qwen3 text encoder 2.26, VAE 0.17) | **apache-2.0** (repo card; inherits `black-forest-labs/FLUX.2-klein-4B`, apache-2.0, not gated) | **chosen**: the model `server/images/image_server.py` was written for, pre-quantised so nothing is quantised at load; 4 steps |
+| FLUX.2 [klein] 4B, mflux Q8 | 8.57 GB | apache-2.0 | over the 8 GB limit |
+| FLUX.2 [klein] 4B, BFL bf16 (what `deploy/images.sh` fetches by default) | ~16 GB | apache-2.0 | over the limit; needs 30 GB free |
+| FLUX.1 [schnell], mflux Q4 — `mflux-community/flux-1-schnell-mflux-q4` | 9.61 GB | apache-2.0 | over the limit, older model |
+| SDXL-Turbo | ~7 GB | Stability AI non-commercial research licence | **not allowed** (non-commercial) |
+| FLUX.2 [klein] 9B | — | FLUX non-commercial licence | not allowed |
+
+Measured on the Mac Studio (M-series, 96 GB), 512×512, 4 steps, seed 42: first call 7 s (load ~1 s), then ~4 s; the
+same seed gives a byte-identical PNG. ~5 GB in memory while loaded. Installed with `./deploy/images.sh --q4 --keep`.

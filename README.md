@@ -34,7 +34,7 @@ SaaS (OpenAI / Anthropic SDK, curl)          Nexus (Railway → Funnel → Caddy
    ├─ /v1/messages           Anthropic Messages, streaming, tool_use
    ├─ /v1/embeddings  /v1/rerank
    ├─ /v1/audio/transcriptions  /v1/audio/speech   OpenAI audio: Whisper in, Piper (Danish) out
-   ├─ /v1/images/generations  /v1/images/edits     OpenAI images: FLUX.2 klein 4B through mflux (LBS Studio)
+   ├─ /v1/images/generations  /v1/images/edits     OpenAI images: FLUX.2 klein 4B (Q4) through mflux, local
    ├─ /v1/systemone          Jev's System One (Laya / Clef / d3 / d1, or hosted Jev)
    ├─ /v1/search  /v1/read   shared services: web search (SearXNG), the page reader (pages, links, files)
    ├─ keys · tenants · RPM/TPM · monthly budgets · max parallel
@@ -255,6 +255,19 @@ becomes `flux2-klein-4b` on the routes `image` and `image-edit`, the names LBS S
 model loads on the first request (~9 GB at 8-bit) and is let go after 10 idle minutes. An edit takes one or more
 images (`image` or `image[]`); without a `size` it keeps the first image's shape at about a megapixel. Images and their
 prompts are never logged. The script ends with a test image in `~/.mux/logs/images-test.png`.
+
+On a Mac short of disk, `./deploy/images.sh --q4` installs the same model pre-quantised to 4 bits
+(`mflux-community/flux2-klein-4b-mflux-q4` at a pinned revision, Apache-2.0, 4.6 GB in
+`~/.mux/models/flux2-klein-4b-mflux-q4`, 15 GB free wanted) as **`flux2-klein-4b-q4`** on the same routes. This is what
+the Mac Studio runs (2026-11-12): 512×512 in ~4 s warm, ~7 s cold; the same `seed` gives the same PNG. The answer names
+the model (`model` in the JSON, `x-mux-model`). Contract: `POST /v1/images/generations {model: "image", prompt, size
+("512x512", "768x768", "1024x1024"; sides are rounded down to a multiple of 16, 256–2048), n (1–4), seed,
+response_format: "b64_json"}` → `{created, model, data: [{b64_json}]}` (PNG; `url` is not offered).
+
+**Presence** covers the image service like the models mux runs (`isLocalService` in `runtime/manager.ts`): busy or
+away, nothing new; **polite** (someone at the Mac, or "I'm using this Mac"), only if its model is already loaded, one
+request at a time — a cold image load does not start while the owner is using the Mac (503 `all_models_failed`, the
+reason naming polite; no cooldown counted). Free: anything.
 
 All of it at once — this Mac, the Railway gateway and LBS Studio — is `./deploy/setup-images.sh` (it hands itself to
 launchd, so Ask mux can start it although it restarts mux; follow `~/.mux/logs/setup-images.log`).

@@ -6,3 +6,4 @@ web/dist/
 data/
 mac/.build/
 mac/build/
+__pycache__/

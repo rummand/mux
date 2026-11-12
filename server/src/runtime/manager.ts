@@ -8,7 +8,7 @@ import { event, settings } from "../db.js";
 import { getModel, listModels, type Model } from "../models.js";
 import { getProvider } from "../providers.js";
 import { rssGb, systemStats } from "./system.js";
-import { admit, Resting, setLoadReader } from "../presence.js";
+import { admit, presence, Resting, setLoadReader } from "../presence.js";
 
 const GB = 1024 ** 3;
 const RUN_DIR = join(config.home, "run");
@@ -49,6 +49,25 @@ export function estimateGb(m: Model): number {
 }
 
 const isLocal = (m: Model) => m.backend === "llamacpp" || m.backend === "mlx" || m.backend === "laya";
+
+/**
+ * A heavy service on this machine that mux does not start itself but that the presence rules cover like a model it
+ * runs: an image server (server/images/image_server.py, launchd com.mux.images) on a loopback address. It loads its
+ * model on the first request and lets it go when idle, and says which in GET /v1/models (`loaded`).
+ */
+export const isLocalService = (m: Model) => m.backend === "external" && m.kind === "image" && config.role !== "gateway"
+  && /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:|\/|$)/i.test(m.base_url ?? "");
+const serviceInflight = new Map<string, number>();
+
+/** Whether a local service has its model in memory now; a service that cannot say counts as loaded (it is resident). */
+async function serviceLoaded(m: Model): Promise<boolean> {
+  try {
+    const r = await fetch(`${(m.base_url ?? "").replace(/\/$/, "")}/models`, { signal: AbortSignal.timeout(1500) });
+    const d = (await r.json()) as { data?: { loaded?: boolean }[] };
+    const flags = (d.data ?? []).map((x) => x.loaded).filter((x) => typeof x === "boolean");
+    return flags.length ? flags.some(Boolean) : true;
+  } catch { return false; }
+}
 
 async function freePort(): Promise<number> {
   const used = new Set([...instances.values()].map((i) => i.port));
@@ -196,6 +215,14 @@ export async function acquire(m: Model): Promise<Upstream> {
     const p = m.provider_id ? getProvider(m.provider_id) : undefined;
     if (p && !p.enabled) throw new ModelUnavailable(`provider ${p.name} is disabled`, 403, "provider_disabled");
     if (p?.kind === "mux" && p.status !== "online") throw new ModelUnavailable(`node ${p.name} is offline${p.error ? `: ${p.error}` : ""}`, 503, "node_offline");
+    // A local image service: this machine's presence decides, as for the models mux runs (presence.ts). Polite: only
+    // when its model is already loaded, one request at a time; busy or away: nothing new.
+    if (isLocalService(m)) {
+      const loaded = presence().state === "polite" ? await serviceLoaded(m) : true;
+      try { await admit(m.id, () => loaded, () => serviceInflight.get(m.id) ?? 0); }
+      catch (e) { if (e instanceof Resting) throw new ModelUnavailable(e.message, 503, "node_resting"); throw e; }
+      serviceInflight.set(m.id, (serviceInflight.get(m.id) ?? 0) + 1);
+    }
     const key = m.api_key || p?.api_key;
     const headers: Record<string, string> = key ? { authorization: `Bearer ${key}` } : {};
     // A node is asked for exactly this model: the gateway does the falling back, across nodes and clouds.
@@ -222,6 +249,8 @@ export async function acquire(m: Model): Promise<Upstream> {
 }
 
 export function release(id: string) {
+  const n = serviceInflight.get(id);
+  if (n !== undefined) { if (n <= 1) serviceInflight.delete(id); else serviceInflight.set(id, n - 1); }
   const inst = instances.get(id);
   if (inst) { inst.inflight = Math.max(0, inst.inflight - 1); inst.lastUsed = Date.now(); }
 }

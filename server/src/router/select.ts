@@ -1,6 +1,6 @@
 import { getModel, getRoute, listModels, type Kind, type Model, type Route } from "../models.js";
 import type { Tenant } from "../tenants.js";
-import { isLoaded, loadOf } from "../runtime/manager.js";
+import { isLoaded, isLocalService, loadOf } from "../runtime/manager.js";
 import { inCooldown, measuredTps } from "./health.js";
 import { loadedOnNode, presenceOf, providerUp } from "../providers.js";
 import { restingReason } from "../presence.js";
@@ -99,6 +99,8 @@ function unfit(m: Model, f: Features, t?: Tenant): string | null {
   if (pr?.state === "away" || pr?.state === "busy") return `node ${pr.state} (${pr.reasons.join(", ")})`;
   if (pr?.state === "polite" && !warm(m)) return `node polite (${pr.reasons.join(", ")}): only loaded models`;
   if (["llamacpp", "mlx", "laya"].includes(m.backend)) { const r = restingReason(m.id, isLoaded(m.id)); if (r) return r; }
+  // A local image service: busy or away takes nothing; polite is decided when it is asked (it says what it has loaded)
+  if (isLocalService(m)) { const r = restingReason(m.id, true); if (r) return r; }
   if (f.vision && !(m.mmproj || cap(m, "vision", 0) > 0)) return "no vision";
   if (m.kind === "chat" && f.inputTokens + Math.min(f.maxTokens, 4096) > m.ctx) return `context ${m.ctx} too small for ~${f.inputTokens} tokens`;
   return null;
