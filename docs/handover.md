@@ -96,6 +96,29 @@ model on the Mac Studio's Mux. Free and local." `dc5aefc`.
 - **Disk:** 25 GB free before, 18 GB right after the download; 13 GB at the end of the session as other projects built
   (mux's share is the 5.7 GiB above). Watch it.
 
+## 2026-11-12: `vision` on the Mac Studio is the local qwen3.6
+
+The owner (bloom for business, whose Library reads pictures and scanned pages through route `vision`): "Yes, use the
+local qwen". A route setting, not code: `PUT /api/admin/routes/vision {candidates: ["qwen3.6-35b-a3b"]}` on the Mac
+Studio (was `[]`, which took every chat model in list order); journaled as a route change. Presence rules unchanged.
+
+- **Tenants:** no `bloom-for-business` tenant exists on the Mac Studio. Bloom tests here as
+  `bloom-design-composer-test` (`allowed`: `qwen3.6-35b-a3b`, `image`, `flux2-klein-4b-q4`), which **may not name
+  route `vision`** (403 `permission_denied`) but may name `qwen3.6-35b-a3b`. No tenant was changed; adding `vision`
+  there waits for the owner.
+- **Thinking:** qwen3.6 runs here with `--reasoning off`; no `reasoning_content` came back, and 800 tokens were plenty.
+  Per request, `chat_template_kwargs: {enable_thinking: false}` passes through to llama-server (README, *Pictures*).
+- **Verified** with one-day keys, each revoked (200), then 401, files deleted. A synthetic 900×360 PNG with four
+  lines of text, `max_tokens` 800: tenant `lan`, `model: "vision"` → 200 in 1.4 s, `x-mux-route: vision`,
+  `x-mux-model: qwen3.6-35b-a3b`, 342 prompt + 90 completion tokens, all four lines exact plus a one-sentence
+  description. With `enable_thinking: false`: 0.9 s, 61 completion tokens, the same text. Tenant
+  `bloom-design-composer-test`: `vision` → 403; `qwen3.6-35b-a3b` by name → 200 in 7.8 s (cold prompt cache), the
+  same text, 90 completion tokens.
+- **Railway** (read only, nothing changed): `vision` = `mac-studio/qwen3.6-35b-a3b`, `mac-studio/qwen3.5-0.8b`, then
+  OVH. Tenant `bloom-for-business` (allowed all, border `own`): `/routes/explain` with a picture gives only
+  `mac-studio/qwen3.6-35b-a3b` (0.8b has no vision, OVH is outside the border). Production bloom's `MUX_URL` is this
+  Railway gateway. That path was not tried with a real call.
+
 ## Live state (2026-11-06)
 
 - Railway intent router: 19 decisions, 17 routed, 2 "other", 0 failed; **p50 436 ms, p95 1.8 s** — the p95 is close

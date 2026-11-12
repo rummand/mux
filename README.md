@@ -130,6 +130,30 @@ answer   { object: "page", url, final_url, status, content_type, fetched_at,
 - **Forced tools** (`tool_choice` naming a function, or `required`) are answered through llama.cpp's JSON-schema
   grammar, ported from Nexus's tool guard: the model cannot answer anything but the tool call.
 
+## Pictures: the `vision` route
+
+On the Mac Studio, `vision` is pinned to the local **`qwen3.6-35b-a3b`** (its `mmproj` projector is loaded with it;
+since 2026-11-12). Before that it listed no model, so it took every chat model in list order. On Railway, `vision` is
+`mac-studio/qwen3.6-35b-a3b` first, reached over the node. Free and local, but slower when the Mac is busy, and the
+presence rules apply as for any local model (polite: only when it is already loaded, which it is, since it is pinned).
+
+A picture goes to `/v1/chat/completions` as an OpenAI `image_url` part (a `data:` URI or an address):
+
+```json
+{ "model": "vision", "max_tokens": 800,
+  "messages": [{ "role": "user", "content": [
+    { "type": "text", "text": "Copy every word in this picture, then describe it in one sentence." },
+    { "type": "image_url", "image_url": { "url": "data:image/png;base64,…" } } ] }] }
+```
+
+A tenant needs `vision` in its `allowed` list (or an empty list) to name the route. Naming `qwen3.6-35b-a3b` works
+too, and is what a tenant allowed only that model must do.
+
+**Thinking:** the Mac runs qwen3.6 with `--reasoning off`, so no tokens go to thinking: the answer has no
+`reasoning_content`, and `completion_tokens` is the answer alone. Mux passes the request body through to llama-server,
+so a caller can also ask for no thinking per request with `"chat_template_kwargs": {"enable_thinking": false}`. That
+matters only if a model's reasoning is ever turned on. `reasoning_effort` is read only as a routing hint on `auto`.
+
 ## Runtime and engines
 
 llama.cpp's `llama-server` (Homebrew, 0.8.0) is the engine: one process per model, Metal, GGUF, OpenAI + embeddings +
