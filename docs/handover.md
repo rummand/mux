@@ -68,6 +68,34 @@ Then (bloom for business ranks a company's colours by the elements its start pag
 page's markup as it came, capped at `max_html_chars` (200 000 default, 2 000 000 at most) with `html_truncated`;
 metered with the text. `links` and `file` unchanged. Contract in `README.md`; test in `server/test/reader.test.ts`.
 
+## 2026-11-12: images on the Mac Studio (FLUX.2 klein 4B Q4)
+
+The owner (bloom for business, testing Composer's images with a real model): "Local image model: install an open image
+model on the Mac Studio's Mux. Free and local." `dc5aefc`.
+
+- **Model:** `mflux-community/flux2-klein-4b-mflux-q4` @ `794cd159` — FLUX.2 [klein] 4B pre-quantised to 4 bits,
+  **Apache-2.0** (the files' card; inherits `black-forest-labs/FLUX.2-klein-4B`, Apache-2.0). 4.3 GiB in
+  `~/.mux/models/flux2-klein-4b-mflux-q4`; mflux 0.24.0 in `~/.mux/images-venv` (1.4 GiB). Candidates and licences:
+  `docs/research-local-llm.md` (SDXL-Turbo and klein 9B are non-commercial; the 16 GB bf16 default did not fit).
+- **Service:** launchd `com.mux.images`, `server/images/image_server.py` on **127.0.0.1:8312** only, installed with
+  `./deploy/images.sh --q4 --keep` (no chat model unloaded). Model `flux2-klein-4b-q4` on routes `image` and
+  `image-edit`. Loads on the first request (~1 s, ~5 GB), lets go after 10 idle minutes.
+- **Fixed on the way:** mflux 0.24's `Flux2KleinEdit` fails without an input image, so text to image now runs
+  `Flux2Klein`; edits keep `Flux2KleinEdit`; one in memory at a time.
+- **Presence:** `acquire` skipped presence for every `external` model. A local image service (external, kind image,
+  loopback) is now admitted like the models mux runs (`isLocalService`, `runtime/manager.ts`): busy/away nothing,
+  polite only when its model is loaded and one at a time; a resting refusal counts no cooldown.
+  `server/test/images-presence.test.ts`. Whisper, Piper and other loopback audio services are unchanged.
+- **Tenant:** `bloom-design-composer-test` `allowed` += `image`, `flux2-klein-4b-q4` (nothing else changed; read back).
+- **Verified through mux** (one-day key, revoked): `POST /v1/images/generations {model: "image", size: "768x768",
+  seed: 1234, response_format: "b64_json"}` → 200 in 5.9 s and 5.8 s (warm), `x-mux-model: flux2-klein-4b-q4`,
+  `model` in the JSON, PNG 768×768 decodes; **the same seed gives a byte-identical PNG**. 512×512: ~4 s warm, ~7 s
+  cold. Requests page: tenant and `x-mux-agent` recorded; prompts and images are never logged.
+- **Railway** runs no image model; it reaches this one as `mac-studio/flux2-klein-4b-q4` on its next sync if a route
+  there names it (none does).
+- **Disk:** 25 GB free before, 18 GB right after the download; 13 GB at the end of the session as other projects built
+  (mux's share is the 5.7 GiB above). Watch it.
+
 ## Live state (2026-11-06)
 
 - Railway intent router: 19 decisions, 17 routed, 2 "other", 0 failed; **p50 436 ms, p95 1.8 s** — the p95 is close
