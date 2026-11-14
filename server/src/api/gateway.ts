@@ -4,7 +4,7 @@ import { runChat, type ChatBody } from "../router/chat.js";
 import { formField, runAudio, runImage, type AudioKind, type ImageOp } from "../router/audio.js";
 import { runEmbeddings } from "../router/embed.js";
 import { MuxError, toMuxError } from "../router/errors.js";
-import { check, enter, leave } from "../router/limits.js";
+import { check, enter, leave, rateLeft } from "../router/limits.js";
 import { finish, newCtx, type Ctx } from "../router/metering.js";
 import { features } from "../router/select.js";
 import { runSystemOne } from "../router/systemone.js";
@@ -47,8 +47,10 @@ function begin(req: FastifyRequest, reply: FastifyReply, endpoint: string, flavo
   ctx.endUser = body.user ?? body.metadata?.user_id ?? header(req, "x-mux-user");
   ctx.noFallback = header(req, "x-mux-no-fallback") === "1";
   ctx.bodyReq = req.body;
-  try { check(who.tenant, who.key); enter(who.tenant); } catch (e) {
+  try { check(who.tenant, who.key); enter(who.tenant); ctx.rate = rateLeft(who.tenant); } catch (e) {
     const err = toMuxError(e);
+    const rate = rateLeft(who.tenant);
+    if (rate) reply.headers({ "x-ratelimit-limit-requests": String(rate.limit), "x-ratelimit-remaining-requests": String(rate.remaining) });
     finish(ctx, err.status, { type: err.type, message: err.message });
     sendError(reply, flavour, err);
     return null;
@@ -60,6 +62,7 @@ function muxHeaders(ctx: Ctx): Record<string, string> {
   return {
     "x-mux-request-id": ctx.id, "x-mux-model": ctx.modelId ?? "", "x-mux-route": ctx.route ?? "",
     "x-mux-fallbacks": String(ctx.fallbacks ?? 0), "x-mux-cold-start": ctx.coldStart ? "1" : "0",
+    ...(ctx.rate ? { "x-ratelimit-limit-requests": String(ctx.rate.limit), "x-ratelimit-remaining-requests": String(ctx.rate.remaining) } : {}),
   };
 }
 
@@ -145,6 +148,7 @@ async function simple(req: FastifyRequest, reply: FastifyReply, endpoint: string
   } catch (e) {
     const err = toMuxError(e);
     finish(ctx, err.status, { type: err.type, message: err.message });
+    reply.headers(muxHeaders(ctx));
     return sendError(reply, "openai", err);
   } finally {
     leave(ctx.tenant);
@@ -194,6 +198,7 @@ async function image(req: FastifyRequest, reply: FastifyReply, op: ImageOp) {
   } catch (e) {
     const err = toMuxError(e);
     finish(ctx, err.status, { type: err.type, message: err.message });
+    reply.headers(muxHeaders(ctx));
     return sendError(reply, "openai", err);
   } finally {
     leave(ctx.tenant);

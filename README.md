@@ -65,7 +65,9 @@ else (`gpt-4o`, `claude-sonnet-4-5`) — unknown names go to the tenant's defaul
 
 Optional headers: `x-mux-affinity` (keeps one run's calls on one model; without it, a run's `x-mux-trace-id`, else the conversation's opening, keeps them together), `x-mux-trace-id` (groups an agent run into a trace), `x-mux-agent` (which agent), `x-mux-tags`
 (comma list), `x-mux-user` (end user), `x-mux-no-fallback: 1`. Every answer carries `x-mux-request-id`,
-`x-mux-model`, `x-mux-route`, `x-mux-fallbacks`, `x-mux-cold-start`.
+`x-mux-model`, `x-mux-route`, `x-mux-fallbacks`, `x-mux-cold-start`; when the tenant has a requests-a-minute limit,
+also `x-ratelimit-limit-requests` and `x-ratelimit-remaining-requests` (what is left of this minute, refusals included),
+so a caller paces itself instead of meeting 429s (2026-11-14).
 
 ## Web search and the page reader
 

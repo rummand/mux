@@ -15,7 +15,9 @@ export interface Ctx {
   affinity?: string | null;
   requested?: string; route?: string | null; modelId?: string; reason?: string; stream?: boolean; tools?: boolean; forcedTool?: boolean;
   promptTokens?: number; completionTokens?: number; cachedTokens?: number;
-  ttftMs?: number | null; queueMs?: number; upstreamMs?: number; tps?: number | null; coldStart?: boolean; fallbacks?: number; finish?: string | null;
+  ttftMs?: number | null; queueMs?: number; upstreamMs?: number; tps?: number | null; coldStart?: boolean; fallbacks?: number;
+  /** The tenant's requests a minute and how many are left in this minute, sent back as x-ratelimit-* headers. */
+  rate?: { limit: number; remaining: number } | null; finish?: string | null;
   bodyReq?: unknown; bodyRes?: unknown;
   /** The experiment (and arm) the router put this request in, if any. */
   experiment?: { id: string; arm: "A" | "B" } | null;

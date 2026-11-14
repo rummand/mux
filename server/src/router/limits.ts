@@ -55,6 +55,16 @@ export function check(tenant: Tenant, key: ApiKey) {
     throw new LimitError(`the key ${key.name} has used its ${key.monthly_token_budget.toLocaleString()} tokens for this month`, 86400, "budget_exceeded");
 }
 
+/**
+ * The tenant's requests a minute and what is left of them now (after this request), for the x-ratelimit-* headers
+ * every answer carries: a caller paces itself to them rather than meeting 429s. Null when the tenant has no limit.
+ */
+export function rateLeft(tenant: Tenant): { limit: number; remaining: number } | null {
+  if (!tenant.rpm_limit) return null;
+  const xs = prune(windows.get(`t:${tenant.id}`) ?? [], Date.now() - 60_000);
+  return { limit: tenant.rpm_limit, remaining: Math.max(0, tenant.rpm_limit - xs.length) };
+}
+
 export function addTokens(tenantId: string, n: number) {
   if (!n) return;
   const xs = prune(tokens.get(tenantId) ?? [], Date.now() - 60_000);
