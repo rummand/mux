@@ -124,7 +124,9 @@ answer   { object: "page", url, final_url, status, content_type, fetched_at,
   address and fetched by mux; a frame's page, pictures, media, fonts, WebSockets, beacons and anything but GET and
   HEAD are refused; a new browser context per page (no cookies or storage kept; Set-Cookie dropped, Cookie and
   Authorization never sent); no downloads, pop-ups or dialogs; 25 s, 15 MB and 150 requests at most; the same
-  user agent. A tenant whose `allowed` lists anything must list `web.render`. At most `renderParallel` (2) renders
+  user agent. A site's public scripts and stylesheets (200, no Set-Cookie, not no-store or private) are kept for 10
+  minutes, 64 MB at most, so a thousand pages do not fetch its bundles a thousand times; pages and data never are
+  (`render.cached` counts them). A tenant whose `allowed` lists anything must list `web.render`. At most `renderParallel` (2) renders
   per tenant and on the machine at once (429 `too_many_parallel`, `render_busy`). **On a gateway** (Railway) the
   render runs on the first online node (the Mac Studio) through its `/v1/read`, as the gateway's tenant there,
   metered on both; no node online is 503 `render_unavailable`, as is a node that answers without rendering.

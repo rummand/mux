@@ -32,7 +32,7 @@ const DROP_HEADERS = new Set(["set-cookie", "set-cookie2", "content-encoding", "
 
 export interface RenderResult {
   final_url: string; status: number; content_type: string; html: string; redirects: string[];
-  render: { ms: number; requests: number; blocked: number; refused: number; bytes: number; settled: boolean; engine: string };
+  render: { ms: number; requests: number; blocked: number; refused: number; bytes: number; cached: number; settled: boolean; engine: string };
   etag?: string; last_modified?: string; x_robots_tag?: string | null;
 }
 export interface RenderOptions {
@@ -104,6 +104,31 @@ function scheduleClose() {
   idle.unref();
 }
 
+// ── A short cache of public scripts and stylesheets ───────────────────────────────────────────────────────────────
+// Only answers that are 200, have no Set-Cookie and do not say no-store or private, fetched without credentials (the
+// renderer never sends any), for ten minutes, 64 MB at most, oldest out first. Pages and data (XHR) are never cached.
+const CACHE_MS = 10 * 60_000;
+const CACHE_BYTES = 64 * MB;
+const sharedCache = new Map<string, { at: number; headers: Record<string, string>; body: Buffer }>();
+let cacheBytes = 0;
+function fromCache(url: string) {
+  const e = sharedCache.get(url);
+  if (!e) return null;
+  if (Date.now() - e.at > CACHE_MS) { sharedCache.delete(url); cacheBytes -= e.body.length; return null; }
+  return e;
+}
+function toCache(url: string, res: Response, headers: Record<string, string>, body: Buffer) {
+  const cc = (res.headers.get("cache-control") ?? "").toLowerCase();
+  if (res.status !== 200 || res.headers.get("set-cookie") || /no-store|private/.test(cc) || body.length > 8 * MB) return;
+  const old = sharedCache.get(url);
+  if (old) { sharedCache.delete(url); cacheBytes -= old.body.length; }
+  sharedCache.set(url, { at: Date.now(), headers, body });
+  cacheBytes += body.length;
+  for (const [k, v] of sharedCache) { if (cacheBytes <= CACHE_BYTES) break; sharedCache.delete(k); cacheBytes -= v.body.length; }
+}
+/** Tests: forget every cached script and stylesheet. */
+export function clearRenderCache() { sharedCache.clear(); cacheBytes = 0; }
+
 /** Pages rendered at once on this machine (settings.renderParallel, 2 by default); more wait up to 20 s for a turn. */
 async function slot(signal: AbortSignal): Promise<() => void> {
   const cap = Math.max(1, Number(settings().renderParallel) || 2);
@@ -130,7 +155,7 @@ export async function renderPage(start: URL, o: RenderOptions): Promise<RenderRe
   const release = await slot(o.signal);
   const deadline = AbortSignal.any([o.signal, AbortSignal.timeout(timeoutMs)]);
   const b = await getBrowser().catch((e) => { release(); throw e; });
-  const stats = { requests: 0, blocked: 0, refused: 0, bytes: 0 };
+  const stats = { requests: 0, blocked: 0, refused: 0, bytes: 0, cached: 0 };
   const redirects: string[] = [];
   type Main = { status: number; type: string; etag?: string; last_modified?: string; robots: string | null };
   let main: Main | null = null;
@@ -171,6 +196,10 @@ export async function renderPage(start: URL, o: RenderOptions): Promise<RenderRe
       if (!KEEP.has(type) || (type === "document" && !isMain) || (req.method() !== "GET" && req.method() !== "HEAD")) { stats.blocked++; return route.abort("blockedbyclient").catch(() => undefined); }
       if (deadline.aborted || stats.requests >= maxRequests || stats.bytes >= maxBytes) { stats.blocked++; return route.abort("blockedbyclient").catch(() => undefined); }
       stats.requests++;
+      // A site's own scripts and stylesheets, the same on every page, are fetched once in ten minutes (sharedCache):
+      // rendering a thousand pages does not ask the site for its bundles a thousand times.
+      const hit = (type === "script" || type === "stylesheet") && req.method() === "GET" ? fromCache(u.toString()) : null;
+      if (hit) { stats.cached++; return route.fulfill({ status: 200, headers: hit.headers, body: hit.body }).catch(() => undefined); }
       const headers: Record<string, string> = {};
       for (const [k, v] of Object.entries(req.headers())) if (!/^(cookie|authorization|proxy-authorization|user-agent|host)$/i.test(k)) headers[k] = v;
       headers["user-agent"] = o.userAgent;
@@ -206,7 +235,9 @@ export async function renderPage(start: URL, o: RenderOptions): Promise<RenderRe
         } catch { stats.blocked++; return route.abort("failed").catch(() => undefined); }
       }
       stats.bytes += n;
-      return route.fulfill({ status: res.status, headers: out, body: Buffer.concat(chunks, n) }).catch(() => undefined);
+      const bodyBytes = Buffer.concat(chunks, n);
+      if ((type === "script" || type === "stylesheet") && req.method() === "GET" && got.url.toString() === u.toString()) toCache(u.toString(), res, out, bodyBytes);
+      return route.fulfill({ status: res.status, headers: out, body: bodyBytes }).catch(() => undefined);
     });
     // Nothing reaches the network but through the route above; WebSockets are closed at once.
     await context.routeWebSocket(/.*/, (ws) => { stats.blocked++; void ws.close(); }).catch(() => undefined);

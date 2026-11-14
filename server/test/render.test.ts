@@ -8,7 +8,7 @@ import { gzipSync } from "node:zlib";
 // fixture server on loopback. 127.0.0.1 counts as public for these tests (the fixture is there); every other
 // private address stays refused. The browser is the Chromium playwright-core finds on this machine.
 const { runRead } = await import("../src/router/reader.js");
-const { renderPage, closeRenderer } = await import("../src/router/render.js");
+const { renderPage, closeRenderer, clearRenderCache } = await import("../src/router/render.js");
 const { privateAddress } = await import("../src/router/web.js");
 const { config } = await import("../src/config.js");
 type Ctx = Parameters<typeof runRead>[0];
@@ -144,4 +144,16 @@ test("files: true returns a sitemap (XML) and a sitemap.xml.gz as files, with th
   assert.equal(Buffer.from(g.file!.bytes_base64, "base64")[0], 0x1f);
   // Without files: true, XML is refused as before
   await fails(read({ url: `${base}/sitemap.xml` }), 415);
+});
+
+test("render: a site's scripts and stylesheets are fetched once in ten minutes, not once a page; pages and data never come from the cache", async () => {
+  clearRenderCache();
+  seen.length = 0;
+  const a = await read({ url: `${base}/shell`, render: true });
+  const b = await read({ url: `${base}/moved`, render: true });
+  assert.match(b.text, /Forsyningssikkerhed/, "the page's data (XHR) is asked for again");
+  assert.equal(seen.filter((x) => x.path === "/app.js").length, 1, "the script once");
+  assert.equal(seen.filter((x) => x.path === "/data.json").length, 2, "the data each time");
+  assert.equal(seen.filter((x) => x.path === "/shell").length, 4, "the page each time (and each redirect check)");
+  assert.ok((b.render!.cached ?? 0) >= 1 && (a.render!.cached ?? 0) === 0);
 });

@@ -63,7 +63,7 @@ export interface PageAnswer {
   etag?: string; last_modified?: string;
   /** With render: true: the page was rendered with its scripts run, and how. */
   rendered?: boolean;
-  render?: { ms: number; requests: number; blocked: number; refused: number; bytes: number; settled: boolean; engine: string; node?: string };
+  render?: { ms: number; requests: number; blocked: number; refused: number; bytes: number; cached?: number; settled: boolean; engine: string; node?: string };
 }
 /** For the tests only: which addresses count as private (the fixture server is on loopback). */
 export interface ReadOptions { isPrivate?: (ip: string) => boolean }
