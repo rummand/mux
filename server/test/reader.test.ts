@@ -222,7 +222,7 @@ test("only the public web: loopback refused without the test's leave, and a redi
 test("an honest user agent, with the caller's x-mux-agent in its comment", async () => {
   seenUA.length = 0;
   await read({ url: `${base}/plain` }, "bloom-site-reader");
-  assert.equal(seenUA[0], "Mozilla/5.0 (compatible; mux-reader/2.0; +https://github.com/rummand/mux; bloom-site-reader)");
+  assert.equal(seenUA[0], "mux-reader/2.1 (+https://github.com/rummand/mux; bloom-site-reader)");
   await read({ url: `${base}/plain` }, "evil); rm -rf (");
   assert.ok(seenUA[1].endsWith("; evilrm-rf)"), seenUA[1]);
 });

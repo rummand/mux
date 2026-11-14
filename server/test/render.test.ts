@@ -76,7 +76,8 @@ test("render: a script shell's words and links come back once its scripts ran; t
   const plain = await read({ url: `${base}/shell`, links: true });
   assert.equal(plain.text, "");
   assert.equal(plain.rendered, undefined);
-  const r = await read({ url: `${base}/shell`, links: true, render: true, html: true });
+  const r = await read({ url: `${base}/shell`, links: true, render: true, html: true, images: true });
+  assert.deepEqual(r.images, [{ src: `${base}/pic.png`, alt: "" }], "a picture the script added is listed (never fetched)");
   assert.equal(r.rendered, true);
   assert.equal(r.title, "Energi");
   assert.match(r.text, /# Om os/);
@@ -97,7 +98,7 @@ test("render safety: a private address the page asks for is refused, never fetch
   assert.ok(!seen.some((s) => s.method !== "GET" && s.method !== "HEAD"), "no POST reached the site");
   assert.ok(!seen.some((s) => s.path === "/pic.png"), "pictures are never fetched");
   assert.ok(!seen.some((s) => s.cookie), "no Cookie header is ever sent, though the site set one and the script wrote one");
-  assert.ok(seen.every((s) => /mux-reader\/2\.0.*bloom-site-reader-2/.test(s.ua)), "every request, scripts and XHR too, carries mux's user agent");
+  assert.ok(seen.every((s) => /^mux-reader\/2\.1 .*bloom-site-reader-2/.test(s.ua)), "every request, scripts and XHR too, carries mux's user agent");
   // A second render starts from an empty profile: nothing the first kept
   seen.length = 0;
   const again = await read({ url: `${base}/shell`, render: true });

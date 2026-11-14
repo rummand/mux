@@ -135,7 +135,10 @@ answer   { object: "page", url, final_url, status, content_type, fetched_at,
 - **Robots**: the page's `<meta name=robots>` and the `X-Robots-Tag` header come back in `robots`. mux does **not**
   decide on robots.txt; the caller does. `robots_txt: true` fetches the site's `/robots.txt` (for `url`'s origin) as
   raw text, at most 512 KB, with its status: a 404 is an answer (`status: 404`, `text: ""`), not an error.
-- **User agent**: `Mozilla/5.0 (compatible; mux-reader/2.0; +https://github.com/rummand/mux; <x-mux-agent>)` — the
+- **Images** (`images: true`, 2026-11-14): the page's `<img>` pictures, `[{src, alt}]`, absolute (a srcset's widest), at
+  most 500; also with `render: true`.
+- **User agent**: `mux-reader/2.1 (+https://github.com/rummand/mux; <x-mux-agent>)` (2026-11-14; before, it began
+  `Mozilla/5.0 (compatible; mux-reader/2.0; …)`, which reads as a browser) — the
   caller's `x-mux-agent` (letters, digits, `.`, `-`, `_`) in the comment, e.g. `bloom-site-reader`.
 - **Safety**: public addresses only (loopback, private, link-local, CGNAT and `.local`/`.internal` refused), no
   cookies, no JavaScript run (unless `render: true`, above). A page that is not 2xx is `502 upstream_error` naming its status.

@@ -46,13 +46,15 @@ const HTML_MAX_CHARS = 2_000_000;
 
 export interface ReadBody {
   url?: unknown; max_chars?: unknown; links?: unknown; files?: unknown; max_bytes?: unknown; robots_txt?: unknown;
-  html?: unknown; max_html_chars?: unknown; render?: unknown;
+  html?: unknown; max_html_chars?: unknown; render?: unknown; images?: unknown;
 }
 export type Link = { href: string; text: string; rel: string | null };
 export interface PageAnswer {
   object: "page"; url: string; final_url: string; status: number; content_type: string; fetched_at: string;
   title: string; text: string;
   links?: Link[];
+  /** With images: true, the page's <img> pictures (src absolute, the largest of a srcset), with their alt text. */
+  images?: { src: string; alt: string }[];
   html?: string; html_truncated?: boolean;
   robots?: { meta: string | null; x_robots_tag: string | null };
   canonical?: string | null; lang?: string | null;
@@ -202,7 +204,15 @@ export function pageMeta(html: string, pageUrl: URL, maxLinks = 5000) {
     add(absolute(a.href, base), text, a.rel?.trim() || null);
   }
   const lang = attrs(/<html\b[^>]*>/i.exec(clean)?.[0] ?? "").lang?.trim() || null;
-  return { links: [...links.values()], robots: robots.length ? robots.join(", ") : null, canonical, lang };
+  const images = new Map<string, { src: string; alt: string }>();
+  for (const m of clean.matchAll(/<img\b[^>]*>/gi)) {
+    if (images.size >= 500) break;
+    const a = attrs(m[0]);
+    const set = (a.srcset ?? "").split(",").map((x) => x.trim().split(/\s+/)).filter((x) => x[0]).map((x) => ({ u: x[0], w: parseFloat(x[1] ?? "0") || 0 })).sort((x, y) => y.w - x.w)[0]?.u;
+    const src = absolute(a.src && !/^data:/i.test(a.src) ? a.src : set ?? "", base);
+    if (src && !images.has(src)) images.set(src, { src, alt: (a.alt ?? "").trim().slice(0, 300) });
+  }
+  return { links: [...links.values()], images: [...images.values()], robots: robots.length ? robots.join(", ") : null, canonical, lang };
 }
 
 // ── Fetching ──────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -221,7 +231,8 @@ export async function publicUrl(raw: string, isPrivate: (ip: string) => boolean)
 /** The caller's agent name in the user agent's comment, as it is safe there. */
 export function userAgent(agent: string | null | undefined): string {
   const a = (agent ?? "").replace(/[^\w.\-]/g, "").slice(0, 64);
-  return `Mozilla/5.0 (compatible; mux-reader/2.0; +https://github.com/rummand/mux${a ? `; ${a}` : ""})`;
+  // An honest name, without a browser's "Mozilla/5.0" in front (2026-11-14): sites see a reader, not a browser.
+  return `mux-reader/2.1 (+https://github.com/rummand/mux${a ? `; ${a}` : ""})`;
 }
 
 /** The body, at most `max` bytes: above it a 413 with the size, never a cut file. */
@@ -278,11 +289,11 @@ export async function runRead(ctx: Ctx, b: ReadBody, signal: AbortSignal, opts: 
   const requested = await publicUrl(String(b.url ?? ""), isPrivate);
   const maxChars = Math.min(Math.max(Number(b.max_chars) || 20_000, 1000), 100_000);
   const maxBytes = Math.min(Math.max(Number(b.max_bytes) || 25 * MB, 1024), 50 * MB);
-  const wantLinks = b.links === true, wantFiles = b.files === true, robotsTxt = b.robots_txt === true, wantHtml = b.html === true;
+  const wantLinks = b.links === true, wantFiles = b.files === true, robotsTxt = b.robots_txt === true, wantHtml = b.html === true, wantImages = b.images === true;
   const maxHtml = Math.min(Math.max(Number(b.max_html_chars) || HTML_DEFAULT_CHARS, 1000), HTML_MAX_CHARS);
   if (b.render === true) {
     if (robotsTxt) throw new MuxError(400, "invalid_request_error", "render and robots_txt do not go together");
-    return runRender(ctx, requested, { maxChars, wantLinks, wantHtml, maxHtml }, signal, isPrivate);
+    return runRender(ctx, requested, { maxChars, wantLinks, wantHtml, maxHtml, wantImages }, signal, isPrivate);
   }
 
   const tenant = ctx.tenant?.id ?? "";
@@ -333,7 +344,7 @@ export async function runRead(ctx: Ctx, b: ReadBody, signal: AbortSignal, opts: 
       // The markup, when asked: metered as characters returned, like the text
       const markup = wantHtml ? (html.length > maxHtml ? { html: html.slice(0, maxHtml), html_truncated: true } : { html, html_truncated: false }) : {};
       note(bytes.length, page.text.length + (markup.html?.length ?? 0), header || "text/html");
-      return { ...base, title: page.title, text: page.text, ...(wantLinks ? { links: meta.links } : {}), ...markup, robots: { ...base.robots, meta: meta.robots }, canonical: meta.canonical, lang: meta.lang };
+      return { ...base, title: page.title, text: page.text, ...(wantLinks ? { links: meta.links } : {}), ...(wantImages ? { images: meta.images } : {}), ...markup, robots: { ...base.robots, meta: meta.robots }, canonical: meta.canonical, lang: meta.lang };
     };
     if (isHtml(header) || (!header && !wantFiles)) return asPage(await body(res, maxBytes));
     if (!wantFiles) {
@@ -361,7 +372,7 @@ export async function runRead(ctx: Ctx, b: ReadBody, signal: AbortSignal, opts: 
 }
 
 // ── Render mode (route web.render) ────────────────────────────────────────────────────────────────────────────────
-type RenderAsk = { maxChars: number; wantLinks: boolean; wantHtml: boolean; maxHtml: number };
+type RenderAsk = { maxChars: number; wantLinks: boolean; wantHtml: boolean; maxHtml: number; wantImages?: boolean };
 // One tenant's renders in flight at once (settings.renderParallel, 2 by default), beside the machine's own cap
 const rendering = new Map<string, number>();
 
@@ -386,7 +397,7 @@ async function runRender(ctx: Ctx, url: URL, o: RenderAsk, signal: AbortSignal, 
     noteCall(ctx, { service: "web.render", host: final.hostname.replace(/^www\./, ""), chars: page.text.length + (markup.html?.length ?? 0), bytes: r.render.bytes, mime: "text/html" });
     return {
       object: "page", url: url.toString(), final_url: final.toString(), status: r.status, content_type: r.content_type, fetched_at: new Date().toISOString(),
-      title: page.title, text: page.text, ...(o.wantLinks ? { links: meta.links } : {}), ...markup,
+      title: page.title, text: page.text, ...(o.wantLinks ? { links: meta.links } : {}), ...(o.wantImages ? { images: meta.images } : {}), ...markup,
       robots: { meta: meta.robots, x_robots_tag: r.x_robots_tag ?? null }, canonical: meta.canonical, lang: meta.lang, redirects: r.redirects,
       ...(r.etag ? { etag: r.etag } : {}), ...(r.last_modified ? { last_modified: r.last_modified } : {}),
       rendered: true, render: r.render,
@@ -404,7 +415,7 @@ async function forwardRender(ctx: Ctx, url: URL, o: RenderAsk, signal: AbortSign
   const r = await fetch(`${node.base_url}/v1/read`, {
     method: "POST",
     headers: { authorization: `Bearer ${node.api_key}`, "content-type": "application/json", ...(ctx.agent ? { "x-mux-agent": ctx.agent } : {}), ...(ctx.traceId ? { "x-mux-trace-id": ctx.traceId } : {}) },
-    body: JSON.stringify({ url: url.toString(), max_chars: o.maxChars, links: o.wantLinks, html: o.wantHtml, max_html_chars: o.maxHtml, render: true }),
+    body: JSON.stringify({ url: url.toString(), max_chars: o.maxChars, links: o.wantLinks, html: o.wantHtml, max_html_chars: o.maxHtml, images: o.wantImages === true, render: true }),
     signal: AbortSignal.any([signal, AbortSignal.timeout(60_000)]),
   }).catch((e) => { throw new MuxError(502, "upstream_error", `${node.name} could not be reached to render (${e instanceof Error ? e.name : "error"})`); });
   const text = await r.text();
