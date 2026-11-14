@@ -88,6 +88,8 @@ export const defaultSettings = {
   intentRouterModel: "",
   /** The page reader (/v1/read): how many reads one tenant may have in flight at once, beside its max_parallel. */
   readerParallel: 8,
+  /** The page reader's render mode (/v1/read {render: true}): pages one tenant may render at once, and this machine's browser takes at once. */
+  renderParallel: 2,
 };
 export type Settings = typeof defaultSettings;
 

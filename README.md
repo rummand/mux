@@ -79,7 +79,7 @@ a setting). The Services page shows both: calls, errors, latency, tenants, sites
 
 ```
 request  { url, max_chars?, links?: boolean, files?: boolean, max_bytes?, robots_txt?: boolean,
-           html?: boolean, max_html_chars? }
+           html?: boolean, max_html_chars?, render?: boolean }
 answer   { object: "page", url, final_url, status, content_type, fetched_at,
            title, text,
            links?: [{ href, text, rel }],                 // with links: true
@@ -88,7 +88,8 @@ answer   { object: "page", url, final_url, status, content_type, fetched_at,
            canonical?, lang?,
            redirects: [url…],                              // each hop's address, in order; the last is final_url
            file?: { mime, size, sha256, name, bytes_base64 },   // with files: true, for anything not HTML
-           etag?, last_modified? }
+           etag?, last_modified?,
+           rendered?: true, render?: { ms, requests, blocked, refused, bytes, settled, engine, node? } }   // with render: true
 ```
 
 - **Old callers** (`{url, max_chars}` → `title`, `text`) get the same answer; the other fields come beside it. `url`
@@ -108,6 +109,23 @@ answer   { object: "page", url, final_url, status, content_type, fetched_at,
   run), at most `max_html_chars` characters (1000–2 000 000, default 200 000), with `html_truncated` saying whether it
   was cut. Only for a web page: plain text, robots.txt and files get no `html`. Metered with the text (the characters
   returned). `links` and `file` are unchanged by it.
+- **XML and gzip** (`files: true`, 2026-11-14): a sitemap (`application/xml`, `text/xml`, RSS, Atom) and a
+  `sitemap.xml.gz` (`application/gzip`, also known by its first bytes) come back as files like any other, the XML's
+  words as `text`. Without `files: true` they are refused with 415, as before.
+- **Render** (`render: true`, route `web.render`, metered as model `renderer`, 2026-11-14): for a page that builds
+  itself in the browser (energinet.dk with Vue gave a title and no words). The page is opened in a headless
+  Chromium (playwright-core 1.56.1 and the Chromium it finds on the machine; `MUX_CHROMIUM_PATH` overrides), its
+  scripts run until its words stop changing (1.2 s quiet, at most 10 s after load), and the rendered DOM is read
+  as any page: `title`, `text`, `links` with `links: true`, the rendered markup with `html: true`. `rendered: true`
+  says it happened; `render` says how. Safety: the browser resolves no name and reaches no proxy; **every request
+  the page makes** (the page, its scripts, stylesheets, XHR and fetch, each redirect hop) is checked for a public
+  address and fetched by mux; a frame's page, pictures, media, fonts, WebSockets, beacons and anything but GET and
+  HEAD are refused; a new browser context per page (no cookies or storage kept; Set-Cookie dropped, Cookie and
+  Authorization never sent); no downloads, pop-ups or dialogs; 25 s, 15 MB and 150 requests at most; the same
+  user agent. A tenant whose `allowed` lists anything must list `web.render`. At most `renderParallel` (2) renders
+  per tenant and on the machine at once (429 `too_many_parallel`, `render_busy`). **On a gateway** (Railway) the
+  render runs on the first online node (the Mac Studio) through its `/v1/read`, as the gateway's tenant there,
+  metered on both; no node online is 503 `render_unavailable`, as is a node that answers without rendering.
 - **Size**: `max_bytes` defaults to 25 MB and is capped at 50 MB. Above it: **413** `file_too_large` with the size the
   server gave, never a cut file. Timeout 15 s for a page, 30 s when `files: true`.
 - **Redirects**: followed by hand, at most 5 (`502 too_many_redirects`), each new address checked for the public
@@ -118,7 +136,7 @@ answer   { object: "page", url, final_url, status, content_type, fetched_at,
 - **User agent**: `Mozilla/5.0 (compatible; mux-reader/2.0; +https://github.com/rummand/mux; <x-mux-agent>)` — the
   caller's `x-mux-agent` (letters, digits, `.`, `-`, `_`) in the comment, e.g. `bloom-site-reader`.
 - **Safety**: public addresses only (loopback, private, link-local, CGNAT and `.local`/`.internal` refused), no
-  cookies, no JavaScript run. A page that is not 2xx is `502 upstream_error` naming its status.
+  cookies, no JavaScript run (unless `render: true`, above). A page that is not 2xx is `502 upstream_error` naming its status.
 
 ## Routing
 

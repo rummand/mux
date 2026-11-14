@@ -23,6 +23,7 @@
     "typescript": "^5.9.3"
   },
   "optionalDependencies": {
-    "@receptron/laya": "^0.2.0"
+    "@receptron/laya": "^0.2.0",
+    "playwright-core": "1.56.1"
   }
 }

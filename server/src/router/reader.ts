@@ -2,11 +2,14 @@ import { createHash } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { inflateRawSync } from "node:zlib";
+import { config } from "../config.js";
 import { settings } from "../db.js";
+import { listProviders } from "../providers.js";
 import { noteCall } from "../services.js";
 import { MuxError } from "./errors.js";
 import type { Ctx } from "./metering.js";
 import { decode, pageText, privateAddress } from "./web.js";
+import { renderPage } from "./render.js";
 
 /**
  * `/v1/read`, mux's page reader (route `web.read`, metered as model `reader`). It fetches one public address and
@@ -22,6 +25,13 @@ import { decode, pageText, privateAddress } from "./web.js";
  *  - with `html: true`, a web page's markup as it came (decoded, scripts left in as text, never run), capped at
  *    `max_html_chars` (200 000 default, 2 000 000 at most) with `html_truncated` saying whether it was cut
  *    (2026-11-12: bloom for business ranks a company's colours by the elements its start page shows).
+ *  - with `render: true` (route `web.render`, 2026-11-14: bloom for business reads sites that build their pages in the
+ *    browser), the page is opened in a headless Chromium with its scripts run (router/render.ts) and the rendered DOM
+ *    is read the same way: words, links, markup. `rendered: true` says it happened; `render` says how (time,
+ *    requests, what was refused). On a gateway (Railway) the render runs on a node (the Mac Studio) over the tailnet,
+ *    metered here and there.
+ *  - with `files: true`, XML (a sitemap, an RSS feed) and gzip (sitemap.xml.gz) come back as files too (2026-11-14:
+ *    a sitemap was refused with 415, so a site's 8,308 listed pages went unseen).
  * Old callers ({url, max_chars} → {title, text}) get the same answer, with more fields beside it.
  * Safety: public addresses only, no cookies, no JavaScript, a size cap (413 above it, never a cut file), a timeout.
  */
@@ -36,7 +46,7 @@ const HTML_MAX_CHARS = 2_000_000;
 
 export interface ReadBody {
   url?: unknown; max_chars?: unknown; links?: unknown; files?: unknown; max_bytes?: unknown; robots_txt?: unknown;
-  html?: unknown; max_html_chars?: unknown;
+  html?: unknown; max_html_chars?: unknown; render?: unknown;
 }
 export type Link = { href: string; text: string; rel: string | null };
 export interface PageAnswer {
@@ -49,6 +59,9 @@ export interface PageAnswer {
   redirects: string[];
   file?: { mime: string; size: number; sha256: string; name: string; bytes_base64: string };
   etag?: string; last_modified?: string;
+  /** With render: true: the page was rendered with its scripts run, and how. */
+  rendered?: boolean;
+  render?: { ms: number; requests: number; blocked: number; refused: number; bytes: number; settled: boolean; engine: string; node?: string };
 }
 /** For the tests only: which addresses count as private (the fixture server is on loopback). */
 export interface ReadOptions { isPrivate?: (ip: string) => boolean }
@@ -63,10 +76,11 @@ const ODP = "application/vnd.oasis.opendocument.presentation";
 const BY_EXT: Record<string, string> = {
   pdf: "application/pdf", docx: DOCX, xlsx: XLSX, pptx: PPTX, doc: "application/msword", xls: "application/vnd.ms-excel",
   ppt: "application/vnd.ms-powerpoint", odt: ODT, ods: ODS, odp: ODP, csv: "text/csv", txt: "text/plain", css: "text/css", rtf: "application/rtf",
-  zip: "application/zip", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp",
+  zip: "application/zip", xml: "application/xml", gz: "application/gzip", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp",
   svg: "image/svg+xml", tif: "image/tiff", tiff: "image/tiff", bmp: "image/bmp", avif: "image/avif", heic: "image/heic",
 };
-const FILE_TYPES = new Set([...Object.values(BY_EXT), "text/rtf", "application/x-zip-compressed", "application/x-pdf"]);
+const FILE_TYPES = new Set([...Object.values(BY_EXT), "text/rtf", "application/x-zip-compressed", "application/x-pdf", "text/xml", "application/x-gzip", "application/rss+xml", "application/atom+xml"]);
+const isXml = (mime: string) => mime === "application/xml" || mime === "text/xml" || (mime.endsWith("+xml") && mime !== "image/svg+xml");
 const isFileType = (mime: string) => FILE_TYPES.has(mime) || mime.startsWith("image/");
 const isHtml = (mime: string) => mime === "text/html" || mime === "application/xhtml+xml";
 
@@ -79,6 +93,7 @@ export function fileMime(header: string, name: string, bytes: Uint8Array): strin
   const head = Buffer.from(bytes.subarray(0, 8)).toString("latin1");
   if (head.startsWith("%PDF")) return "application/pdf";
   if (head.startsWith("PK\x03\x04")) return "application/zip";
+  if (bytes[0] === 0x1f && bytes[1] === 0x8b) return "application/gzip";
   return m || "application/octet-stream";
 }
 
@@ -123,7 +138,7 @@ const byNumber = (a: string, b: string) => Number(/(\d+)\.xml$/.exec(a)?.[1] ?? 
 
 /** The text of a file, where that is cheap: plain text and CSV, and the XML inside docx/xlsx/pptx/OpenDocument. Else "". */
 export function fileText(mime: string, bytes: Buffer, charset: string | null): string {
-  if (mime === "text/plain" || mime === "text/csv" || mime === "text/css") return decodeText(bytes, charset);
+  if (mime === "text/plain" || mime === "text/csv" || mime === "text/css" || isXml(mime)) return decodeText(bytes, charset);
   try {
     if (mime === DOCX) return xmlText(unzip(bytes, (n) => n === "word/document.xml").get("word/document.xml")?.toString("utf8") ?? "", /<\/w:p>/g);
     if (mime === PPTX) {
@@ -191,7 +206,7 @@ export function pageMeta(html: string, pageUrl: URL, maxLinks = 5000) {
 }
 
 // ── Fetching ──────────────────────────────────────────────────────────────────────────────────────────────────────
-async function publicUrl(raw: string, isPrivate: (ip: string) => boolean): Promise<URL> {
+export async function publicUrl(raw: string, isPrivate: (ip: string) => boolean): Promise<URL> {
   let url: URL;
   try { url = new URL(raw); } catch { throw new MuxError(400, "invalid_request_error", "url must be an http(s) address"); }
   if (!/^https?:$/.test(url.protocol) || url.username || url.password) throw new MuxError(400, "invalid_request_error", "url must be an http(s) address");
@@ -265,6 +280,10 @@ export async function runRead(ctx: Ctx, b: ReadBody, signal: AbortSignal, opts: 
   const maxBytes = Math.min(Math.max(Number(b.max_bytes) || 25 * MB, 1024), 50 * MB);
   const wantLinks = b.links === true, wantFiles = b.files === true, robotsTxt = b.robots_txt === true, wantHtml = b.html === true;
   const maxHtml = Math.min(Math.max(Number(b.max_html_chars) || HTML_DEFAULT_CHARS, 1000), HTML_MAX_CHARS);
+  if (b.render === true) {
+    if (robotsTxt) throw new MuxError(400, "invalid_request_error", "render and robots_txt do not go together");
+    return runRender(ctx, requested, { maxChars, wantLinks, wantHtml, maxHtml }, signal, isPrivate);
+  }
 
   const tenant = ctx.tenant?.id ?? "";
   const limit = Math.max(1, Number(settings().readerParallel) || 8);
@@ -339,4 +358,65 @@ export async function runRead(ctx: Ctx, b: ReadBody, signal: AbortSignal, opts: 
   } finally {
     reading.set(tenant, Math.max(0, (reading.get(tenant) ?? 1) - 1));
   }
+}
+
+// ── Render mode (route web.render) ────────────────────────────────────────────────────────────────────────────────
+type RenderAsk = { maxChars: number; wantLinks: boolean; wantHtml: boolean; maxHtml: number };
+// One tenant's renders in flight at once (settings.renderParallel, 2 by default), beside the machine's own cap
+const rendering = new Map<string, number>();
+
+async function runRender(ctx: Ctx, url: URL, o: RenderAsk, signal: AbortSignal, isPrivate: (ip: string) => boolean): Promise<PageAnswer> {
+  ctx.modelId = "renderer";
+  ctx.route = "web.render";
+  const t = ctx.tenant;
+  // A tenant that lists what it may use names web.render to render (one that lists nothing may use everything).
+  if (t?.allowed?.length && !t.allowed.includes("web.render")) throw new MuxError(403, "permission_denied", "this key may not use route web.render");
+  const tenant = t?.id ?? "";
+  const limit = Math.max(1, Number(settings().renderParallel) || 2);
+  const n = rendering.get(tenant) ?? 0;
+  if (n >= limit) throw new MuxError(429, "too_many_parallel", `the renderer takes ${limit} renders at once per tenant (settings.renderParallel)`, 2);
+  rendering.set(tenant, n + 1);
+  try {
+    if (config.role === "gateway") return await forwardRender(ctx, url, o, signal);
+    const r = await renderPage(url, { isPrivate, userAgent: userAgent(ctx.agent), signal });
+    const final = new URL(r.final_url);
+    const page = pageText(r.html, o.maxChars);
+    const meta = pageMeta(r.html, final);
+    const markup = o.wantHtml ? (r.html.length > o.maxHtml ? { html: r.html.slice(0, o.maxHtml), html_truncated: true } : { html: r.html, html_truncated: false }) : {};
+    noteCall(ctx, { service: "web.render", host: final.hostname.replace(/^www\./, ""), chars: page.text.length + (markup.html?.length ?? 0), bytes: r.render.bytes, mime: "text/html" });
+    return {
+      object: "page", url: url.toString(), final_url: final.toString(), status: r.status, content_type: r.content_type, fetched_at: new Date().toISOString(),
+      title: page.title, text: page.text, ...(o.wantLinks ? { links: meta.links } : {}), ...markup,
+      robots: { meta: meta.robots, x_robots_tag: r.x_robots_tag ?? null }, canonical: meta.canonical, lang: meta.lang, redirects: r.redirects,
+      ...(r.etag ? { etag: r.etag } : {}), ...(r.last_modified ? { last_modified: r.last_modified } : {}),
+      rendered: true, render: r.render,
+    };
+  } finally {
+    rendering.set(tenant, Math.max(0, (rendering.get(tenant) ?? 1) - 1));
+  }
+}
+
+/** On a gateway: the render runs on a node that has a browser (the Mac Studio), as this gateway's tenant there. */
+async function forwardRender(ctx: Ctx, url: URL, o: RenderAsk, signal: AbortSignal): Promise<PageAnswer> {
+  const nodes = listProviders().filter((p) => p.kind === "mux" && p.enabled && p.status === "online" && p.api_key);
+  if (!nodes.length) throw new MuxError(503, "render_unavailable", "no node with a headless browser is online for this gateway");
+  const node = nodes[0];
+  const r = await fetch(`${node.base_url}/v1/read`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${node.api_key}`, "content-type": "application/json", ...(ctx.agent ? { "x-mux-agent": ctx.agent } : {}), ...(ctx.traceId ? { "x-mux-trace-id": ctx.traceId } : {}) },
+    body: JSON.stringify({ url: url.toString(), max_chars: o.maxChars, links: o.wantLinks, html: o.wantHtml, max_html_chars: o.maxHtml, render: true }),
+    signal: AbortSignal.any([signal, AbortSignal.timeout(60_000)]),
+  }).catch((e) => { throw new MuxError(502, "upstream_error", `${node.name} could not be reached to render (${e instanceof Error ? e.name : "error"})`); });
+  const text = await r.text();
+  let j: (PageAnswer & { error?: { type?: string; message?: string } }) | null = null;
+  try { j = JSON.parse(text); } catch { /* said below */ }
+  if (!r.ok) {
+    const retry = Number(r.headers.get("retry-after"));
+    // The gateway's own key refused on the node is the gateway's problem, not the caller's: rendering is unavailable.
+    const status = r.status === 401 || r.status === 403 ? 503 : r.status;
+    throw new MuxError(status, status === 503 && r.status !== 503 ? "render_unavailable" : (j?.error?.type ?? "upstream_error"), `${node.name}: ${j?.error?.message ?? `answered ${r.status}`}`, Number.isFinite(retry) && retry > 0 ? retry : undefined);
+  }
+  if (!j || j.object !== "page" || j.rendered !== true) throw new MuxError(503, "render_unavailable", `${node.name} answered without rendering (an older mux there)`);
+  noteCall(ctx, { service: "web.render", host: new URL(j.final_url).hostname.replace(/^www\./, ""), chars: (j.text?.length ?? 0) + (j.html?.length ?? 0), bytes: j.render?.bytes ?? 0, mime: "text/html" });
+  return { ...j, render: { ...j.render!, node: node.name } };
 }

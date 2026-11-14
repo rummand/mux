@@ -68,6 +68,30 @@ Then (bloom for business ranks a company's colours by the elements its start pag
 page's markup as it came, capped at `max_html_chars` (200 000 default, 2 000 000 at most) with `html_truncated`;
 metered with the text. `links` and `file` unchanged. Contract in `README.md`; test in `server/test/reader.test.ts`.
 
+## 2026-11-14: the page reader renders pages that build themselves in the browser (`render: true`)
+
+bloom for business read energinet.dk (a Vue site) through Railway's reader and got titles and no words from every page;
+its sitemap (8,308 addresses) was refused with 415. The owner approved extending the reader again. Branch
+`reader-render`.
+
+- **`render: true`** on `/v1/read` (route `web.render`, model `renderer`, `server/src/router/render.ts`): a headless
+  Chromium through `playwright-core` 1.56.1 (an optional dependency; the Chromium in `~/Library/Caches/ms-playwright`,
+  or `MUX_CHROMIUM_PATH`). The browser resolves no name (`--host-resolver-rules=MAP * ~NOTFOUND`) and its proxy is a
+  closed port: every request the page makes is intercepted, checked for a public address (each redirect hop too, at
+  most 5) and fetched by mux; frames, pictures, media, fonts, WebSockets, beacons and non-GET are refused; a fresh
+  context per page, Set-Cookie dropped, no Cookie or Authorization sent; no downloads, pop-ups, dialogs or service
+  workers; 25 s, 15 MB, 150 requests; the reader's user agent. Words settle when the page's text has not changed for
+  1.2 s (at most 10 s after load). A tenant with an `allowed` list must name `web.render`. `renderParallel` (2) per
+  tenant and per machine. energinet.dk: plain read 0 words, rendered 348 words and 84 links in 3.5 s.
+- **On a gateway** (Railway) the render is sent to the first online `mux` provider (the Mac Studio, over its
+  Funnel/tailnet address, with the gateway's own tenant key there) and metered on both sides; no node is 503
+  `render_unavailable`, and so is a node that answers without `rendered: true`.
+- **`files: true` returns XML and gzip** (a sitemap, `sitemap.xml.gz`), the XML's words as `text`.
+- **Services page**: a "Page renderer" row (`web.render`), with its try-it box.
+- Tests: `server/test/render.test.ts` (a script shell rendered; a private fetch from the page refused; no POST,
+  pictures or cookies; redirects; download refused; byte and time caps; the route permission; a gateway without a
+  node; XML and gzip files).
+
 ## 2026-11-12: images on the Mac Studio (FLUX.2 klein 4B Q4)
 
 The owner (bloom for business, testing Composer's images with a real model): "Local image model: install an open image

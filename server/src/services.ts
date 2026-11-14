@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS service_checks (ts INTEGER NOT NULL, service TEXT NOT
 export const SERVICES = [
   { id: "web.search", name: "Web search", engine: "SearXNG", model: "searxng", endpoint: "POST /v1/search", about: "Searches the web through the SearXNG beside mux: titles, links and extracts from many engines at once. No vendor, no key, free." },
   { id: "web.read", name: "Page reader", engine: "built into mux", model: "reader", endpoint: "POST /v1/read", about: "Fetches one public web page or file. A page comes back as plain, AI-readable text (headings, paragraphs and lists, without scripts, menus or ads), with its links if asked; a document (PDF, Office, CSV, images, zip) as its exact bytes and their SHA-256, for the caller's provenance. Status, redirects and robots signals come with it; robots.txt itself on request." },
+  { id: "web.render", name: "Page renderer", engine: "headless Chromium", model: "renderer", endpoint: "POST /v1/read {render: true}", about: "Opens a page that builds itself in the browser in a headless Chromium, runs its scripts, and reads the rendered page as the page reader does. Every request the page makes is checked for the public web and fetched by mux; nothing is kept between pages. On a gateway it runs on a node with a browser (the Mac Studio)." },
 ] as const;
 
 const put = db.prepare("INSERT OR REPLACE INTO service_calls(request_id, ts, service, results, engines, missing, host, chars, bytes, mime) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
@@ -151,7 +152,7 @@ export function registerServices(api: FastifyInstance) {
     const ctx = { id: `test_${Date.now()}` } as Ctx;
     const t0 = Date.now();
     try {
-      const out = id === "web.search" ? await runSearch(ctx, b, AbortSignal.timeout(20_000)) : id === "web.read" ? await runRead(ctx, b, AbortSignal.timeout(20_000)) : null;
+      const out = id === "web.search" ? await runSearch(ctx, b, AbortSignal.timeout(20_000)) : id === "web.read" ? await runRead(ctx, b, AbortSignal.timeout(20_000)) : id === "web.render" ? await runRead(ctx, { ...b, render: true }, AbortSignal.timeout(40_000)) : null;
       if (!out) return reply.code(404).send({ error: "no such service" });
       return { ms: Date.now() - t0, out };
     } catch (e) {
