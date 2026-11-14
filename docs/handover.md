@@ -91,6 +91,16 @@ its sitemap (8,308 addresses) was refused with 415. The owner approved extending
 - Tests: `server/test/render.test.ts` (a script shell rendered; a private fetch from the page refused; no POST,
   pictures or cookies; redirects; download refused; byte and time caps; the route permission; a gateway without a
   node; XML and gzip files).
+- Later the same day: every answer carries `x-ratelimit-limit-requests` and `x-ratelimit-remaining-requests` (`0861286`,
+  bloom paces its agents to them); the user agent is `mux-reader/2.1 (+https://github.com/rummand/mux; <agent>)`
+  without `Mozilla/5.0` (`f54eaa6`, nemlig.com still rendered 749 words); `images: true` lists a page's `<img>`; a
+  site's public scripts and stylesheets are cached 10 minutes for renders, 64 MB at most (`21426ea`: energinet.dk
+  3.7 MB a page down to 0.1 MB).
+- Commits on main: `2de1d79`, `65bbf00`, `0861286`, `f54eaa6`, `21426ea`. Each built and kickstarted on the Mac
+  Studio and deployed to Railway with `railway up` from a clean worktree of main (SUCCESS). Verified through Railway
+  with a one-day key for `bloom-for-business` (revoked, 200, then 401): energinet.dk rendered 347 words and 84 links in
+  4.3 s, `render.node: "Mac Studio"`, the sitemap as a `text/xml` file. No tenant was changed: `gateway-railway` on
+  the Mac and `bloom-for-business` on Railway list no `allowed` routes, so `web.render` is allowed.
 
 ## 2026-11-12: images on the Mac Studio (FLUX.2 klein 4B Q4)
 
