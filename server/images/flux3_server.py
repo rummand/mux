@@ -14,6 +14,7 @@ import os
 import random
 import sys
 import tempfile
+import concurrent.futures
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -26,6 +27,15 @@ IDLE_MIN = float(os.environ.get("MUX_FLUX3_IDLE_MIN", "5"))
 MAX_BODY = 48 * 1024 * 1024
 MAX_SIDE = 2048
 LOCK = threading.RLock()
+# MLX keeps its default stream per thread: a pipeline loaded on one thread fails on another with "There is no
+# Stream(cpu, 0) in current thread". ThreadingHTTPServer answers each request on a new thread, so every MLX call
+# (load, generate, unload) runs on this one worker thread instead.
+MLX = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="mlx")
+
+
+def on_mlx(fn, *args, **kwargs):
+    """Run fn on the MLX thread and wait for it; exceptions come back to the caller."""
+    return MLX.submit(fn, *args, **kwargs).result()
 PIPELINE = None
 PIPELINE_KIND = None
 LAST_USED = 0.0
@@ -68,7 +78,7 @@ def idle_watch():
             if LOCK.acquire(blocking=False):
                 try:
                     if PIPELINE is not None and time.monotonic() - LAST_USED > IDLE_MIN * 60:
-                        unload()
+                        on_mlx(unload)
                 finally:
                     LOCK.release()
 
@@ -108,25 +118,30 @@ def form_parts(data, content_type):
     return fields, images
 
 
+def _generate_on_mlx(prompt, size, n, seed, steps, images):
+    output = []
+    pipeline = model("edit" if images else "generate")
+    w, h = edit_size(images) if images and size in (None, "", "auto") else size_of(size)
+    for i in range(n):
+        args = {
+            "seed": (seed + i) if seed is not None else random.randrange(2**31),
+            "prompt": prompt,
+            "num_inference_steps": steps,
+            "width": w, "height": h,
+        }
+        if images:
+            args["image_paths"] = images
+        result = pipeline.generate_image(**args)
+        png = io.BytesIO()
+        result.image.save(png, format="PNG")
+        output.append({"b64_json": base64.b64encode(png.getvalue()).decode("ascii")})
+    return output
+
+
 def generate(prompt, size, n, seed, steps, images):
     global LAST_USED
-    output = []
     with LOCK:
-        pipeline = model("edit" if images else "generate")
-        w, h = edit_size(images) if images and size in (None, "", "auto") else size_of(size)
-        for i in range(n):
-            args = {
-                "seed": (seed + i) if seed is not None else random.randrange(2**31),
-                "prompt": prompt,
-                "num_inference_steps": steps,
-                "width": w, "height": h,
-            }
-            if images:
-                args["image_paths"] = images
-            result = pipeline.generate_image(**args)
-            png = io.BytesIO()
-            result.image.save(png, format="PNG")
-            output.append({"b64_json": base64.b64encode(png.getvalue()).decode("ascii")})
+        output = on_mlx(_generate_on_mlx, prompt, size, n, seed, steps, images)
         LAST_USED = time.monotonic()
     return output
 

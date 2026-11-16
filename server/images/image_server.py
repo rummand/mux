@@ -12,7 +12,7 @@ A pre-quantised local copy instead of the Hugging Face cache: MUX_IMAGE_MODEL_PA
 ~/.mux/models/flux2-klein-4b-mflux-q4, 4.6 GB, from deploy/images.sh --q4), MUX_IMAGE_BASE_MODEL the architecture it
 is (flux2-klein-4b), MUX_IMAGE_MODEL the name it answers as (flux2-klein-4b-q4). Its quantisation is in the weights.
 """
-import base64, email.parser, email.policy, gc, io, json, os, random, sys, tempfile, threading, time
+import base64, concurrent.futures, email.parser, email.policy, gc, io, json, os, random, sys, tempfile, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(os.environ.get("MUX_IMAGES_PORT", "8312"))
@@ -30,6 +30,15 @@ _model = None
 _model_kind = None  # "edit" or "txt2img": mflux 0.24's edit pipeline needs an input image, so text to image has its own
 _last_used = 0.0
 _gpu = threading.Lock()  # one generation at a time; also guards loading and letting go
+# MLX keeps its default stream per thread: a model loaded on one thread fails on another with "There is no
+# Stream(cpu, 0) in current thread". ThreadingHTTPServer answers each request on a new thread, so every MLX call
+# (load, generate, let go) runs on this one worker thread instead.
+_mlx = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="mlx")
+
+
+def on_mlx(fn, *args, **kwargs):
+    """Run fn on the MLX thread and wait for it; exceptions come back to the caller."""
+    return _mlx.submit(fn, *args, **kwargs).result()
 
 
 def model(kind="txt2img"):
@@ -67,7 +76,7 @@ def idle_watch():
         if _model is not None and time.time() - _last_used > IDLE_MIN * 60 and _gpu.acquire(blocking=False):
             try:
                 if _model is not None and time.time() - _last_used > IDLE_MIN * 60:
-                    let_go()
+                    on_mlx(let_go)
             finally:
                 _gpu.release()
 
@@ -91,19 +100,24 @@ def edit_dims(paths):
     return dims(f"{round(w * scale)}x{round(h * scale)}")
 
 
+def _generate_on_mlx(prompt, size, n, seed, steps, images):
+    out = []
+    m = model("edit" if images else "txt2img")
+    w, h = edit_dims(images) if images and size in (None, "", "auto") else dims(size)
+    for i in range(n):
+        s = (seed + i) if seed is not None else random.randrange(2**31)
+        extra = {"image_paths": images} if images else {}
+        img = m.generate_image(seed=s, prompt=prompt, num_inference_steps=steps, width=w, height=h, **extra)
+        buf = io.BytesIO()
+        img.image.save(buf, format="PNG")
+        out.append({"b64_json": base64.b64encode(buf.getvalue()).decode()})
+    return out
+
+
 def generate(prompt, size, n, seed, steps, images=None):
     global _last_used
-    out = []
     with _gpu:
-        m = model("edit" if images else "txt2img")
-        w, h = edit_dims(images) if images and size in (None, "", "auto") else dims(size)
-        for i in range(n):
-            s = (seed + i) if seed is not None else random.randrange(2**31)
-            extra = {"image_paths": images} if images else {}
-            img = m.generate_image(seed=s, prompt=prompt, num_inference_steps=steps, width=w, height=h, **extra)
-            buf = io.BytesIO()
-            img.image.save(buf, format="PNG")
-            out.append({"b64_json": base64.b64encode(buf.getvalue()).decode()})
+        out = on_mlx(_generate_on_mlx, prompt, size, n, seed, steps, images)
         _last_used = time.time()
     return out
 
@@ -192,7 +206,7 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     threading.Thread(target=idle_watch, daemon=True).start()
     if "--warm" in sys.argv:  # deploy/images.sh: fetch the weights and load once, then exit
-        model()
+        on_mlx(model)
         sys.exit(0)
     print(f"mflux images on 127.0.0.1:{PORT}: {MODEL} {MODEL_PATH or f'q{QUANTIZE or 'bf16'}'}, {STEPS} steps, idle {IDLE_MIN:g} min", file=sys.stderr, flush=True)
     ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
