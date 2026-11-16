@@ -38,10 +38,9 @@ fi
 [ -f "$MUX_HOME/mux.env" ] || { echo "ERROR: $MUX_HOME/mux.env is missing; install Mux first" >&2; exit 1; }
 # shellcheck disable=SC1090
 source "$MUX_HOME/mux.env"
-[ -n "$MUX_ADMIN_TOKEN" ] || { echo "ERROR: MUX_ADMIN_TOKEN missing" >&2; exit 1; }
-MUX="http://127.0.0.1:$(printf %s "$MUX_PORT" | sed 's/^$/7070/')/api/admin"
-# MUX_PORT may be undefined in older installations:
-if [ -z "$MUX_PORT" ]; then MUX="http://127.0.0.1:7070/api/admin"; fi
+[ -n "${MUX_ADMIN_TOKEN:-}" ] || { echo "ERROR: MUX_ADMIN_TOKEN missing" >&2; exit 1; }
+MUX_PORT="${MUX_PORT:-7070}"
+MUX="http://127.0.0.1:$MUX_PORT/api/admin"
 admin_get() { curl -fsS -H "Authorization: Bearer $MUX_ADMIN_TOKEN" "$MUX$1"; }
 admin_put() { curl -fsS -X PUT -H "Authorization: Bearer $MUX_ADMIN_TOKEN" -H "Content-Type: application/json" -d "$2" "$MUX$1"; }
 admin_post() { curl -fsS -X POST -H "Authorization: Bearer $MUX_ADMIN_TOKEN" -H "Content-Type: application/json" -d "$2" "$MUX$1"; }
