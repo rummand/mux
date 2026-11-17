@@ -68,7 +68,10 @@ owner says yes, it slots in behind the same API as a second model on `video-dept
   a conv3d of the VAE's size holding MPS scratch outside PyTorch's allocator. On MPS the server now runs diffusers'
   `WanCausalConv3d` as conv2d over its time taps (`conv3d_by_frames`; equal to diffusers' forward within 10⁻⁵ for every
   shape the VAE has, and a whole tiny Wan VAE encodes and decodes the same) and empties MPS's cache after each job.
-  `MUX_VIDEO_CONV3D=native` keeps diffusers' own.
+  `MUX_VIDEO_CONV3D=native` keeps diffusers' own. **Measured after the change** (2026-11-17, 2 s, 832×480, 16 fps, 20
+  steps, depth control + first frame + label, a fresh server process): **322 s** with the load (load and prompt 37 s),
+  **peak 31.1 GB** (the process's physical footprint, MPS buffers included), **no swap growth** (22.8 GB before and
+  after). The label was seen in every extracted frame (0, 1, 2 s) and the words in the mp4's metadata.
 
 ## The API (Thread is built against it)
 
