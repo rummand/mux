@@ -27,6 +27,10 @@ wan/modules/attention.py, wan/modules/vae2_1.py and wan/utils/cam_utils.py):
   - T5: by default the same umT5-XXL weights from the diffusers copy mux already keeps for Wan2.1-VACE
     (transformers' UMT5EncoderModel), so ~11 GB are not stored twice; MUX_CAMERA_T5_PTH uses Wan's own .pth instead.
   - the text encoder is let go after each prompt is encoded (MUX_CAMERA_KEEP_T5=1 keeps it).
+  - memory (measured on the M3 Ultra, 2026-11-17: a 2 s take peaked at 73 GB): the VAE's CausalConv3d runs as a sum of
+    2D convolutions over its time taps (the same sums; MPS's conv3d at 480p held ~20 GB of scratch outside PyTorch's
+    allocator), PyTorch's MPS cache is emptied after the first-frame encode and after every chunk, and the encoder's
+    cache is let go once the all-zero latent is steady.
 """
 import gc
 import hashlib
@@ -94,6 +98,8 @@ def import_wan(code_dir):
     model_fast.attention = sdpa_attention          # the causal self-attention
     model_fast.causal_rope_apply = causal_rope_apply_real
     model_fast.sinusoidal_embedding_1d = sinusoidal_embedding_1d_cpu64
+    _UPSTREAM_CONV3D[0] = vae2_1.upstream_causal_conv3d_forward = vae2_1.CausalConv3d.forward
+    vae2_1.CausalConv3d.forward = causal_conv3d_taps
     return model_fast, vae2_1
 
 
@@ -140,6 +146,48 @@ def sdpa_attention(q, k, v, q_lens=None, k_lens=None, dropout_p=0.0, softmax_sca
                                                    is_causal=causal, scale=softmax_scale))
     out = outs[0] if len(outs) == 1 else torch.cat(outs, dim=2)
     return out.transpose(1, 2).contiguous().to(out_dtype)
+
+
+_UPSTREAM_CONV3D = [None]
+
+
+def causal_conv3d_taps(self, x, cache_x=None):
+    """vae2_1.CausalConv3d.forward as a sum of conv2d over the kernel's time taps, one output frame at a time.
+
+    Upstream concatenates the cached frames, pads the front in time with zeros and runs one conv3d. On MPS a conv3d
+    on a [1, 96, 6, 480, 832] input holds scratch outside PyTorch's allocator (a 2 s take reached 73 GB, ~20 GB of it
+    the VAE's); this computes the same sums (zero frames add nothing and are skipped, spatial zero padding is conv2d's
+    own) without the concatenated input, within float32 rounding of upstream's (test_lingbot_mps.py)."""
+    pad_t = self._padding[4]
+    seq = []
+    if cache_x is not None and pad_t > 0:
+        cache_x = cache_x.to(x.device)
+        seq += [cache_x[:, :, i] for i in range(cache_x.shape[2])]
+        pad_t -= cache_x.shape[2]
+    seq = seq + [x[:, :, i] for i in range(x.shape[2])]
+    seq = [None] * pad_t + seq if pad_t >= 0 else seq[-pad_t:]   # F.pad with a negative pad crops
+    kt, st = self.kernel_size[0], self.stride[0]
+    if self.dilation != (1, 1, 1) or self.groups != 1 or self._padding[0] != self._padding[1] or self._padding[2] != self._padding[3]:
+        return _UPSTREAM_CONV3D[0](self, x, cache_x)   # not a shape the Wan VAE has: upstream's own way
+    n_out = (len(seq) - kt) // st + 1
+    out = None
+    for o in range(n_out):
+        acc = None
+        for k in range(kt):
+            f = seq[o * st + k]
+            if f is None:
+                continue
+            y = F.conv2d(f, self.weight[:, :, k], None, self.stride[1:], (self._padding[2], self._padding[0]))
+            acc = y if acc is None else acc.add_(y)
+        if acc is None:   # every tap on padding: the bias alone
+            acc = F.conv2d(torch.zeros_like(x[:, :, 0]), self.weight[:, :, 0], None, self.stride[1:], (self._padding[2], self._padding[0]))
+        if self.bias is not None:
+            acc.add_(self.bias.view(1, -1, 1, 1))
+        if out is None:
+            out = acc.new_empty(acc.shape[0], acc.shape[1], n_out, acc.shape[2], acc.shape[3])
+        out[:, :, o] = acc
+        del acc
+    return out
 
 
 def rope_tables(freqs):
@@ -260,6 +308,7 @@ class StreamEncoder:
         z = self._enc(torch.zeros(1, 3, VAE_STRIDE[0], h, w, device=self.vae.device))
         if self._zero_prev is not None and torch.equal(z, self._zero_prev):
             self._zero_steady = z
+            self.cache = None    # never read again: every later zero chunk is this latent
         self._zero_prev = z
         return z
 
@@ -279,6 +328,7 @@ class StreamDecoder:
         for i in range(x.shape[2]):
             idx = [0]
             outs.append(self.m.decoder(x[:, :, i:i + 1], feat_cache=self.cache, feat_idx=idx))
+            empty_cache(self.vae.device)   # each latent frame's work at full size is let go before the next's
         video = torch.cat(outs, 2).float().clamp_(-1, 1)[0]          # [3, n, h, w]
         frames = ((video.permute(1, 2, 3, 0) + 1) * 127.5).round().clamp_(0, 255).to(torch.uint8)
         return frames.cpu().numpy()
@@ -439,6 +489,9 @@ class LingBotCamera:
             for j in range(c * CHUNK, (c + 1) * CHUNK):
                 lats.append(enc.image(img) if j == 0 else enc.zeros(h, w))
             y_lat = torch.cat(lats, dim=1)
+            del lats
+            if c == 0:
+                empty_cache(dev)   # the encoder's work at full size, before the DiT's
             msk = torch.zeros(4, CHUNK, lat_h, lat_w, device=dev)
             if c == 0:
                 msk[:, 0] = 1
@@ -466,7 +519,10 @@ class LingBotCamera:
             done += 1
             if on_step:
                 on_step(done, total)
-            yield dec(x0)
+            frames = dec(x0)
+            del x0, latent, flow, cond, y_lat, pl, kw
+            empty_cache(dev)   # MPS keeps freed blocks cached; let them go so the next chunk does not grow on them
+            yield frames
         del kv, cross
 
 

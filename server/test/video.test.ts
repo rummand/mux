@@ -16,17 +16,18 @@ const MP4 = Buffer.from([0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x70, 0x34
 
 // A video server like server/video/video_server.py, with the same contract: jobs it numbers itself.
 async function fakeVideoServer() {
-  const state = { loaded: false, created: [] as Record<string, unknown>[], jobs: new Map<string, string>(), auth: [] as string[] };
+  const state = { loaded: false, created: [] as Record<string, unknown>[], jobs: new Map<string, string>(), auth: [] as string[], needGb: undefined as number | undefined, shortOfMemory: false };
   const srv = createServer(async (req: IncomingMessage, res) => {
     const chunks: Buffer[] = [];
     for await (const c of req) chunks.push(c as Buffer);
     state.auth.push(req.headers.authorization ?? "");
     const send = (status: number, obj: unknown) => { res.statusCode = status; res.setHeader("content-type", "application/json"); res.end(JSON.stringify(obj)); };
     const path = (req.url ?? "").split("?")[0];
-    if (req.method === "GET" && path === "/v1/models") return send(200, { object: "list", data: [{ id: "wan-test", loaded: state.loaded }] });
+    if (req.method === "GET" && path === "/v1/models") return send(200, { object: "list", data: [{ id: "wan-test", loaded: state.loaded, ...(state.needGb === undefined ? {} : { need_gb: state.needGb }) }] });
     if (req.method === "POST" && path === "/v1/videos/generations") {
       const b = JSON.parse(Buffer.concat(chunks).toString()) as Record<string, unknown>;
       if (b.seconds === 11) return send(400, { error: { message: "seconds must be from 1 to 10 (got 11)", type: "invalid_request_error" } });
+      if (state.shortOfMemory) return send(503, { error: { message: "the Mac is short of memory: 9 GB free and a 832x480 take needs about 30 GB more", type: "memory_busy" } });
       state.created.push(b);
       state.loaded = true;
       const id = `up_${state.created.length}`;
@@ -306,6 +307,49 @@ test("video-camera: its own kind — a camera take goes only to a camera model, 
   } finally {
     await app.close();
     wan.close();
+    cam.close();
+  }
+});
+
+test("video-camera: a take the Mac has not the memory for is refused before the camera server is asked, even with the model loaded", async () => {
+  const Fastify = (await import("fastify")).default;
+  const { upsertModel, upsertRoute } = await import("../src/models.js");
+  const { upsertTenant, createKey } = await import("../src/tenants.js");
+  const { registerGateway } = await import("../src/api/gateway.js");
+  const { inCooldown } = await import("../src/router/health.js");
+  const cam = await fakeVideoServer();
+  upsertModel({ id: "lingbot-mem-test", backend: "external", kind: "video-camera", base_url: cam.url, upstream_model: "wan-test", size_bytes: 28 * 1024 ** 3 });
+  upsertRoute({ name: "video-camera", kind: "video-camera", strategy: "priority", candidates: ["lingbot-mem-test"] });
+  upsertTenant({ id: "thread-cam-mem", name: "Thread", allowed: ["video-camera"] });
+  const h = { authorization: `Bearer ${createKey("thread-cam-mem", "t").key}` };
+  const app = Fastify({ bodyLimit: 64 * 1024 * 1024 });
+  registerGateway(app);
+  try {
+    // Loaded (so size_bytes alone would let it through), but its take needs a million GB more: no Mac has that free
+    cam.state.loaded = true;
+    cam.state.needGb = 1e6;
+    for (let i = 0; i < 4; i++) {   // more refusals than the failures that would put a model in cooldown
+      const r = await app.inject({ method: "POST", url: "/v1/videos/generations", headers: h, payload: TAKE });
+      assert.equal(r.statusCode, 503, r.body);
+      assert.match(JSON.parse(r.body).error.message, /GB of memory free, and lingbot-mem-test needs about/);
+    }
+    assert.equal(cam.state.created.length, 0, "the camera server was not asked");
+    assert.equal(inCooldown("lingbot-mem-test"), false, "short of memory is not failing");
+    // The camera server's own check says short (the Mac changed in between): 503 in its words, no cooldown either
+    cam.state.needGb = 0;
+    cam.state.shortOfMemory = true;
+    for (let i = 0; i < 4; i++) {
+      const own = await app.inject({ method: "POST", url: "/v1/videos/generations", headers: h, payload: TAKE });
+      assert.equal(own.statusCode, 503, own.body);
+      assert.match(JSON.parse(own.body).error.message, /the Mac is short of memory/);
+    }
+    assert.equal(inCooldown("lingbot-mem-test"), false);
+    cam.state.shortOfMemory = false;
+    // It holds what it needs already: in it goes
+    assert.equal((await app.inject({ method: "POST", url: "/v1/videos/generations", headers: h, payload: TAKE })).statusCode, 202);
+    assert.equal(cam.state.created.length, 1);
+  } finally {
+    await app.close();
     cam.close();
   }
 });

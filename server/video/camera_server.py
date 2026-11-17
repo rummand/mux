@@ -13,6 +13,11 @@ one Mac-wide lock (video_server.gpu_lock), so only one video job runs on the GPU
 - One job at a time; at most MUX_CAMERA_QUEUE waiting or running (429 beyond).
 - The model loads on the first job (only with MUX_CAMERA_MIN_FREE_GB free) and is let go after MUX_CAMERA_IDLE_MIN
   idle minutes; the text encoder is let go as soon as the prompt is encoded.
+- Memory: a take at 832x480 peaks at ~28 GB of this process's footprint (measured on the M3 Ultra, 2026-11-17;
+  MUX_CAMERA_PEAK_GB, 1280x720 MUX_CAMERA_PEAK_720_GB, a larger peak once seen is kept). A job is refused with 503
+  `memory_busy` ("the Mac is short of memory") when macOS's free memory and what this process already holds come to
+  less than that, and a queued job fails the same way when it starts, rather than pushing the Mac into swap; /v1/models
+  says how much more it needs now (`need_gb`), so mux unloads idle models first (runtime/manager.ts roomForService).
 - Every PyTorch call runs on one device thread. The take is made chunk by chunk (one second of video each) and written
   to ffmpeg as it comes, so memory does not grow with its length; a cancel stops it at the next step.
 - Nothing about a prompt or an image is logged: only load and let-go, a finished take's timings, a failed job's error
@@ -26,7 +31,7 @@ Contract (Thread builds against it; docs/video-camera.md):
   GET  /v1/videos/{id}/content    → video/mp4 (H.264, yuv420p)
   POST /v1/videos/{id}/cancel     → {id, status}
 """
-import concurrent.futures, gc, importlib.util, io, json, math, os, queue, secrets, subprocess, sys, tempfile, threading, time, warnings
+import concurrent.futures, ctypes, gc, importlib.util, io, json, math, os, queue, secrets, subprocess, sys, tempfile, threading, time, warnings
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 here = os.path.dirname(os.path.abspath(__file__))
@@ -60,12 +65,94 @@ MAX_ANCHORS = 60
 MAX_BODY = 200 * 1024 * 1024
 SIZES = {"832x480": (832, 480), "1280x720": (1280, 720)}
 NAMES = {"video-camera", MODEL}
+# A take's peak footprint in GB by size: 832x480 measured (27.6 GB, 2026-11-17), 1280x720 an estimate (KV cache and
+# VAE caches ~2.3× larger). Raised to what a finished take really reached, never lowered.
+PEAK_GB = {"832x480": float(os.environ.get("MUX_CAMERA_PEAK_GB", "28")), "1280x720": float(os.environ.get("MUX_CAMERA_PEAK_720_GB", "46"))}
+SPARE_GB = float(os.environ.get("MUX_CAMERA_SPARE_GB", "2"))   # beside the peak, for everything else on the Mac
+
+# A last guard if a take ever grows past its measured peak: PyTorch's MPS allocator refuses (the job fails with
+# out_of_memory) beyond 0.6 of Metal's recommended working set (~47 GB on the 96 GB Mac) instead of swapping. It counts
+# only PyTorch's own buffers, so the footprint check above is the one that normally decides. Read when torch loads.
+os.environ.setdefault("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.6")
+os.environ.setdefault("PYTORCH_MPS_LOW_WATERMARK_RATIO", "0.5")
 
 # upstream's model has `with torch.amp.autocast('cuda', …)` inside; on a Mac each says CUDA is missing, every step
 warnings.filterwarnings("ignore", message=".*CUDA is not available.*")
 warnings.filterwarnings("ignore", message=".*torch.cuda.amp.autocast.*")
 
 BadInput, Cancelled = vs.BadInput, vs.Cancelled
+
+
+# ── memory: this process's footprint (MPS buffers count in it) and whether a take fits ─────────────────────────────
+
+class _RUsage(ctypes.Structure):   # struct rusage_info_v4 (<sys/resource.h>)
+    _fields_ = [("ri_uuid", ctypes.c_uint8 * 16)] + [(n, ctypes.c_uint64) for n in (
+        "user_time system_time pkg_idle_wkups interrupt_wkups pageins wired_size resident_size phys_footprint "
+        "proc_start_abstime proc_exit_abstime child_user_time child_system_time child_pkg_idle_wkups "
+        "child_interrupt_wkups child_pageins child_elapsed_abstime diskio_bytesread diskio_byteswritten "
+        "cpu_time_qos_default cpu_time_qos_maintenance cpu_time_qos_background cpu_time_qos_utility "
+        "cpu_time_qos_legacy cpu_time_qos_user_initiated cpu_time_qos_user_interactive billed_system_time "
+        "serviced_system_time logical_writes lifetime_max_phys_footprint instructions cycles billed_energy "
+        "serviced_energy interval_max_phys_footprint runnable_time").split()]
+
+
+_libproc = None
+
+
+def footprint_gb():
+    """(now, lifetime max) of this process's physical footprint in GB, what Activity Monitor calls Memory; MPS
+    buffers are in it, unlike RSS. (None, None) off macOS. Any thread may ask (no torch)."""
+    global _libproc
+    if sys.platform != "darwin":
+        return None, None
+    try:
+        if _libproc is None:
+            _libproc = ctypes.CDLL("/usr/lib/libproc.dylib")
+        r = _RUsage()
+        if _libproc.proc_pid_rusage(os.getpid(), 4, ctypes.byref(r)) != 0:
+            return None, None
+        return r.phys_footprint / 1024 ** 3, r.lifetime_max_phys_footprint / 1024 ** 3
+    except Exception:  # noqa: BLE001
+        return None, None
+
+
+def need_gb(size="832x480"):
+    """How much more memory a take at `size` needs free now: its peak less what this process holds already."""
+    held = footprint_gb()[0] or 0.0
+    return max(0.0, PEAK_GB[size] + SPARE_GB - held)
+
+
+def short_of_memory(size):
+    """The words for a refusal when the Mac has not got the memory for a take at `size` now, else None."""
+    have = vs.available_gb()
+    need = need_gb(size)
+    if have is None or have >= need:
+        return None
+    return (f"the Mac is short of memory: {have:.0f} GB free and a {size} take needs about {need:.0f} GB more "
+            f"(it peaks at ~{PEAK_GB[size]:.0f} GB); try again when other models have been let go")
+
+
+class PeakWatch:
+    """This process's peak footprint over a job: exact when the job set a new lifetime peak, else sampled."""
+
+    def __init__(self, every=0.25):
+        self.before = footprint_gb()[1]
+        self.peak = footprint_gb()[0] or 0.0
+        self._stop = threading.Event()
+        self._t = threading.Thread(target=self._run, args=(every,), daemon=True)
+        self._t.start()
+
+    def _run(self, every):
+        while not self._stop.wait(every):
+            self.peak = max(self.peak, footprint_gb()[0] or 0.0)
+
+    def done(self):
+        self._stop.set()
+        now, life = footprint_gb()
+        self.peak = max(self.peak, now or 0.0)
+        if life is not None and self.before is not None and life > self.before:
+            self.peak = max(self.peak, life)
+        return self.peak
 
 
 class Job:
@@ -298,6 +385,10 @@ def _run_on_device(job):
     req = job.req
     p = req["plan"]
     w, h = SIZES[req["size"]]
+    short = short_of_memory(req["size"])
+    if short:
+        raise MemoryError(short)
+    watch = PeakWatch()
     m = model()
     t0 = time.time()
     total = sum(sg["latent"] // poses.CHUNK * 5 for sg in p["segments"])
@@ -353,6 +444,10 @@ def _run_on_device(job):
     finally:
         if getattr(m, "empty", None):
             m.empty()
+        fp = watch.done()
+    if fp:
+        peak = max(peak, fp)
+        PEAK_GB[req["size"]] = max(PEAK_GB[req["size"]], round(fp, 1))
     s = sorted(chunk_s)
     job.stats = {"load_s": round(getattr(m, "load_s", 0.0), 1), "encode_s": round(encode_s, 1), "total_s": round(time.time() - t0, 1),
                  "chunks": len(chunk_s), "chunk_s_median": s[len(s) // 2] if s else None, "chunk_s_max": s[-1] if s else None,
@@ -381,7 +476,8 @@ def run(job):
             job.end("cancelled")
         except Exception as e:  # noqa: BLE001 – the reason goes to the caller; never the prompt or a picture
             msg = str(e)[:300] or type(e).__name__
-            kind = "out_of_memory" if isinstance(e, MemoryError) or "out of memory" in msg.lower() else "server_error"
+            kind = ("memory_busy" if msg.startswith("the Mac is short of memory") else
+                    "out_of_memory" if isinstance(e, MemoryError) or "out of memory" in msg.lower() else "server_error")
             print(f"job {job.id} failed: {type(e).__name__}", file=sys.stderr, flush=True)
             job.end("failed", {"type": kind, "message": msg})
 
@@ -468,7 +564,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self._path()
         if path in ("", "/health", "/v1/models"):
-            return self._send(200, {"object": "list", "data": [{"id": MODEL, "object": "model", "loaded": loaded()}]})
+            return self._send(200, {"object": "list", "data": [{"id": MODEL, "object": "model", "loaded": loaded(),
+                                                                "need_gb": round(need_gb(), 1)}]})
         parts = path.split("/")
         if len(parts) in (4, 5) and parts[1:3] == ["v1", "videos"]:
             job = get(parts[3])
@@ -509,6 +606,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._error(400, str(e))
             except Exception as e:  # noqa: BLE001
                 return self._error(400, f"the input could not be read: {str(e)[:200]}")
+            short = short_of_memory(req["size"])
+            if short:
+                return self._error(503, short, "memory_busy")
             job = submit(req)
             if job is None:
                 return self._error(429, f"{MAX_QUEUE} videos are already waiting or running; try again later", "queue_full")

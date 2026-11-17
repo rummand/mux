@@ -183,6 +183,14 @@ camera-to-world (x right, y down, looking down +z) plus `fx fy cx cy` in pixels.
   condition chunks encode the same, that latent is reused (`torch.equal`, exact).
 - **T5 let go after the prompt** (`MUX_CAMERA_KEEP_T5=1` keeps it); embeddings of the last 8 prompts are kept, keyed by
   SHA-256, never the prompt.
+- **Memory (2026-11-17, after the first real clip peaked at 73 GB).** Measured phase by phase on the real weights
+  (`torch.mps.current_allocated_memory` against `driver_allocated_memory`): the DiT, KV cache and T5 were as estimated;
+  the excess was the **Wan VAE's `CausalConv3d` on MPS**. At 480p each conv3d holds scratch outside PyTorch's
+  allocator, and the driver's share grew to 69 GB while PyTorch had 21 GB in use (the VAE alone: 27 GB for 7 GB in use).
+  Now each `CausalConv3d` runs as a sum of 2D convolutions over its time taps (`causal_conv3d_taps`: the same sums,
+  zero padding frames skipped; within 10⁻⁵ of upstream's conv3d for every shape the VAE has, decoded frames within one
+  8-bit level, and faster), MPS's cache is emptied after the first-frame encode, after each decoded latent frame and
+  after every chunk, and the encoder's cache is let go once the all-zero latent is steady.
 
 ## Does it run on Apple Silicon? What is proven and what is not
 
@@ -197,13 +205,14 @@ camera-to-world (x right, y down, looking down +z) plus `fx fy cx cy` in pixels.
 | The text encoder's numbers (diffusers umT5 against Wan's `.pth`) | **Not proven here** | the same Google umT5-XXL weights; diffusers' Wan pipelines use exactly this. `MUX_CAMERA_T5_PTH` switches to Wan's own if in doubt |
 | The job API, pose mapping, anchors, fps, mp4 | **Proven** with a stub model | `server/video/test_camera_server.py`: every field's 400, the axis mapping (dolly, pan, tilt, world-invariance), Sets' intrinsics, frames in order in the H.264 mp4, 24 fps, anchors restarting from their pictures, cancel, the queue, the lock shared with the Wan server, expiry, nothing of the prompt or picture in the log |
 | The gateway | **Proven** | `server/test/video.test.ts`: camera takes go only to camera models and plain video never does (even with empty routes), alias and `mux/` names, 400 before any machine, 403 without the route, 503 without a model |
-| **The real 1.3B on MPS: pictures, camera adherence, speed, memory, drift** | **Not proven** | nothing has been downloaded or run at full size. `./deploy/video-camera.sh` ends with a 2 s clip, `--measure 30` (or 60) gives the numbers: write them below |
+| **The real 1.3B on MPS: pictures, speed, memory over 2 s** | **Proven** (2 s clips, 832×480) | the picture is right (the lake, the tree, the walk); 28.2 GB peak, 33.8 s per second of video: *Measured on the Mac* below |
+| Camera adherence and drift over 20–60 s | **Not proven** | `--measure 30` gives the numbers; not run yet |
 | bfloat16 DiT (`MUX_CAMERA_DTYPE=bf16`), 1280×720, the `.pth` T5 path | **Not proven** | written, not run |
 | Anchors' seams | **Not proven** | the cut is by design; how visible it is wants watching |
 | Matrix-Game 3.0, Hy-Nomas | **Not ported** | licences and pins above |
 | macOS itself | **A known risk** | the measure work met a report of macOS 26.4 reserving ~40 GiB of MPS memory on a 48 GB Mac; if a load fails with plenty free, check the macOS version first |
 
-### Memory and time (estimates, before the Mac measures them)
+### Memory and time (estimates, before the Mac measured them; the measured numbers are below)
 
 | | 832 × 480 | 1280 × 720 |
 |---|---|---|
@@ -223,7 +232,29 @@ is expected here. **Write the real numbers here** from `deploy/video-camera.sh` 
 
 ### Measured on the Mac
 
-Not yet run.
+M3 Ultra, 96 GB, PyTorch 2.14.1 MPS, a llama-server chat model (~19 GB) resident beside it. The deploy's 2 s test take
+(832×480, 16 fps, seed 7, `examples/03/image.jpg`, the sample walk), 3 chunks, the model loading on the job:
+
+| 2026-11-17 | Peak | Seconds per video second | Chunk (median / max) | Text encode | Total |
+|---|---|---|---|---|---|
+| Before (a4ff1e2) | **73 GB** (MPS driver; swap grew to 36 GB, an earlier try filled the disk and was SIGKILLed) | **95.5 s** | 62 / 79 s | 11.7 s | 191 s |
+| After (`causal_conv3d_taps`, caches emptied) | **28.2 GB** (the process's footprint, MPS buffers included; no swap growth) | **33.8 s** | 20 / 23 s | 7.1 s | 68 s |
+
+Phase by phase after the change (profiled the same way): DiT loaded 7.4 GB; with T5 encoding 19 GB, then T5 let go;
+the take holds 17.6 GB in use (DiT 6.9 + KV cache 5.2 + VAE decoder cache 3.6 + the encoder's) and the footprint stays
+at 25–27.6 GB through every chunk; the VAE decode of a chunk is the high point. The picture is the same take as before:
+PSNR 41.6 dB between the two mp4s (same seed; float rounding through the sampler), the drift record equal to within
+1 % (luma 181.4/179.1/179.0 against 181.5/179.1/179.0). The before numbers were slow because the Mac was swapping.
+
+**The memory guard.** `camera_server.py` refuses a take with **503 `memory_busy`** (*"the Mac is short of memory: N GB
+free and a 832x480 take needs about M GB more …"*) when macOS's free memory plus what the server already holds is
+below the take's peak (`MUX_CAMERA_PEAK_GB` 28, `MUX_CAMERA_PEAK_720_GB` 46 — an estimate — plus `MUX_CAMERA_SPARE_GB`
+2; a larger peak once seen is kept), and a queued take that no longer fits fails the same way when it starts. Its
+`/v1/models` says `need_gb`, and mux's `roomForService` (runtime/manager.ts) unloads idle models, least recently used
+first, to make that room before it forwards a take — also with the model loaded — and refuses in words (503) if it
+cannot. `deploy/video-camera.sh` registers the model with `size_bytes` 28 GB for that. PyTorch's own MPS allocator is
+capped at 0.6 of Metal's working set (`PYTORCH_MPS_HIGH_WATERMARK_RATIO`) as a last guard: past it a take fails with
+`out_of_memory` instead of swapping. 1280×720 is not measured.
 
 ## Running it
 

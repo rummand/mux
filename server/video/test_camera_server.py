@@ -214,6 +214,7 @@ def fake_load():
 
 
 cs.load_model = fake_load
+cs.vs.available_gb = lambda: 500.0   # this Mac's real free memory must not decide the tests; the memory test sets it
 server = cs.start(0)
 port = server.server_address[1]
 threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -365,9 +366,42 @@ assert call("GET", f"/v1/videos/{j['id']}")[0] == 404
 cs.KEEP_S = 3600
 ok("expiry: a finished video is gone after KEEP_S")
 
+# memory: refused in words (503 memory_busy) when free memory and what the server holds fall short of a take's peak,
+# rather than swapping; a queued job that no longer fits fails when it starts; /v1/models says what more it needs;
+# a take's peak footprint is its stat, and a larger peak than the measured one raises it
+real_fp = cs.footprint_gb
+cs.footprint_gb = lambda: (10.0, 10.0)
+assert call("GET", "/v1/models")[1]["data"][0]["need_gb"] == cs.PEAK_GB["832x480"] + cs.SPARE_GB - 10
+cs.vs.available_gb = lambda: 12.0
+n_jobs = len(cs._jobs)
+s, j, _ = call("POST", "/v1/videos/generations", BASE)
+assert s == 503 and j["error"]["type"] == "memory_busy" and j["error"]["message"].startswith("the Mac is short of memory: 12 GB free"), (s, j)
+assert len(cs._jobs) == n_jobs, "nothing queued"
+cs.vs.available_gb = lambda: 25.0   # 25 + 10 held ≥ 28 + 2: it fits
+fd = os.open(os.environ["MUX_VIDEO_GPU_LOCK"], os.O_RDWR | os.O_CREAT)
+fcntl.flock(fd, fcntl.LOCK_EX)
+s, j, _ = call("POST", "/v1/videos/generations", BASE)
+assert s == 202, (s, j)
+cs.vs.available_gb = lambda: 5.0    # the chat models came back while it waited
+fcntl.flock(fd, fcntl.LOCK_UN)
+os.close(fd)
+done = wait_for(j["id"], {"succeeded", "failed"})
+assert done["status"] == "failed" and done["error"]["type"] == "memory_busy", done
+cs.vs.available_gb = lambda: 500.0
+cs.footprint_gb = lambda: (40.0, 1e6)   # the lifetime peak was already higher: the sampled 40 GB counts
+s, j, _ = call("POST", "/v1/videos/generations", BASE)
+done = wait_for(j["id"], {"succeeded", "failed"})
+assert done["status"] == "succeeded" and done["stats"]["peak_gb"] == 40.0 and cs.PEAK_GB["832x480"] == 40.0, (done, cs.PEAK_GB)
+cs.PEAK_GB["832x480"] = 28.0
+cs.footprint_gb = real_fp
+now, life = cs.footprint_gb()
+assert sys.platform != "darwin" or (0 < now <= life), (now, life)
+ok("memory: 503 memory_busy in words when the Mac is short, nothing queued; a queued job that no longer fits fails as it starts; need_gb in /v1/models; the peak footprint is the stat")
+
 assert len(loads) == 1, f"the model loaded {len(loads)} times"
 assert len(device_threads) == 1 and threading.get_ident() not in device_threads, device_threads
-assert call("GET", "/v1/models")[1]["data"][0] == {"id": cs.MODEL, "object": "model", "loaded": True}
+m0 = call("GET", "/v1/models")[1]["data"][0]
+assert {k: m0[k] for k in ("id", "object", "loaded")} == {"id": cs.MODEL, "object": "model", "loaded": True} and m0["need_gb"] >= 0, m0
 cs.on_device(cs.let_go)
 assert call("GET", "/v1/models")[1]["data"][0]["loaded"] is False
 ok("one load, one device thread for every model call; /v1/models says loaded, and not after let-go")

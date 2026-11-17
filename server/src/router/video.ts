@@ -72,8 +72,8 @@ export async function createVideo(ctx: Ctx, body: Record<string, unknown>, signa
     if (i > 0) ctx.fallbacks = i;
     let up;
     try { up = await acquire(m); } catch (e) {
-      // This machine resting (presence) is not the model failing: no cooldown for it
-      if (!(e instanceof ModelUnavailable && e.type === "node_resting")) recordFailure(m.id);
+      // This machine resting (presence) or short of memory is not the model failing: no cooldown for it
+      if (!(e instanceof ModelUnavailable && (e.type === "node_resting" || e.type === "memory_busy"))) recordFailure(m.id);
       last = `${m.id}: ${(e as Error).message}`;
       continue;
     }
@@ -98,7 +98,7 @@ export async function createVideo(ctx: Ctx, body: Record<string, unknown>, signa
       const err = await upstreamError(res);
       // The request itself is wrong (or the queue is full there): another model would say the same
       if (res.status < 500 && res.status !== 429) throw new MuxError(res.status, err.type ?? "invalid_request", err.message);
-      if (res.status !== 429) recordFailure(m.id);
+      if (res.status !== 429 && err.type !== "memory_busy") recordFailure(m.id);   // busy or short of memory is not failing
       last = `${m.id}: HTTP ${res.status} ${err.message.slice(0, 200)}`;
     } catch (e) {
       if (e instanceof MuxError || signal.aborted) throw e;

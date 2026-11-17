@@ -166,8 +166,10 @@ curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" || { echo "✗ the camera 
 echo "→ model $MODEL_ID and route video-camera in mux"
 api GET /routes | js 'process.exit(j.some(r=>r.name==="video-camera"&&r.kind==="video-camera")?0:1)' \
   || { echo "✗ this mux has no route video-camera of kind video-camera: npm run build and restart mux (com.mux.server) on this branch first"; exit 1; }
-NOTES="LingBot-World v2 1.3B causal-fast ($DIT_REPO @ ${DIT_REV%"${DIT_REV#???????}"}, Robbyant, CC BY-NC-SA 4.0: non-commercial, credit Robbyant, share-alike) on PyTorch MPS: a first frame and a camera path (Sets' convention) become a take of up to 60 s, async jobs; server/video/camera_server.py, com.mux.video-camera. Loads on the first job (only with 24 GB free), lets go after 10 idle minutes; one video job at a time with the Wan server; presence applies."
-MODEL=$(node -e 'console.log(JSON.stringify({id:process.argv[1],display_name:"LingBot-World v2 1.3B (camera video)",kind:"video-camera",backend:"external",base_url:"http://127.0.0.1:"+process.argv[2]+"/v1",upstream_model:process.argv[1],caps:{quality:5,speed:2},notes:process.argv[3]}))' "$MODEL_ID" "$PORT" "$NOTES")
+NOTES="LingBot-World v2 1.3B causal-fast ($DIT_REPO @ ${DIT_REV%"${DIT_REV#???????}"}, Robbyant, CC BY-NC-SA 4.0: non-commercial, credit Robbyant, share-alike) on PyTorch MPS: a first frame and a camera path (Sets' convention) become a take of up to 60 s, async jobs; server/video/camera_server.py, com.mux.video-camera. Loads on the first job (only with 24 GB free), a take peaks at ~28 GB (refused with 503 memory_busy when the Mac is short), lets go after 10 idle minutes; one video job at a time with the Wan server; presence applies."
+# size_bytes is a take's peak (28 GB at 832x480, measured): mux lets idle models go to make that room first, and the
+# camera server's /v1/models need_gb says what it still needs while loaded (runtime/manager.ts roomForService)
+MODEL=$(node -e 'console.log(JSON.stringify({id:process.argv[1],display_name:"LingBot-World v2 1.3B (camera video)",kind:"video-camera",backend:"external",base_url:"http://127.0.0.1:"+process.argv[2]+"/v1",upstream_model:process.argv[1],size_bytes:28*1024**3,caps:{quality:5,speed:2},notes:process.argv[3]}))' "$MODEL_ID" "$PORT" "$NOTES")
 api POST /models "$MODEL" >/dev/null 2>&1 || api PATCH "/models/$MODEL_ID" "$MODEL" >/dev/null
 api PUT /routes/video-camera '{"kind":"video-camera","strategy":"priority","candidates":["'$MODEL_ID'"]}' >/dev/null
 
@@ -190,7 +192,7 @@ take() { # seconds out.mp4 out.json
   done
   curl -sf -o "$2" "http://127.0.0.1:$PORT/v1/videos/$ID/content"
   printf %s "$J" > "$3"
-  printf %s "$J" | js 'const s=j.stats;console.log(`  ${j.seconds} s in ${s.total_s} s (load ${s.load_s} s): ${s.chunks} chunks, ${s.chunk_s_median} s a chunk (median, max ${s.chunk_s_max}), ${s.seconds_per_video_second} s per second of video, peak ${s.peak_gb} GB`);for(const d of s.drift.filter((_,i)=>i%Math.max(1,Math.round(s.drift.length/12))===0))console.log(`    t ${d.t} s  luma ${d.luma}  contrast ${d.contrast}  sharpness ${d.sharpness}`)'
+  printf %s "$J" | js 'const st=j.stats;console.log(`  ${j.seconds} s in ${st.total_s} s (load ${st.load_s} s): ${st.chunks} chunks, ${st.chunk_s_median} s a chunk (median, max ${st.chunk_s_max}), ${st.seconds_per_video_second} s per second of video, peak ${st.peak_gb} GB`);for(const d of st.drift.filter((_,i)=>i%Math.max(1,Math.round(st.drift.length/12))===0))console.log(`    t ${d.t} s  luma ${d.luma}  contrast ${d.contrast}  sharpness ${d.sharpness}`)'
 }
 
 if [ -n "$TEST" ]; then

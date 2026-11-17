@@ -127,17 +127,53 @@ class Port(unittest.TestCase):
         vae.scale = [torch.randn(16) * 0.1, 1 + torch.rand(16)]
         return vae
 
+    def upstream_conv(self):
+        """Upstream's CausalConv3d.forward (one conv3d) for as long as the with-block runs."""
+        import contextlib
+        v = self.vae2_1
+
+        @contextlib.contextmanager
+        def ctx():
+            v.CausalConv3d.forward = v.upstream_causal_conv3d_forward
+            try:
+                yield
+            finally:
+                v.CausalConv3d.forward = self.lb.causal_conv3d_taps
+        return ctx()
+
+    def test_conv3d_as_taps_is_upstreams_conv3d(self):
+        """Every CausalConv3d shape the Wan VAE has: 3×3×3 and 1×1×1, the (3, 1, 1) time convs (stride 1 and the
+        encoder's stride 2), with and without a cache of one or two frames, on the CPU and MPS."""
+        C = self.vae2_1.CausalConv3d
+        cases = [dict(k=3, s=1, p=1, t=4, cache=None), dict(k=3, s=1, p=1, t=1, cache=2), dict(k=3, s=1, p=1, t=4, cache=1),
+                 dict(k=1, s=1, p=0, t=4, cache=2), dict(k=(3, 1, 1), s=1, p=(1, 0, 0), t=4, cache=2),
+                 dict(k=(3, 1, 1), s=(2, 1, 1), p=(0, 0, 0), t=5, cache=None), dict(k=(3, 1, 1), s=(2, 1, 1), p=(0, 0, 0), t=4, cache=1)]
+        for dev in ["cpu"] + (["mps"] if self.mps else []):
+            for i, cs in enumerate(cases):
+                torch.manual_seed(i)
+                conv = C(6, 5, cs["k"], stride=cs["s"], padding=cs["p"]).to(dev)
+                x = torch.randn(1, 6, cs["t"], 9, 11, device=dev)
+                cache = None if cs["cache"] is None else torch.randn(1, 6, cs["cache"], 9, 11, device=dev)
+                with torch.no_grad():
+                    want = self.vae2_1.upstream_causal_conv3d_forward(conv, x, cache)
+                    got = self.lb.causal_conv3d_taps(conv, x, cache)
+                self.assertEqual(tuple(got.shape), tuple(want.shape), f"{dev} {cs}")
+                self.assertLess((got - want).abs().max().item(), 1e-5, f"{dev} {cs}")
+
     def test_vae_in_chunks_is_upstreams_vae(self):
         vae = self.tiny_vae()
         with torch.no_grad():
             img = torch.rand(3, 32, 48) * 2 - 1
             video = torch.cat([img[:, None], torch.zeros(3, 4 * 5, 32, 48)], dim=1)
-            want = vae.model.encode(video[None], vae.scale)[0]
+            with self.upstream_conv():
+                want = vae.model.encode(video[None], vae.scale)[0]
             enc = self.lb.StreamEncoder(vae, self.vae2_1)
             got = torch.cat([enc.image(img)] + [enc.zeros(32, 48) for _ in range(5)], dim=1)
             self.assertLess((got - want).abs().max().item(), 1e-5)
             z = torch.randn(16, 7, 4, 6)
-            want = ((vae.model.decode(z[None], vae.scale)[0].clamp(-1, 1).permute(1, 2, 3, 0) + 1) * 127.5).round().to(torch.uint8).numpy()
+            with self.upstream_conv():
+                dz = vae.model.decode(z[None], vae.scale)
+            want = ((dz[0].clamp(-1, 1).permute(1, 2, 3, 0) + 1) * 127.5).round().to(torch.uint8).numpy()
             dec = self.lb.StreamDecoder(vae, self.vae2_1)
             got = np.concatenate([dec(z[:, :3]), dec(z[:, 3:])])
             self.assertEqual(got.shape, (1 + 6 * 4, 32, 48, 3))
@@ -227,6 +263,32 @@ class Port(unittest.TestCase):
         self.assertEqual(sum(len(o) for o in out), (seg["latent"] - 1) * 4 + 1)
         self.assertEqual(out[0].shape[1:], (32, 48, 3))
         self.assertEqual(steps[-1], (len(out) * 5, len(out) * 5))
+
+    def test_take_memory_does_not_grow_on_mps(self):
+        """After every chunk MPS's cache is emptied: what the driver holds beyond what is in use after each of 6 chunks (past the KV
+        window) is not held back as cache (here ~15 MB of the driver's own with the cache emptied, ~47 MB without)."""
+        if not self.mps:
+            self.skipTest("no MPS here")
+        from PIL import Image
+        cam = self.lb.LingBotCamera.__new__(self.lb.LingBotCamera)
+        cam.device, cam.dtype, cam.vae2_1, cam.schedule = torch.device("mps"), torch.float32, self.vae2_1, self.lb.fast_schedule()
+        cam.model = self.tiny_dit("mps")
+        vae = self.tiny_vae()
+        vae.model.to("mps")
+        vae.device = torch.device("mps")
+        vae.scale = [s.to("mps") for s in vae.scale]
+        cam.vae = vae
+        frames = [(0, np.zeros(3), np.array([0, 0, 0, 1.0]), 35.0), (6, np.array([0, 0, -2.0]), np.array([0, 0.2588, 0, 0.9659]), 35.0)]
+        p = self.poses.plan({"sensor": [36, 24], "aspect": "16:9", "principal": [0.5, 0.5], "frames": frames}, 5.5, 96, 64)
+        seg = p["segments"][0]
+        img = Image.fromarray((np.random.default_rng(6).random((64, 96, 3)) * 255).astype("uint8"))
+        held = []
+        with torch.no_grad():
+            for _ in cam.segment(torch.randn(9, 32, device="mps"), img, seg["deltas"], p["K"], 7):
+                torch.mps.synchronize()
+                held.append((torch.mps.driver_allocated_memory() - torch.mps.current_allocated_memory()) / 1024 ** 2)
+        self.assertGreaterEqual(len(held), 6)
+        self.assertLessEqual(max(held), 30, f"MB the MPS cache kept after each chunk: {[round(h, 1) for h in held]}")
 
 
 if __name__ == "__main__":

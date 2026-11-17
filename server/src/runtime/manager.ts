@@ -64,17 +64,25 @@ export const isLocalService = (m: Model) => m.backend === "external" && SERVICE_
 const serviceInflight = new Map<string, number>();
 
 /**
- * Whether a local service has its model in memory now; a service that cannot say counts as loaded (it is resident).
- * A service with several models (the measure server: depth and reconstruct) is asked about this model's own entry.
+ * Whether a local service has its model in memory now (a service that cannot say counts as loaded: it is resident),
+ * and, when it says so, how much more memory it needs free to take a job now (`need_gb`: the camera server's take
+ * grows well past what it holds idle). A service with several models (the measure server: depth and reconstruct) is
+ * asked about this model's own entry.
  */
-async function serviceLoaded(m: Model): Promise<boolean> {
+async function serviceState(m: Model): Promise<{ loaded: boolean; needGb?: number }> {
   try {
     const r = await fetch(`${(m.base_url ?? "").replace(/\/$/, "")}/models`, { signal: AbortSignal.timeout(1500) });
-    const d = (await r.json()) as { data?: { id?: string; loaded?: boolean }[] };
+    const d = (await r.json()) as { data?: { id?: string; loaded?: boolean; need_gb?: number }[] };
     const own = (d.data ?? []).filter((x) => x.id === (m.upstream_model || m.id));
-    const flags = (own.length ? own : d.data ?? []).map((x) => x.loaded).filter((x) => typeof x === "boolean");
-    return flags.length ? flags.some(Boolean) : true;
-  } catch { return false; }
+    const entries = own.length ? own : d.data ?? [];
+    const flags = entries.map((x) => x.loaded).filter((x) => typeof x === "boolean");
+    const needs = entries.map((x) => x.need_gb).filter((x): x is number => typeof x === "number" && Number.isFinite(x));
+    return { loaded: flags.length ? flags.some(Boolean) : true, ...(needs.length ? { needGb: Math.max(...needs) } : {}) };
+  } catch { return { loaded: false }; }
+}
+
+async function serviceLoaded(m: Model): Promise<boolean> {
+  return (await serviceState(m)).loaded;
 }
 
 async function freePort(): Promise<number> {
@@ -143,15 +151,18 @@ async function waitHealthy(inst: Instance, m: Model, timeoutMs: number) {
 }
 
 /**
- * Room for a local service that needs a lot of memory when it loads (the backdrop server: FLUX, ~30 GB): its model's
- * `size_bytes` says how much. When the service has nothing loaded and macOS lacks that much (beside the headroom),
- * idle models mux runs go first, least recently used first; pinned or busy ones stay. If that is not enough the
- * request is refused now, in words, rather than failing minutes later in the service. mux's budget is not counted:
- * the service is outside it, only the Mac's free memory is.
+ * Room for a local service that needs a lot of memory (the backdrop server: FLUX, ~30 GB when it loads; the camera
+ * server: ~28 GB while it makes a take): what the service says it still needs (`need_gb` in its /models), else its
+ * model's `size_bytes` when it has nothing loaded (a model without `size_bytes` is not checked). When macOS lacks that much (beside the headroom), idle models mux
+ * runs go first, least recently used first; pinned or busy ones stay. If that is not enough the request is refused
+ * now, in words, rather than failing minutes later in the service (or swapping). mux's budget is not counted: the
+ * service is outside it, only the Mac's free memory is.
  */
 async function roomForService(m: Model): Promise<void> {
-  const need = m.size_bytes / GB;
-  if (!(need > 0) || (await serviceLoaded(m))) return;
+  if (!(m.size_bytes > 0)) return;   // a service registered without a size is not asked
+  const st = await serviceState(m);
+  const need = st.needGb ?? (st.loaded ? 0 : m.size_bytes / GB);
+  if (!(need > 0)) return;
   for (;;) {
     const sys = await systemStats();
     const headroom = settings().memoryHeadroomGb;
