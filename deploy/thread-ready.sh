@@ -115,7 +115,7 @@ done
 gw GET /tenants/thread > "$MUX_HOME/logs/thread-ready-tenant.json" || fail "no tenant thread on the gateway: run ./deploy/thread.sh"
 ALLOWED=$(node -e '
   const t = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
-  const need = ["auto","fast","agent","smart","vision","multilingual","image","image-edit","speak","transcribe","transcribe-da","video","video-depth","web.search","web.read","web.render"];
+  const need = ["auto","fast","agent","smart","vision","multilingual","image","image-edit","speak","transcribe","transcribe-da","video","video-depth","depth","reconstruct","web.search","web.read","web.render"];
   if (t.allowed.length && need.some((r) => !t.allowed.includes(r))) console.log(JSON.stringify({ allowed: [...new Set([...t.allowed, ...need])] }));' "$MUX_HOME/logs/thread-ready-tenant.json")
 if [ -n "$ALLOWED" ]; then gw PUT /tenants/thread "$ALLOWED" >/dev/null && echo "  tenant thread: every route Thread uses allowed"; else echo "  tenant thread: no route list, everything allowed"; fi
 

@@ -36,6 +36,7 @@ SaaS (OpenAI / Anthropic SDK, curl)          Nexus (Railway → Funnel → Caddy
    ├─ /v1/audio/transcriptions  /v1/audio/speech   OpenAI audio: Whisper in, Piper (Danish) out
    ├─ /v1/images/generations  /v1/images/edits     OpenAI images: FLUX.2 klein 4B (Q4) through mflux, local
    ├─ /v1/videos/generations  /v1/videos/{id}      async video jobs: Wan2.1-VACE-1.3B (depth control), local
+   ├─ /v1/depth  /v1/reconstruct  /v1/reconstruct/{id}   measure: Depth Pro; MapAnything (cameras, metric points), local
    ├─ /v1/systemone          Jev's System One (Laya / Clef / d3 / d1, or hosted Jev)
    ├─ /v1/search  /v1/read   shared services: web search (SearXNG), the page reader (pages, links, files)
    ├─ keys · tenants · RPM/TPM · monthly budgets · max parallel
@@ -333,6 +334,21 @@ poll `GET /v1/videos/{id}`, fetch `GET /v1/videos/{id}/content` (mp4, kept an ho
 up to 200 MB. Each mux in the way gives its own id, per tenant; polls are not metered; prompts and media are never
 logged; presence applies as for images. This Mac, the Railway gateway and Thread's tenant at once:
 `./deploy/setup-video.sh` (follow `~/.mux/logs/setup-video.log`).
+
+Measure (2026-11-17, `docs/measure.md`; Thread's Reference Build, stage 2): `./deploy/measure.sh` installs PyTorch,
+Apple's **Depth Pro** and Meta's **MapAnything** in `~/.mux/measure-venv`, fetches the weights at pinned revisions
+(Depth Pro's 2024 checkpoint from Apple's CDN, SHA-256 checked, under the repo's permissive licence — *not* the
+research-only Hugging Face checkpoint; `facebook/map-anything-apache`, Apache-2.0) and runs
+`server/measure/measure_server.py` as launchd agent com.mux.measure (:8314, MPS, fp32, one piece of work at a time, each
+model loaded on first use and let go after 10 idle minutes). It becomes `depth-pro` on the route `depth` and
+`mapanything-apache` on the route `reconstruct` (kinds of the same names), and ends by measuring a rendered sample house
+of known size, with the times. `POST /v1/depth {image_b64, focal_px?}` → `{width, height, focal_px, focal_source,
+depth_png16_b64 (mm)}`; `POST /v1/reconstruct {images_b64: 2–12, known?: {intrinsics?, one_measurement?: {photo, p1, p2,
+metres}}, max_points?}` → 202 `{id}`; poll `GET /v1/reconstruct/{id}` (the result — cameras `K, R, t` in photo 0's frame,
+a binary PLY, `scale_source`, confidence — comes with `succeeded`, kept an hour), `POST /v1/reconstruct/{id}/cancel`.
+Bodies up to 50 / 150 MB; per-tenant job ids; photos never logged; presence as for images, each model judged apart.
+`--vggt` swaps in VGGT-1B-Commercial (gated, not metric). This Mac, the Railway gateway and Thread's tenant at once:
+`./deploy/setup-measure.sh` (follow `~/.mux/logs/setup-measure.log`).
 
 Danish speech: `./deploy/speech-da.sh` registers Record's Danish engines on this Mac (Record's `speech-da` service,
 :8798) as `roest-v3` (CoRal's Røst v3, a Danish Whisper large-v3), `hviske-v5` and `whisper-turbo`, and the route

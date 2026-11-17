@@ -74,7 +74,8 @@ export function resolve(tenant: Tenant, requested: string | undefined, kind: Kin
   // Anything else — "gpt-4o", "claude-sonnet-4-5", "" — is the tenant's default for that kind, so a SaaS written for a
   // hosted API works by changing only its base URL and key.
   const fallback = kind === "embedding" ? "embed" : kind === "rerank" ? "rerank" : kind === "systemone" ? "systemone"
-    : kind === "transcription" ? "transcribe" : kind === "speech" ? "speak" : kind === "image" ? "image" : kind === "video" ? "video" : tenant.default_route || "auto";
+    : kind === "transcription" ? "transcribe" : kind === "speech" ? "speak" : kind === "image" ? "image" : kind === "video" ? "video"
+    : kind === "depth" ? "depth" : kind === "reconstruct" ? "reconstruct" : tenant.default_route || "auto";
   const def = getRoute(fallback);
   if (!def) throw new RouteError(`no route ${fallback} for ${asked || "(no model)"}; create it on the Routes page`);
   return { route: def, model: null, via: asked ? `${asked} is not a mux route or model → ${tenant.id}'s default ${def.name}` : `default ${def.name}` };

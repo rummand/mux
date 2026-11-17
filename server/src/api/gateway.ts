@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { listModels, listRoutes } from "../models.js";
 import { runChat, type ChatBody } from "../router/chat.js";
-import { formField, runAudio, runImage, type AudioKind, type ImageOp } from "../router/audio.js";
+import { formField, runAudio, runDepth, runImage, type AudioKind, type ImageOp } from "../router/audio.js";
 import { runEmbeddings } from "../router/embed.js";
 import { MuxError, toMuxError } from "../router/errors.js";
 import { check, enter, leave, rateLeft } from "../router/limits.js";
@@ -11,6 +11,7 @@ import { runSystemOne } from "../router/systemone.js";
 import { runSearch } from "../router/web.js";
 import { runRead } from "../router/reader.js";
 import { cancelVideo, createVideo, videoContent, videoStatus } from "../router/video.js";
+import { cancelReconstruction, createReconstruction, measureName, reconstructionStatus } from "../router/measure.js";
 import { authenticate } from "../tenants.js";
 import { anthropicErrorType, fromOpenAI, StreamTranslator, toOpenAI, type MessagesBody } from "./anthropic.js";
 
@@ -245,6 +246,62 @@ async function videoJob(req: FastifyRequest, reply: FastifyReply, what: "status"
   }
 }
 
+/** POST /v1/depth: one photo, metric depth back (Measure, route `depth`). The photo is never logged. */
+async function depth(req: FastifyRequest, reply: FastifyReply) {
+  const ctx = begin(req, reply, "measure.depth", "openai", false);
+  if (!ctx) return reply;
+  const ac = abortOnClose(reply);
+  try {
+    // A name that is not a depth route or model goes to the route `depth` (router/measure.ts measureName)
+    const requested = ((req.query ?? {}) as { model?: string }).model ?? (req.body as { model?: string } | undefined)?.model;
+    const res = await runDepth(ctx, measureName(requested, "depth"), Buffer.from(JSON.stringify(req.body ?? {})), ac.signal);
+    const out = Buffer.from(await res.arrayBuffer());
+    finish(ctx, 200);
+    reply.headers(muxHeaders(ctx));
+    return reply.type(res.headers.get("content-type") ?? "application/json").send(out);
+  } catch (e) {
+    const err = toMuxError(e);
+    finish(ctx, err.status, { type: err.type, message: err.message });
+    reply.headers(muxHeaders(ctx));
+    return sendError(reply, "openai", err);
+  } finally {
+    leave(ctx.tenant);
+  }
+}
+
+/** POST /v1/reconstruct: a job starts where the route's model runs; 202 with mux's id for it. */
+async function reconstructCreate(req: FastifyRequest, reply: FastifyReply) {
+  const ctx = begin(req, reply, "measure.reconstruct", "openai", false);
+  if (!ctx) return reply;
+  const ac = abortOnClose(reply);
+  try {
+    const out = await createReconstruction(ctx, (req.body ?? {}) as Record<string, unknown>, ac.signal);
+    finish(ctx, 202);
+    reply.headers(muxHeaders(ctx));
+    return reply.code(202).send(out);
+  } catch (e) {
+    const err = toMuxError(e);
+    finish(ctx, err.status, { type: err.type, message: err.message });
+    reply.headers(muxHeaders(ctx));
+    return sendError(reply, "openai", err);
+  } finally {
+    leave(ctx.tenant);
+  }
+}
+
+/** Status (with the result once done) and cancel of a reconstruction: the caller's key, only its own jobs; not metered. */
+async function reconstructJob(req: FastifyRequest, reply: FastifyReply, what: "status" | "cancel") {
+  const who = authenticate(bearer(req));
+  if (!who) return sendError(reply, "openai", new MuxError(401, "invalid_api_key", "a mux API key is required (Authorization: Bearer mux-sk-… or x-api-key)"));
+  const id = (req.params as { id: string }).id;
+  try {
+    const signal = abortOnClose(reply).signal;
+    return await (what === "status" ? reconstructionStatus(who.tenant, id, signal) : cancelReconstruction(who.tenant, id, signal));
+  } catch (e) {
+    return sendError(reply, "openai", toMuxError(e));
+  }
+}
+
 export function registerGateway(app: FastifyInstance) {
   // Audio uploads are passed on untouched
   app.addContentTypeParser("multipart/form-data", { parseAs: "buffer" }, (_req, body, done) => done(null, body));
@@ -257,6 +314,11 @@ export function registerGateway(app: FastifyInstance) {
   app.get("/v1/videos/:id", (req, reply) => videoJob(req, reply, "status"));
   app.get("/v1/videos/:id/content", (req, reply) => videoJob(req, reply, "content"));
   app.post("/v1/videos/:id/cancel", (req, reply) => videoJob(req, reply, "cancel"));
+  // Measure (Thread's Reference Build): depth from one photo; cameras and points from 2–12, as an async job
+  app.post("/v1/depth", { bodyLimit: 50 * 1024 * 1024 }, depth);
+  app.post("/v1/reconstruct", { bodyLimit: 150 * 1024 * 1024 }, reconstructCreate);
+  app.get("/v1/reconstruct/:id", (req, reply) => reconstructJob(req, reply, "status"));
+  app.post("/v1/reconstruct/:id/cancel", (req, reply) => reconstructJob(req, reply, "cancel"));
   app.post("/v1/chat/completions", (req, reply) => chat(req, reply, "openai"));
   app.post("/v1/messages", (req, reply) => chat(req, reply, "anthropic"));
   app.post("/v1/embeddings", (req, reply) => simple(req, reply, "openai.embeddings", (ctx, s) => runEmbeddings(ctx, req.body as never, s)));

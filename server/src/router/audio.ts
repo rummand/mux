@@ -62,6 +62,11 @@ export function runImage(ctx: Ctx, op: ImageOp, requested: string | undefined, b
   return passThrough(ctx, "image", `images/${op}`, op === "generations", requested, body, contentType, signal);
 }
 
+/** Measure's depth (POST /v1/depth, JSON): one photo in, metric depth out, on the route `depth` (server/measure). */
+export function runDepth(ctx: Ctx, requested: string | undefined, body: Buffer, signal: AbortSignal): Promise<Response> {
+  return passThrough(ctx, "depth", "depth", true, requested, body, "application/json", signal);
+}
+
 /**
  * A request an upstream answers as it came — audio or images — on the route's models in turn: the body goes on with
  * the upstream's own model name in it (a JSON field, or the multipart form's `model`), and the answer comes back as is.

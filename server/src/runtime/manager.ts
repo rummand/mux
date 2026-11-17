@@ -52,20 +52,26 @@ const isLocal = (m: Model) => m.backend === "llamacpp" || m.backend === "mlx" ||
 
 /**
  * A heavy service on this machine that mux does not start itself but that the presence rules cover like a model it
- * runs: an image server (server/images/image_server.py, launchd com.mux.images) or the video server
- * (server/video/video_server.py, com.mux.video) on a loopback address. It loads its
- * model on the first request and lets it go when idle, and says which in GET /v1/models (`loaded`).
+ * runs: an image server (server/images/image_server.py, launchd com.mux.images), the video server
+ * (server/video/video_server.py, com.mux.video) or the measure server (server/measure/measure_server.py, com.mux.measure:
+ * depth and reconstruct) on a loopback address. It loads its model on the first request and lets it go when idle, and
+ * says which in GET /v1/models (`loaded`).
  */
-export const isLocalService = (m: Model) => m.backend === "external" && (m.kind === "image" || m.kind === "video") && config.role !== "gateway"
+const SERVICE_KINDS = new Set(["image", "video", "depth", "reconstruct"]);
+export const isLocalService = (m: Model) => m.backend === "external" && SERVICE_KINDS.has(m.kind) && config.role !== "gateway"
   && /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:|\/|$)/i.test(m.base_url ?? "");
 const serviceInflight = new Map<string, number>();
 
-/** Whether a local service has its model in memory now; a service that cannot say counts as loaded (it is resident). */
+/**
+ * Whether a local service has its model in memory now; a service that cannot say counts as loaded (it is resident).
+ * A service with several models (the measure server: depth and reconstruct) is asked about this model's own entry.
+ */
 async function serviceLoaded(m: Model): Promise<boolean> {
   try {
     const r = await fetch(`${(m.base_url ?? "").replace(/\/$/, "")}/models`, { signal: AbortSignal.timeout(1500) });
-    const d = (await r.json()) as { data?: { loaded?: boolean }[] };
-    const flags = (d.data ?? []).map((x) => x.loaded).filter((x) => typeof x === "boolean");
+    const d = (await r.json()) as { data?: { id?: string; loaded?: boolean }[] };
+    const own = (d.data ?? []).filter((x) => x.id === (m.upstream_model || m.id));
+    const flags = (own.length ? own : d.data ?? []).map((x) => x.loaded).filter((x) => typeof x === "boolean");
     return flags.length ? flags.some(Boolean) : true;
   } catch { return false; }
 }

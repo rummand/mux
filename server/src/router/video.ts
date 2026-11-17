@@ -27,7 +27,7 @@ const ROW_KEEP_MS = 26 * 3600_000;
 interface JobRow { id: string; tenant_id: string; model_id: string; upstream_id: string; created_at: number }
 
 /** The upstream's error message, from its JSON when it has one. */
-async function upstreamError(res: Response): Promise<{ message: string; type?: string }> {
+export async function upstreamError(res: Response): Promise<{ message: string; type?: string }> {
   const text = (await res.text()).slice(0, 1000);
   try {
     const e = (JSON.parse(text) as { error?: { message?: string; type?: string } }).error;
@@ -99,7 +99,7 @@ function jobOf(tenant: Tenant, id: string): { row: JobRow; base: string; headers
   return { row, base: up.baseUrl, headers: up.headers };
 }
 
-async function ask(url: string, init: RequestInit & { headers: Record<string, string> }, signal: AbortSignal | undefined, timeoutMs: number): Promise<Response> {
+export async function ask(url: string, init: RequestInit & { headers: Record<string, string> }, signal: AbortSignal | undefined, timeoutMs: number): Promise<Response> {
   try {
     return await fetch(url, { ...init, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs) });
   } catch (e) {
@@ -107,7 +107,7 @@ async function ask(url: string, init: RequestInit & { headers: Record<string, st
   }
 }
 
-async function failed(res: Response): Promise<never> {
+export async function failed(res: Response): Promise<never> {
   const err = await upstreamError(res);
   throw new MuxError(res.status, err.type ?? (res.status === 404 ? "not_found" : "upstream_error"), err.message);
 }
