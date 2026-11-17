@@ -17,7 +17,8 @@ import { config } from "./config.js";
  * Commands run with execFile (no shell): arguments are passed as they are, never interpreted.
  */
 const CANDIDATES = [process.env.MUX_PEEKABOO, "/opt/homebrew/bin/peekaboo", "/usr/local/bin/peekaboo", join(config.home, "bin/peekaboo")];
-export const peekabooBin = (): string | null => CANDIDATES.find((p): p is string => !!p && existsSync(p)) ?? null;
+// MUX_NO_COMPUTER: as if Peekaboo were not here (tests: they must never click, type or start an agent on the real Mac)
+export const peekabooBin = (): string | null => (process.env.MUX_NO_COMPUTER ? null : CANDIDATES.find((p): p is string => !!p && existsSync(p)) ?? null);
 export const computerAvailable = () => config.role !== "gateway" && process.platform === "darwin" && !!peekabooBin();
 
 const SHOTS = join(config.home, "computer");
