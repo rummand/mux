@@ -68,3 +68,31 @@ test("images: generations and edits reach the image model on routes image and im
     up.close();
   }
 });
+
+test("audio and images: a model that answers 404 (gone where it was registered) falls through to the next on the route", async () => {
+  const { upsertModel, upsertRoute } = await import("../src/models.js");
+  const { upsertTenant, createKey } = await import("../src/tenants.js");
+  const { registerGateway } = await import("../src/api/gateway.js");
+  const gone = createServer((_req, res) => { res.statusCode = 404; res.setHeader("content-type", "application/json"); res.end('{"error":"no engine \'hviske-v5\' here"}'); });
+  await new Promise<void>((r) => gone.listen(0, "127.0.0.1", r));
+  const up = await fakeImageServer();
+  upsertModel({ id: "stt-gone", backend: "external", kind: "transcription", base_url: `http://127.0.0.1:${(gone.address() as AddressInfo).port}/v1`, upstream_model: "hviske-v5" });
+  upsertModel({ id: "stt-ok", backend: "external", kind: "transcription", base_url: up.url, upstream_model: "whisper-turbo" });
+  upsertRoute({ name: "transcribe", kind: "transcription", strategy: "priority", candidates: ["stt-gone", "stt-ok"] });
+  upsertTenant({ id: "fall-test", name: "fall test" });
+  const { key } = createKey("fall-test", "test");
+  const app = Fastify({ bodyLimit: 64 * 1024 * 1024 });
+  registerGateway(app);
+  try {
+    const b = "x9";
+    const body = Buffer.from(`--${b}\r\nContent-Disposition: form-data; name="model"\r\n\r\ntranscribe\r\n--${b}\r\nContent-Disposition: form-data; name="file"; filename="a.mp3"\r\n\r\nID3\r\n--${b}--\r\n`);
+    const r = await app.inject({ method: "POST", url: "/v1/audio/transcriptions", headers: { authorization: `Bearer ${key}`, "content-type": `multipart/form-data; boundary=${b}` }, payload: body });
+    assert.equal(r.statusCode, 200, r.body);
+    assert.equal(r.headers["x-mux-model"], "stt-ok");
+    assert.equal(r.headers["x-mux-fallbacks"], "1");
+  } finally {
+    await app.close();
+    up.close();
+    gone.close();
+  }
+});

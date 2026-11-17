@@ -10,6 +10,7 @@ the file merges with git's `union` driver (`.gitattributes`), so keep each Log e
 
 ## Log
 
+- 2026-11-17 · 4d367c6 · Thread on mux, all of it: tested with Thread's key, `speak` failed (Piper on the Mac down), `transcribe`/`transcribe-da` failed (routed to `hviske-v5`, gone from the speech service), video not on the gateway. `deploy/thread-ready.sh` restarts Piper, disables hviske-v5, sets speak (Piper → Kokoro) and transcribe (Whisper turbo → Røst; Danish Røst first) on the Mac and the gateway, runs setup-video.sh, points Thread's Railway variables at the thread tenant's key and prints a table of every capability. Audio and images now fall through on a 404 (a model gone where it was registered) instead of failing. Owner must run: `git pull --ff-only origin main && ./deploy/thread-ready.sh`.
 - 2026-11-17 · handover rule: every commit writes here; pre-commit hook and union merge added.
 - 2026-11-17 · 1ce0567 · Video on the Mac: Wan2.1-VACE-1.3B (Apache-2.0) on PyTorch MPS behind async jobs (`server/video/video_server.py`, :8313, launchd `com.mux.video`), routes `video` and `video-depth`; per-tenant job ids; refused audio/image/video bodies no longer kept in the request log. Not yet run on the Mac: `./deploy/setup-video.sh`. Notes in `docs/video.md`.
 - 2026-11-17 · be05e6d · FLUX 3 bf16 option removed (revert of 804c061); the Q8 worker is unchanged.
@@ -178,6 +179,8 @@ Studio (was `[]`, which took every chat model in list order); journaled as a rou
   deleted on the owner's word (it was dying of out-of-memory).
 
 ## Waiting on the owner
+
+- **Thread on mux:** `./deploy/thread-ready.sh` on the Mac (includes setup-video.sh). Until then Thread's speech, transcription and video fail.
 
 - **Run on the Mac (2026-11-17):** `git pull --ff-only && ./deploy/fix-images.sh` (FLUX answers more than once again),
   then `./deploy/setup-video.sh` (video for Thread's Make it real; follow `~/.mux/logs/setup-video.log`, and put the

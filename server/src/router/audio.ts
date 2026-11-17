@@ -93,8 +93,9 @@ async function passThrough(ctx: Ctx, kind: Kind, path: string, isJson: boolean, 
       noteHeaders(m.id, res.status, res.headers);
       if (res.ok) { recordSuccess(m.id, null, null); return res; }
       const text = (await res.text()).slice(0, 500);
-      // The request itself is wrong: another model would say the same
-      if (res.status < 500 && res.status !== 429) throw new MuxError(res.status, "upstream_error", text);
+      // The request itself is wrong: another model would say the same. Not a 404: that is this model (or the engine
+      // behind it) missing where it was registered, and the next one on the route may well be there.
+      if (res.status < 500 && res.status !== 429 && res.status !== 404) throw new MuxError(res.status, "upstream_error", text);
       recordFailure(m.id);
       last = `${m.id}: HTTP ${res.status} ${text.slice(0, 200)}`;
     } catch (e) {
