@@ -21,10 +21,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 PORT = int(os.environ.get("MUX_FLUX3_PORT", "8314"))
-MODEL_ID = os.environ.get("MUX_FLUX3_MODEL_ID", "flux3-image-klein-q8")
+MODEL_ID = "flux3-image-klein-q8"
 WEIGHTS = Path(os.environ.get("MUX_FLUX3_WEIGHTS", "~/.mux/models/flux3-image-klein-q8")).expanduser()
-# The Q8 weights carry their quantisation; the original bf16 weights load as they are (no quantize).
-QUANTIZE = int(os.environ["MUX_FLUX3_QUANTIZE"]) if os.environ.get("MUX_FLUX3_QUANTIZE", "").strip() else None
 IDLE_MIN = float(os.environ.get("MUX_FLUX3_IDLE_MIN", "5"))
 MAX_BODY = 48 * 1024 * 1024
 MAX_SIDE = 2048
@@ -56,7 +54,7 @@ def unload():
 
 
 def model(kind):
-    """Load precisely one FLUX 3 pipeline at a time (Q8 or bf16, from WEIGHTS)."""
+    """Load precisely one FLUX 3 pipeline at a time; reuse its quantized weights."""
     global PIPELINE, PIPELINE_KIND
     if PIPELINE is not None and PIPELINE_KIND == kind:
         return PIPELINE
@@ -67,7 +65,7 @@ def model(kind):
     from mflux.models.flux3.variants import Flux3Klein, Flux3KleinEdit
     cls = Flux3KleinEdit if kind == "edit" else Flux3Klein
     started = time.monotonic()
-    PIPELINE = cls(model_config=ModelConfig.flux3_image_klein(), model_path=str(WEIGHTS), quantize=QUANTIZE)
+    PIPELINE = cls(model_config=ModelConfig.flux3_image_klein(), model_path=str(WEIGHTS))
     PIPELINE_KIND = kind
     print(f"FLUX 3 {kind} loaded in {time.monotonic()-started:.1f}s", file=sys.stderr, flush=True)
     return PIPELINE

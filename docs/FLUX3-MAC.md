@@ -85,15 +85,3 @@ https://github.com/mflux-community/mflux/blob/main/src/mflux/models/flux3/README
 Important: committing this code does NOT execute a script on the Mac. Verify the
 installer's final success message and actual generated images before reporting
 the model as installed and functional.
-
-## bf16 (full precision)
-
-    hf auth login                     # once; accept the FLUX 3 Image Klein licence on Hugging Face first
-    bash deploy/flux3.sh --bf16       # ~20 GB download, needs ~30 GB free
-    bash deploy/flux3.sh --bf16 --check
-    tail -n 100 ~/.mux/logs/flux3-bf16.log
-
-This runs the original bf16 weights (black-forest-labs/flux-3-image-klein, loaded with no quantisation) as a second
-worker: launchd agent com.mux.flux3-bf16 on 127.0.0.1:8315, Mux model flux3-image-klein-bf16, routes image-flux3-bf16 and
-image-flux3-bf16-edit. The Q8 worker, its routes and the default image routes are unchanged. Same licence as Q8: FLUX
-Kommunity License v1.0, personal and non-commercial, so it is not for Thread's paying customers.

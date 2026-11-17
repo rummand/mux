@@ -14,7 +14,7 @@ git pull --ff-only
 grep -q 'on_mlx' server/images/image_server.py || { echo "ERROR: image_server.py has no MLX-thread fix after the pull" >&2; exit 1; }
 
 echo "→ Restarting the image workers"
-for label in com.mux.images com.mux.flux3 com.mux.flux3-bf16; do
+for label in com.mux.images com.mux.flux3; do
   if launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; then
     launchctl kickstart -k "gui/$(id -u)/$label" && echo "  restarted $label"
   fi
