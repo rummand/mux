@@ -12,7 +12,7 @@ A pre-quantised local copy instead of the Hugging Face cache: MUX_IMAGE_MODEL_PA
 ~/.mux/models/flux2-klein-4b-mflux-q4, 4.6 GB, from deploy/images.sh --q4), MUX_IMAGE_BASE_MODEL the architecture it
 is (flux2-klein-4b), MUX_IMAGE_MODEL the name it answers as (flux2-klein-4b-q4). Its quantisation is in the weights.
 """
-import base64, concurrent.futures, email.parser, email.policy, gc, io, json, os, random, sys, tempfile, threading, time
+import base64, concurrent.futures, email.parser, email.policy, gc, io, json, os, random, subprocess, sys, tempfile, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(os.environ.get("MUX_IMAGES_PORT", "8312"))
@@ -25,6 +25,24 @@ IDLE_MIN = float(os.environ.get("MUX_IMAGE_IDLE_MIN", "10"))
 MAX_SIDE = 2048
 MAX_N = 4
 MAX_BODY = 48 * 1024 * 1024
+# Free memory a request needs before it starts (MUX_IMAGES_MIN_FREE_GB; 0 turns the check off). mux's memory budget does
+# not count this server: on 2026-11-17, with the video and measure models loading beside the chat models, an edit ran at
+# 32 s a step instead of 3 and the next request had the process killed by macOS (the caller saw "fetch failed"). Now a
+# request that would not fit is refused at once with a 503 that says why, and the process lives.
+MIN_FREE_GB = float(os.environ.get("MUX_IMAGES_MIN_FREE_GB", "6"))
+
+
+def available_gb():
+    """What macOS could hand out now (free, inactive, purgeable, speculative pages); None where it cannot be read."""
+    if sys.platform != "darwin":
+        return None
+    try:
+        out = subprocess.run(["vm_stat"], capture_output=True, text=True, timeout=5).stdout
+        page = int(out.split("page size of ")[1].split()[0])
+        pages = {k.strip(): int(v.strip().rstrip(".")) for k, v in (ln.split(":", 1) for ln in out.splitlines()[1:] if ":" in ln)}
+        return sum(pages.get(k, 0) for k in ("Pages free", "Pages inactive", "Pages purgeable", "Pages speculative")) * page / 1024**3
+    except Exception:  # noqa: BLE001
+        return None
 
 _model = None
 _model_kind = None  # "edit" or "txt2img": mflux 0.24's edit pipeline needs an input image, so text to image has its own
@@ -162,6 +180,9 @@ class Handler(BaseHTTPRequestHandler):
         if length > MAX_BODY:
             return self._error(413, f"at most {MAX_BODY // 1024 // 1024} MB")
         raw = self.rfile.read(length)
+        have = available_gb() if MIN_FREE_GB else None
+        if have is not None and have < MIN_FREE_GB:
+            return self._error(503, f"only {have:.1f} GB free on this Mac right now; an image needs {MIN_FREE_GB:g} GB: try again in a minute")
         tmp = []
         try:
             if path.endswith("/images/generations"):
