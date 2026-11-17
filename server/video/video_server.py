@@ -19,8 +19,10 @@ Runs in ~/.mux/video-venv (deploy/video.sh). Weights at a pinned revision in MUX
 Contract (Thread is built against it):
   POST /v1/videos/generations {model: "video-depth" | "video", prompt, negative_prompt?, seed?, seconds (1–10),
        fps (8–24), size ("832x480" draft | "1280x720" finish), control?: {type: "depth", video_b64, format: "mp4" |
-       "png16-zip"}, image_b64?}                       → 202 {id, status: "queued", model}
-  GET  /v1/videos/{id}                                 → {id, status, progress, model, error?, seconds, size}
+       "png16-zip"}, image_b64?, label?: {text?, position?, every_frame?, metadata?}}
+                                                       → 202 {id, status: "queued", model}
+  GET  /v1/videos/{id}                                 → {id, status, progress, model, error?, seconds, size,
+                                                          label_burned? (true once the label is in every frame)}
   GET  /v1/videos/{id}/content                         → video/mp4
   POST /v1/videos/{id}/cancel                          → {id, status}
 """
@@ -68,12 +70,16 @@ class Job:
         self.finished = None
         self.cancel = threading.Event()
         self.req_seconds, self.req_size, self.req_fps = req["seconds"], req["size"], req["fps"]
+        self.label_asked = req.get("label") is not None
+        self.label_burned = False
 
     def view(self):
         out = {"id": self.id, "object": "video", "status": self.status, "progress": round(self.progress, 3), "model": MODEL,
                "seconds": self.req_seconds, "size": self.req_size, "fps": self.req_fps, "created_at": int(self.created)}
         if self.error:
             out["error"] = self.error
+        if self.label_asked:
+            out["label_burned"] = self.status == "succeeded" and self.label_burned
         return out
 
     def end(self, status, error=None):
@@ -207,14 +213,15 @@ def ffmpeg():
         return exe
 
 
-def encode_mp4(frames, fps):
-    """uint8 (n, h, w, 3) → H.264 mp4 bytes. The temporary file is deleted before this returns."""
+def encode_mp4(frames, fps, extra=()):
+    """uint8 (n, h, w, 3) → H.264 mp4 bytes (extra: more ffmpeg output options, e.g. metadata). The temporary file is
+    deleted before this returns."""
     n, h, w, _ = frames.shape
     fd, path = tempfile.mkstemp(suffix=".mp4")
     os.close(fd)
     try:
         cmd = [ffmpeg(), "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{w}x{h}", "-r", str(fps), "-i", "-",
-               "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "17", "-preset", "medium", "-movflags", "+faststart", path]
+               "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "17", "-preset", "medium", "-movflags", "+faststart", *extra, path]
         p = subprocess.run(cmd, input=frames.tobytes(), capture_output=True, timeout=600)
         if p.returncode:
             raise RuntimeError("ffmpeg could not write the video: " + p.stderr.decode("utf-8", "replace")[-300:])
@@ -362,7 +369,8 @@ def validate(b):
     w, h = SIZES[size]
     frames = max(1, round(seconds * fps))
     req = {"prompt": prompt.strip(), "negative_prompt": (neg or "").strip() or NEGATIVE, "seconds": seconds, "fps": fps,
-           "size": size, "seed": seed, "frames": frames, "steps": STEPS[size], "control": None, "image": None}
+           "size": size, "seed": seed, "frames": frames, "steps": STEPS[size], "control": None, "image": None,
+           "label": read_label(b.get("label"))}
     if control is not None:
         if not isinstance(control, dict):
             raise BadInput("control must be an object")
@@ -376,6 +384,124 @@ def validate(b):
     if b.get("image_b64") is not None:
         req["image"] = first_frame(b64(b.get("image_b64"), "image_b64"), w, h)
     return req
+
+
+# ── The AI label, burned into every frame ───────────────────────────────────────────────────────────────────────
+# Thread's Studio Cast (a made-real take with a real person, with recorded consent) asks for it and keeps the file only
+# when the job says label_burned: true. The look is Thread's own mark (src/identity/aiLabel.ts, labelBox/drawLabel): a
+# dark rounded pill with a white rim, a yellow four-point spark and the words, in a corner, sized to the frame. It is
+# drawn once per job and composited into every frame after decoding, before encoding; the words also go into the
+# mp4's metadata (comment, description). The camera server (camera_server.py) uses the same code.
+
+LABEL_POSITIONS = ("bottom-right", "bottom-left", "top-right", "top-left")
+LABEL_FONTS = ("/System/Library/Fonts/Supplemental/Arial Bold.ttf", "/System/Library/Fonts/Helvetica.ttc",
+               "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
+
+
+def read_label(v):
+    """The request's `label` → {text, position, metadata}, or None when there is none. BadInput names what is wrong."""
+    if v is None or v is False:
+        return None
+    if v is True:
+        v = {}
+    if not isinstance(v, dict):
+        raise BadInput("label must be an object {text?, position?, every_frame?, metadata?}")
+    text = v.get("text", "AI-generated")
+    if not isinstance(text, str) or not text.strip() or len(text) > 120:
+        raise BadInput("label.text must be text of 1 to 120 characters")
+    position = v.get("position", "bottom-right")
+    if position not in LABEL_POSITIONS:
+        raise BadInput("label.position must be one of " + ", ".join(LABEL_POSITIONS))
+    if v.get("every_frame", True) is not True:
+        raise BadInput("label.every_frame can only be true: the label goes on every frame")
+    meta = v.get("metadata")
+    if meta is not None and (not isinstance(meta, str) or len(meta) > 500):
+        raise BadInput("label.metadata must be text of at most 500 characters")
+    clean = lambda t: "".join(ch for ch in t if ch.isprintable()).strip()
+    return {"text": clean(text), "position": position, "metadata": clean(meta) if meta else None}
+
+
+def _label_font(size):
+    from PIL import ImageFont
+    for f in LABEL_FONTS:
+        if os.path.exists(f):
+            try:
+                return ImageFont.truetype(f, size)
+            except OSError:
+                continue
+    return ImageFont.load_default(size=size)
+
+
+def label_box(w, h, position, text_width):
+    """Thread's labelBox: the mark's box on a w×h frame (a corner, inset, sized to the frame)."""
+    font = max(11, round(min(w, h) * 0.034))
+    pad = round(font * 0.55)
+    inset = round(min(w, h) * 0.025) + 2
+    bw = min(w - inset * 2, round(text_width(font) + pad * 2 + font * 1.1))
+    bh = round(font + pad * 1.4)
+    x = inset if position.endswith("left") else w - inset - bw
+    y = inset if position.startswith("top") else h - inset - bh
+    return {"x": x, "y": y, "w": bw, "h": bh, "font": font, "pad": pad}
+
+
+def label_mark(w, h, label):
+    """The mark for a w×h frame: (x, y, rgb float32 (bh, bw, 3), alpha float32 (bh, bw, 1)). Drawn at 4× and reduced,
+    so its edges and words are smooth."""
+    import numpy as np
+    from PIL import Image, ImageDraw
+    text = label["text"]
+    b = label_box(w, h, label["position"], lambda f: _label_font(f).getlength(text))
+    k = 4
+    f = _label_font(b["font"] * k)
+    im = Image.new("RGBA", (b["w"] * k, b["h"] * k), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    r = b["h"] * k / 2
+    rim = max(1, round(b["font"] * 0.08 * k))
+    d.rounded_rectangle((0, 0, b["w"] * k - 1, b["h"] * k - 1), radius=r, fill=(17, 17, 20, 209), outline=(255, 255, 255, 217), width=rim)
+    cx, cy, sp = (b["pad"] + b["font"] * 0.4) * k, b["h"] * k / 2, b["font"] * 0.42 * k
+    star = []  # the four-point spark: quadratic curves through the centre, as Thread draws it
+    for (x0, y0), (x1, y1) in (((0, -sp), (sp, 0)), ((sp, 0), (0, sp)), ((0, sp), (-sp, 0)), ((-sp, 0), (0, -sp))):
+        for i in range(12):
+            t = i / 12
+            star.append((cx + (1 - t) ** 2 * x0 + t ** 2 * x1, cy + (1 - t) ** 2 * y0 + t ** 2 * y1))
+    d.polygon(star, fill=(250, 204, 21, 255))
+    tx = (b["pad"] + b["font"] * 1.1) * k
+    room = b["w"] * k - tx - b["pad"] * k
+    while text and f.getlength(text) > room:  # as fillText's maxWidth: never past the pill
+        text = text[:-1]
+    d.text((tx, cy + 0.5 * k), text, font=f, fill=(255, 255, 255, 255), anchor="lm")
+    im = im.resize((b["w"], b["h"]), Image.LANCZOS)
+    a = np.asarray(im, dtype=np.float32) / 255.0
+    return b["x"], b["y"], a[..., :3] * 255.0, a[..., 3:4]
+
+
+class Labeller:
+    """Composites the mark into frames; counts what it did, so label_burned is said only when every frame has it."""
+
+    def __init__(self, w, h, label):
+        self.label = label
+        self.x, self.y, self.rgb, self.alpha = label_mark(w, h, label)
+        self.n = 0
+
+    def __call__(self, frame):
+        """One uint8 (h, w, 3) frame → a copy with the mark. Always a copy: the camera server writes a frame twice at
+        24 fps (and holds the last), and the mark must not be blended into the same pixels twice."""
+        import numpy as np
+        frame = np.array(frame, dtype=np.uint8, copy=True)
+        bh, bw = self.alpha.shape[:2]
+        sub = frame[self.y:self.y + bh, self.x:self.x + bw].astype(np.float32)
+        frame[self.y:self.y + bh, self.x:self.x + bw] = np.clip(sub * (1 - self.alpha) + self.rgb * self.alpha + 0.5, 0, 255).astype(np.uint8)
+        self.n += 1
+        return frame
+
+    def all(self, frames):
+        for i in range(len(frames)):
+            frames[i] = self(frames[i])
+        return frames
+
+    def ffmpeg_args(self):
+        words = self.label["metadata"] or self.label["text"]
+        return ["-metadata", f"comment={words}", "-metadata", f"description={words}"]
 
 
 # ── Jobs ─────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -395,7 +521,16 @@ def _run_on_device(job):
     if job.cancel.is_set():
         raise Cancelled()
     job.progress = 0.97
-    data = encode_mp4(frames, req["fps"])
+    extra = ()
+    if req.get("label"):
+        w, h = SIZES[req["size"]]
+        mark = Labeller(w, h, req["label"])
+        frames = mark.all(frames)
+        if mark.n != len(frames):
+            raise RuntimeError("the AI label did not reach every frame")
+        extra = mark.ffmpeg_args()
+    data = encode_mp4(frames, req["fps"], extra)
+    job.label_burned = bool(req.get("label"))
     _last_used = time.time()
     return data
 

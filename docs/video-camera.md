@@ -94,12 +94,13 @@ POST /v1/videos/generations
             sensorMm: [w, h], aspect: "16:9" | "2.39:1" | "1.85:1" | "4:3" | "1:1" | "4:5" | "9:16",
             principal?: [0.5, 0.5],                                   // (mux) as Sets' intrinsics.principal; default centre
             frames: [{ t, pos: [x, y, z], quat: [x, y, z, w], focalMm }] },   // up to 4000; sorted by t
-  anchors?: [{ t, image_b64 }] }   // up to 60, 1 s apart, from 1 s to seconds − 1
+  anchors?: [{ t, image_b64 }],    // up to 60, 1 s apart, from 1 s to seconds − 1
+  label?: { text?, position?, every_frame?: true, metadata? } }   // the AI label, burned into every frame (docs/video.md)
 → 202 { id, object: "video", status: "queued", model: "lingbot-world-v2-1.3b" }
 
 GET  /v1/videos/{id}          → { id, status: queued | running | succeeded | failed | cancelled, progress 0..1, model,
                                   seconds, size, fps, error?: {type, message}, notes?: [string],
-                                  stats?: { … see below } }
+                                  stats?: { … see below }, label_burned?: true once done (only when asked) }
 GET  /v1/videos/{id}/content  → video/mp4 (H.264, yuv420p), exactly round(seconds × fps) frames, kept 1 hour
 POST /v1/videos/{id}/cancel   → { id, status }       (a running take stops at its next step, within seconds)
 ```
@@ -116,6 +117,9 @@ POST /v1/videos/{id}/cancel   → { id, status }       (a running take stops at 
   camera, or the camera model refuse a plain `video` request. A request goes to the camera route when `model` names it
   (also through a tenant alias or as `mux/video-camera`) or names a camera model; `model: "video"` with a `camera`
   still goes to Wan, which ignores it.
+- **`label`** (mux): as on `video` (`docs/video.md`): Thread's AI mark composited into each frame as it goes to ffmpeg
+  (a frame repeated at 24 fps or held at the end is marked once, not twice: tested), the words in the mp4's metadata,
+  `label_burned: true` in the status once the take succeeded with the mark in every frame it wrote.
 - **`notes`** (mux): what was done that the caller may not expect — a picture cropped, fps not 16, a lens change, a
   camera standing still, anchors, `negative_prompt` unused.
 - **`stats`** (mux) while running `{chunks_done, chunk_s}`; when done `{load_s, encode_s, total_s, chunks,

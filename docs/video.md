@@ -70,14 +70,27 @@ POST /v1/videos/generations   {model: "video-depth" | "video", prompt, negative_
                                fps (8–24), size ("832x480" draft | "1280x720" finish),
                                control?: {type: "depth", video_b64: base64 mp4 or zip of 16-bit PNGs,
                                           format: "mp4" | "png16-zip"},
-                               image_b64? (the first frame)}
+                               image_b64? (the first frame),
+                               label?: {text?: "AI-generated", position?: "bottom-right" | "bottom-left" | "top-right" |
+                                        "top-left", every_frame?: true, metadata?: text}}
                               → 202 {id, status: "queued", model}
 GET  /v1/videos/{id}          → {id, status: queued | running | succeeded | failed | cancelled, progress 0..1, model,
-                                 error?: {type, message}, seconds, size}
+                                 error?: {type, message}, seconds, size,
+                                 label_burned?: true once succeeded with the label in every frame (only when asked)}
 GET  /v1/videos/{id}/content  → video/mp4 (H.264, yuv420p), kept 1 hour after it is done, then 404
 POST /v1/videos/{id}/cancel   → {id, status}
 ```
 
+- **`label`: the AI label, burned in by mux** (2026-11-17, for Thread's Studio Cast: a made-real take that shows a real
+  person, with recorded consent, keeps the file only when the job says `label_burned: true`). After the frames are
+  decoded and before they are encoded, mux composites Thread's own mark (`src/identity/aiLabel.ts`, `labelBox` and
+  `drawLabel`: a dark rounded pill with a white rim, a yellow four-point spark and the words in white; font 3.4 % of
+  the frame's short side, inset 2.5 % + 2 px, in the asked corner) into **every frame**, and writes `metadata` (or the
+  words) into the mp4's `comment` and `description`. `label_burned` is in the status only when a label was asked:
+  `false` until the job succeeds, then `true`, and only after the server has counted the mark into as many frames as it
+  encoded. `every_frame: false`, an unknown corner, empty words (over 120 characters) or metadata over 500 characters
+  are 400. Without `label`, nothing changes. A server that predates this ignores `label` and never says
+  `label_burned`, so Thread refuses its file: the safe way round. The camera server (`video-camera`) does the same.
 - Body limit 200 MB (413 above). Bad input is 400 naming the field. `video-depth` without `control` is 400.
 - One job at a time on the Mac; at most 6 waiting or running (429 `queue_full` beyond). A cancel stops a running job
   at its next step.

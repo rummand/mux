@@ -169,6 +169,8 @@ class Job:
         self.seconds, self.size, self.fps = req["seconds"], req["size"], req["fps"]
         self.notes = list(req["notes"])
         self.stats = None
+        self.label_asked = req.get("label") is not None
+        self.label_burned = False
 
     def view(self):
         out = {"id": self.id, "object": "video", "status": self.status, "progress": round(self.progress, 3), "model": MODEL,
@@ -179,6 +181,8 @@ class Job:
             out["notes"] = self.notes
         if self.stats:
             out["stats"] = self.stats
+        if self.label_asked:
+            out["label_burned"] = self.status == "succeeded" and self.label_burned
         return out
 
     def end(self, status, error=None):
@@ -323,7 +327,7 @@ def validate(b):
     for sg in p["segments"]:
         sg["image"] = image if sg["start"] == 0 else pics[sg["start"]]
     return {"prompt": prompt.strip(), "seconds": seconds, "fps": fps, "size": size, "seed": seed, "plan": p,
-            "out": poses.resample(p["frames"], fps, seconds), "notes": notes}
+            "out": poses.resample(p["frames"], fps, seconds), "notes": notes, "label": vs.read_label(b.get("label"))}
 
 
 # ── the mp4, written as the frames come ───────────────────────────────────────────────────────────────────────────
@@ -331,11 +335,11 @@ def validate(b):
 class Mp4Writer:
     """rgb24 frames → H.264 yuv420p mp4 through one ffmpeg; its temporary file is gone when finish() or abort() returns."""
 
-    def __init__(self, w, h, fps):
+    def __init__(self, w, h, fps, extra=()):
         fd, self.path = tempfile.mkstemp(suffix=".mp4")
         os.close(fd)
         cmd = [vs.ffmpeg(), "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{w}x{h}", "-r", str(fps), "-i", "-",
-               "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "17", "-preset", "medium", "-movflags", "+faststart", self.path]
+               "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "17", "-preset", "medium", "-movflags", "+faststart", *extra, self.path]
         self.p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         self.n = 0
 
@@ -403,7 +407,10 @@ def _run_on_device(job):
     ctx = m.encode(req["prompt"])
     encode_s = time.time() - t0
     out = req["out"]
-    writer = Mp4Writer(w, h, req["fps"])
+    # The AI label (vs.Labeller, as the Wan server's): composited into each frame as it goes to ffmpeg
+    mark = vs.Labeller(w, h, req["label"]) if req.get("label") else None
+    writer = Mp4Writer(w, h, req["fps"], mark.ffmpeg_args() if mark else ())
+    put = (lambda fr: writer.write(mark(fr))) if mark else writer.write
     chunk_s, drift, peak = [], [], 0.0
     k = 0
     last = None
@@ -422,7 +429,7 @@ def _run_on_device(job):
                         break
                     last = fr
                     while k < len(out) and out[k] == g:
-                        writer.write(fr)
+                        put(fr)
                         k += 1
                     g += 1
                 drift.append({"t": round(min(g, end) / poses.MODEL_FPS, 2), **look(frames[-1])})
@@ -434,10 +441,13 @@ def _run_on_device(job):
         if job.cancel.is_set():
             raise Cancelled()
         while k < len(out) and last is not None:   # never short: the last frame holds
-            writer.write(last)
+            put(last)
             k += 1
         job.progress = 0.97
+        if mark and mark.n != writer.n:
+            raise RuntimeError("the AI label did not reach every frame")
         data = writer.finish()
+        job.label_burned = mark is not None
     except BaseException:
         writer.abort()
         raise
