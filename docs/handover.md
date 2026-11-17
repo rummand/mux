@@ -10,6 +10,7 @@ the file merges with git's `union` driver (`.gitattributes`), so keep each Log e
 
 ## Log
 
+- 2026-11-17 · (this commit) · **Backdrops for Thread's Sets** (World Models proposal §08, steps 1–2): route and kind `backdrop`, `server/backdrop/backdrop_server.py` on :8315 (launchd `com.mux.backdrop`, MPS bf16, one job at a time, one device thread, nothing of a prompt logged): `POST /v1/backdrops {prompt, image_b64?, seed?, size?}` → 202; `GET /v1/backdrops/{id}` (meta horizon, groundDepth, depthScale), `/panorama`, `/depth`, `/dome`, `/cancel`; kept 1 h. Panorama: HunyuanWorld 1.0's panorama step (code 57fa9f3, PanoDiT LoRAs, SHA-256 pinned) on FLUX.1-dev (3de623f; `--image` adds FLUX.1-Fill-dev); depth: MoGe-2 (MIT, 0744441 + weights cb0e8bb); dome: `server/backdrop/dome.py` (numpy, hand-written GLB: closed, inward, horizon at 100, floor at −1.6; Khronos validator clean). Memory: text encoders and transformer never held together (peak ~27–30 GB), and mux lets idle models go for it (`roomForService` in runtime/manager.ts, from the model's `size_bytes`) or answers 503 `all_models_failed` in words. Licences in `docs/backdrop.md`: Tencent's (EU excluded: accepted risk; no training on outputs; >1M MAU; Thread must say Tencent is not affiliated) and FLUX.1 [dev] NC (Thread's prompt checks and AI label must stay). Stub-model, dome and gateway tests pass; **nothing has run on Apple Silicon**. Owner must: free disk (23 GB free; ~97 GB wanted), accept FLUX.1-dev's licence on Hugging Face, then `./deploy/setup-backdrop.sh` (it asks for `hf auth login` once) and put the printed times and memory in `docs/backdrop.md`.
 - 2026-11-17 · (this commit) · Ran `./deploy/setup-measure.sh` (after the two pip fixes above): **measure works on the Mac and through Railway** — `depth-pro` and `mapanything-apache` on :8314 (`com.mux.measure`), routes `depth`/`reconstruct`, Thread allowed. Depth Pro 2.7 s warm, MapAnything 6.6 s warm (3 views); both loaded in 49 s. On the rendered sample house: depth 35 % off with the model's own focal guess, **~8 % off with the true `focal_px`**; reconstruct 17 % off scaled by the door. Results in `docs/measure.md` ("Measured on the Mac"). Thread should send photos with EXIF or a focal length. Nothing to run on the Mac.
 - 2026-11-17 · (this commit) · `deploy/measure.sh`: Depth Pro declares `numpy<2`, MapAnything (via rerun-sdk) needs `numpy>=2` — pip could not install both. Now everything installs with numpy 2 and Depth Pro alone with `--no-deps` (its real dependencies timm, matplotlib, pillow-heif listed; its pin predates numpy 2). Rerun: `./deploy/setup-measure.sh`.
 - 2026-11-17 · (this commit) · `deploy/measure.sh`: one requirement per line (pip refused `torch==2.14.1 torchvision pillow-heif numpy<2` on one line, so the first `./deploy/setup-measure.sh` stopped before installing anything). Rerun: `./deploy/setup-measure.sh`.
@@ -191,6 +192,13 @@ Studio (was `[]`, which took every chat model in list order); journaled as a rou
   deleted on the owner's word (it was dying of out-of-memory).
 
 ## Waiting on the owner
+
+- **Backdrops for Thread (2026-11-17):** make room on the Mac's disk (23 GB free; the deploy wants ~97 GB free, ~121 GB with
+  `--image`), accept the FLUX.1 [dev] Non-Commercial License on huggingface.co/black-forest-labs/FLUX.1-dev with your
+  account, then `git pull --ff-only && ./deploy/setup-backdrop.sh` (it stops once for `~/.mux/backdrop-venv/bin/hf auth
+  login`; follow `~/.mux/logs/setup-backdrop.log`). It ends with a test backdrop and prints its time and the lowest free
+  memory: put them in `docs/backdrop.md`. Decide whether Thread shows "Tencent is not affiliated" where backdrops appear
+  (Tencent's licence §3e asks for it when offered to others).
 
 - **The Mac for Ask mux:** `git pull --ff-only origin main && ./deploy/computer.sh`, then at the Mac switch on Peekaboo in System Settings → Privacy & Security → Screen & System Audio Recording and Accessibility (it waits 15 min for that), and Launch at Login in Peekaboo's Settings.
 

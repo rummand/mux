@@ -37,6 +37,7 @@ SaaS (OpenAI / Anthropic SDK, curl)          Nexus (Railway → Funnel → Caddy
    ├─ /v1/images/generations  /v1/images/edits     OpenAI images: FLUX.2 klein 4B (Q4) through mflux, local
    ├─ /v1/videos/generations  /v1/videos/{id}      async video jobs: Wan2.1-VACE-1.3B (depth control), local
    ├─ /v1/depth  /v1/reconstruct  /v1/reconstruct/{id}   measure: Depth Pro; MapAnything (cameras, metric points), local
+   ├─ /v1/backdrops  /v1/backdrops/{id}(/panorama|/depth|/dome)   backdrops: HunyuanWorld 1.0 panorama + MoGe-2 dome, local
    ├─ /v1/systemone          Jev's System One (Laya / Clef / d3 / d1, or hosted Jev)
    ├─ /v1/search  /v1/read   shared services: web search (SearXNG), the page reader (pages, links, files)
    ├─ keys · tenants · RPM/TPM · monthly budgets · max parallel
@@ -349,6 +350,20 @@ a binary PLY, `scale_source`, confidence — comes with `succeeded`, kept an hou
 Bodies up to 50 / 150 MB; per-tenant job ids; photos never logged; presence as for images, each model judged apart.
 `--vggt` swaps in VGGT-1B-Commercial (gated, not metric). This Mac, the Railway gateway and Thread's tenant at once:
 `./deploy/setup-measure.sh` (follow `~/.mux/logs/setup-measure.log`).
+
+Backdrops (2026-11-17, `docs/backdrop.md`; Thread's Sets, a world beyond the set's edge): `./deploy/backdrop.sh`
+installs PyTorch and diffusers 0.34 in `~/.mux/backdrop-venv`, clones **HunyuanWorld 1.0** (Tencent) at a pinned commit
+for its panorama step, fetches **FLUX.1-dev** (gated: accept its non-commercial licence and `hf auth login` first), the
+PanoDiT LoRA and **MoGe-2** (MIT) at pinned revisions (SHA-256 checked), and runs `server/backdrop/backdrop_server.py`
+as launchd agent com.mux.backdrop (:8315, MPS, bf16, one job at a time). It becomes `hunyuanworld-pano-moge2` on the
+route `backdrop` (kind `backdrop`) and ends with a test backdrop through this Mac's mux, timed. `POST /v1/backdrops
+{prompt, image_b64?, seed?, size?: "1920x960"}` → 202 `{id, status, model: "backdrop"}`; poll `GET /v1/backdrops/{id}`
+(`meta: {horizon, groundDepth?, depthScale}` once succeeded); `/panorama` (PNG 1920 × 960), `/depth` (16-bit PNG, mm or
+relative), `/dome` (GLB: y up, −z the centre column, horizon at 100 units, floor at y = −1.6); `/cancel`. Kept an hour.
+It needs ~30 GB free to load: mux lets its idle models go first (`roomForService`), else 503 `all_models_failed` says
+why. Licences: Tencent's community licence (its territory excludes the EU, where this Mac is: an accepted risk under
+the owner's rule; outputs never train other models) and FLUX.1 [dev] Non-Commercial. `--image` adds FLUX.1-Fill-dev for
+backdrops from a photo. This Mac, the Railway gateway and Thread's tenant at once: `./deploy/setup-backdrop.sh`.
 
 The Mac for Ask mux: `./deploy/computer.sh` installs Peekaboo (CLI and the signed Peekaboo.app, whose Bridge holds
 the Screen Recording and Accessibility grants) so Ask mux can look at the screen and apps (`computer_look`,

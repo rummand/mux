@@ -47,6 +47,7 @@ function seed() {
       ["video-depth", "Video from a depth pass (Thread's Sets: a grey 3D take becomes footage): /v1/videos/generations with control", "video", "priority"],
       ["depth", "Metric depth and focal length from one photo: POST /v1/depth (Thread's Reference Build, Measure)", "depth", "priority"],
       ["reconstruct", "Cameras and a metric point cloud from 2–12 photos, as an async job: POST /v1/reconstruct, then poll /v1/reconstruct/{id}", "reconstruct", "priority"],
+      ["backdrop", "A 360° panorama, its depth and a dome mesh from text or an image (Thread's Sets backdrops), as an async job: POST /v1/backdrops, then poll /v1/backdrops/{id}", "backdrop", "priority"],
     ];
     // Any route missing (a first boot, or one added in a newer mux) is created empty; existing ones are left as they are.
     for (const [name, description, kind, strategy] of routes) if (!getRoute(name)) upsertRoute({ name, description, kind, strategy, candidates: [] });

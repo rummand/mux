@@ -12,6 +12,7 @@ import { runSearch } from "../router/web.js";
 import { runRead } from "../router/reader.js";
 import { cancelVideo, createVideo, videoContent, videoStatus } from "../router/video.js";
 import { cancelReconstruction, createReconstruction, measureName, reconstructionStatus } from "../router/measure.js";
+import { BACKDROP_FILES, backdropFile, backdropStatus, cancelBackdrop, createBackdrop, type BackdropFile } from "../router/backdrop.js";
 import { authenticate } from "../tenants.js";
 import { anthropicErrorType, fromOpenAI, StreamTranslator, toOpenAI, type MessagesBody } from "./anthropic.js";
 
@@ -302,6 +303,43 @@ async function reconstructJob(req: FastifyRequest, reply: FastifyReply, what: "s
   }
 }
 
+/** POST /v1/backdrops: a job starts where the route's model runs; 202 with mux's id for it. The prompt and image are never logged. */
+async function backdropCreate(req: FastifyRequest, reply: FastifyReply) {
+  const ctx = begin(req, reply, "backdrop.generate", "openai", false);
+  if (!ctx) return reply;
+  const ac = abortOnClose(reply);
+  try {
+    const out = await createBackdrop(ctx, (req.body ?? {}) as Record<string, unknown>, ac.signal);
+    finish(ctx, 202);
+    reply.headers(muxHeaders(ctx));
+    return reply.code(202).send(out);
+  } catch (e) {
+    const err = toMuxError(e);
+    finish(ctx, err.status, { type: err.type, message: err.message });
+    reply.headers(muxHeaders(ctx));
+    return sendError(reply, "openai", err);
+  } finally {
+    leave(ctx.tenant);
+  }
+}
+
+/** Status, files and cancel of a backdrop: the caller's key, only its own jobs; not metered. */
+async function backdropJob(req: FastifyRequest, reply: FastifyReply, what: "status" | "cancel" | BackdropFile) {
+  const who = authenticate(bearer(req));
+  if (!who) return sendError(reply, "openai", new MuxError(401, "invalid_api_key", "a mux API key is required (Authorization: Bearer mux-sk-… or x-api-key)"));
+  const id = (req.params as { id: string }).id;
+  try {
+    const signal = abortOnClose(reply).signal;
+    if (what in BACKDROP_FILES) {
+      const f = await backdropFile(who.tenant, id, what as BackdropFile, signal);
+      return reply.type(f.type).send(f.body);
+    }
+    return await (what === "status" ? backdropStatus(who.tenant, id, signal) : cancelBackdrop(who.tenant, id, signal));
+  } catch (e) {
+    return sendError(reply, "openai", toMuxError(e));
+  }
+}
+
 export function registerGateway(app: FastifyInstance) {
   // Audio uploads are passed on untouched
   app.addContentTypeParser("multipart/form-data", { parseAs: "buffer" }, (_req, body, done) => done(null, body));
@@ -319,6 +357,11 @@ export function registerGateway(app: FastifyInstance) {
   app.post("/v1/reconstruct", { bodyLimit: 150 * 1024 * 1024 }, reconstructCreate);
   app.get("/v1/reconstruct/:id", (req, reply) => reconstructJob(req, reply, "status"));
   app.post("/v1/reconstruct/:id/cancel", (req, reply) => reconstructJob(req, reply, "cancel"));
+  // Backdrops (Thread's Sets): a panorama, its depth and a dome, as an async job; the files fetched one by one
+  app.post("/v1/backdrops", { bodyLimit: 50 * 1024 * 1024 }, backdropCreate);
+  app.get("/v1/backdrops/:id", (req, reply) => backdropJob(req, reply, "status"));
+  for (const f of Object.keys(BACKDROP_FILES) as BackdropFile[]) app.get(`/v1/backdrops/:id/${f}`, (req, reply) => backdropJob(req, reply, f));
+  app.post("/v1/backdrops/:id/cancel", (req, reply) => backdropJob(req, reply, "cancel"));
   app.post("/v1/chat/completions", (req, reply) => chat(req, reply, "openai"));
   app.post("/v1/messages", (req, reply) => chat(req, reply, "anthropic"));
   app.post("/v1/embeddings", (req, reply) => simple(req, reply, "openai.embeddings", (ctx, s) => runEmbeddings(ctx, req.body as never, s)));

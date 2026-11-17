@@ -53,11 +53,12 @@ const isLocal = (m: Model) => m.backend === "llamacpp" || m.backend === "mlx" ||
 /**
  * A heavy service on this machine that mux does not start itself but that the presence rules cover like a model it
  * runs: an image server (server/images/image_server.py, launchd com.mux.images), the video server
- * (server/video/video_server.py, com.mux.video) or the measure server (server/measure/measure_server.py, com.mux.measure:
- * depth and reconstruct) on a loopback address. It loads its model on the first request and lets it go when idle, and
- * says which in GET /v1/models (`loaded`).
+ * (server/video/video_server.py, com.mux.video), the measure server (server/measure/measure_server.py, com.mux.measure:
+ * depth and reconstruct) or the backdrop server (server/backdrop/backdrop_server.py, com.mux.backdrop) on a loopback
+ * address. It loads its model on the first request and lets it go when idle, and says which in GET /v1/models
+ * (`loaded`).
  */
-const SERVICE_KINDS = new Set(["image", "video", "depth", "reconstruct"]);
+const SERVICE_KINDS = new Set(["image", "video", "depth", "reconstruct", "backdrop"]);
 export const isLocalService = (m: Model) => m.backend === "external" && SERVICE_KINDS.has(m.kind) && config.role !== "gateway"
   && /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:|\/|$)/i.test(m.base_url ?? "");
 const serviceInflight = new Map<string, number>();
@@ -139,6 +140,32 @@ async function waitHealthy(inst: Instance, m: Model, timeoutMs: number) {
     await new Promise((r) => setTimeout(r, 500));
   }
   throw new Error(`not healthy after ${Math.round(timeoutMs / 1000)} s`);
+}
+
+/**
+ * Room for a local service that needs a lot of memory when it loads (the backdrop server: FLUX, ~30 GB): its model's
+ * `size_bytes` says how much. When the service has nothing loaded and macOS lacks that much (beside the headroom),
+ * idle models mux runs go first, least recently used first; pinned or busy ones stay. If that is not enough the
+ * request is refused now, in words, rather than failing minutes later in the service. mux's budget is not counted:
+ * the service is outside it, only the Mac's free memory is.
+ */
+async function roomForService(m: Model): Promise<void> {
+  const need = m.size_bytes / GB;
+  if (!(need > 0) || (await serviceLoaded(m))) return;
+  for (;;) {
+    const sys = await systemStats();
+    const headroom = settings().memoryHeadroomGb;
+    if (sys.memFreeGb - need >= headroom) return;
+    const victim = [...instances.values()]
+      .filter((i) => i.inflight === 0 && i.state === "ready" && !getModel(i.id)?.pinned)
+      .sort((a, b) => a.lastUsed - b.lastUsed)[0];
+    if (!victim) {
+      throw new ModelUnavailable(`${config.name} is busy: ${sys.memFreeGb.toFixed(0)} GB of memory free, and ${m.id} needs about ${need.toFixed(0)} GB `
+        + `(with ${headroom} GB kept for everything else); every other model is in use or pinned, so try again later`, 503, "memory_busy");
+    }
+    event("info", "runtime", `unloading ${victim.id} to make room for ${m.id} (~${need.toFixed(0)} GB, ${sys.memFreeGb.toFixed(1)} GB free)`);
+    await unload(victim.id);
+  }
 }
 
 /** Make room for `needGb`: unload idle models, least recently used first. Returns whether it fits. */
@@ -242,6 +269,7 @@ export async function acquire(m: Model): Promise<Upstream> {
       const loaded = presence().state === "polite" ? await serviceLoaded(m) : true;
       try { await admit(m.id, () => loaded, () => serviceInflight.get(m.id) ?? 0); }
       catch (e) { if (e instanceof Resting) throw new ModelUnavailable(e.message, 503, "node_resting"); throw e; }
+      await roomForService(m);
       serviceInflight.set(m.id, (serviceInflight.get(m.id) ?? 0) + 1);
     }
     return upstreamFor(m);

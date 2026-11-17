@@ -103,7 +103,7 @@ export async function ask(url: string, init: RequestInit & { headers: Record<str
   try {
     return await fetch(url, { ...init, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs) });
   } catch (e) {
-    throw new MuxError(502, "upstream_unreachable", `the machine making this video did not answer: ${(e as Error).message}`);
+    throw new MuxError(502, "upstream_unreachable", `the machine doing this job did not answer: ${(e as Error).message}`);
   }
 }
 
