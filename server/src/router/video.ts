@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { db, now } from "../db.js";
-import { getModel } from "../models.js";
+import { getModel, getRoute, listModels, type Kind } from "../models.js";
 import { acquire, ModelUnavailable, release, upstreamFor } from "../runtime/manager.js";
 import type { Tenant } from "../tenants.js";
 import { MuxError } from "./errors.js";
@@ -9,10 +9,15 @@ import type { Ctx } from "./metering.js";
 import { decide } from "./select.js";
 
 /**
- * Video as async jobs (routes `video` and `video-depth`): POST /v1/videos/generations starts one and answers 202 with
- * an id; GET /v1/videos/{id} says how it is going, /content gives the mp4, /cancel stops it. The video server
- * (server/video/video_server.py on the Mac, :8313) does the work; on the Railway gateway the job goes to the node
- * that has the model, which keeps its own job of it.
+ * Video as async jobs (routes `video`, `video-depth` and `video-camera`): POST /v1/videos/generations starts one and
+ * answers 202 with an id; GET /v1/videos/{id} says how it is going, /content gives the mp4, /cancel stops it. The
+ * video server (server/video/video_server.py on the Mac, :8313) does the work, and for `video-camera` the camera
+ * server (server/video/camera_server.py, :8315, its models of kind "video-camera"); on the Railway gateway the job
+ * goes to the node that has the model, which keeps its own job of it.
+ *
+ * `video-camera` is a kind of its own so that the two never stand in for each other: a route that lists no models
+ * takes every model of its kind, and a Wan model would otherwise make a take while ignoring its camera, or a camera
+ * model refuse a plain request.
  *
  * Each mux in the way gives the caller an id of its own and remembers, per tenant, which model and which upstream id
  * it stands for: a tenant can only see its own jobs, and the status and content are read from where the job runs
@@ -36,12 +41,27 @@ export async function upstreamError(res: Response): Promise<{ message: string; t
   return { message: text.slice(0, 300) || `HTTP ${res.status}` };
 }
 
+/** Whether the caller named the camera route or a camera model (after its aliases, with or without "mux/"). */
+export function asksForCamera(tenant: Tenant, requested: string | undefined): boolean {
+  if (!requested) return false;
+  const named = (tenant.aliases[requested.trim()] ?? requested.trim()).replace(/^mux\//, "");
+  return getRoute(named)?.kind === "video-camera" || getModel(named)?.kind === "video-camera"
+    || listModels().some((m) => m.kind === "video-camera" && m.upstream_model === named);
+}
+
 /** POST /v1/videos/generations: pick a video model, start the job there, and answer with mux's id for it. */
 export async function createVideo(ctx: Ctx, body: Record<string, unknown>, signal: AbortSignal): Promise<Record<string, unknown>> {
   if (!body || typeof body !== "object" || Array.isArray(body)) throw new MuxError(400, "invalid_request", "the body must be a JSON object");
   const requested = typeof body.model === "string" ? body.model : undefined;
   if (requested === "video-depth" && !body.control) throw new MuxError(400, "invalid_request", "video-depth needs control: {type: \"depth\", video_b64, format}");
-  const d = decide(ctx.tenant, requested, "video", null);
+  const kind: Kind = asksForCamera(ctx.tenant, requested) ? "video-camera" : "video";
+  if (kind === "video-camera") {
+    // Checked here so a request that can never work does not wake the Mac; the camera server checks the rest
+    const cam = body.camera as Record<string, unknown> | undefined;
+    if (!cam || typeof cam !== "object" || !Array.isArray(cam.frames) || !cam.frames.length) throw new MuxError(400, "invalid_request", "video-camera needs camera: {convention: \"sets\", sensorMm, aspect, frames: [{t, pos, quat, focalMm}]}");
+    if (typeof body.image_b64 !== "string" || !body.image_b64) throw new MuxError(400, "invalid_request", "video-camera needs image_b64: the first frame of the take");
+  }
+  const d = decide(ctx.tenant, requested, kind, null);
   ctx.experiment = d.experiment ?? null;
   ctx.route = d.route?.name ?? null;
   ctx.reason = d.reason;
@@ -60,7 +80,8 @@ export async function createVideo(ctx: Ctx, body: Record<string, unknown>, signa
     ctx.modelId = m.id;
     const tu = performance.now();
     try {
-      // The route the caller named goes on as the model's own name; video-depth's need of a control is checked above
+      // The route the caller named goes on as the model's own name; video-depth's control and video-camera's camera
+      // are checked above
       const res = await fetch(`${up.baseUrl}/videos/generations`, {
         method: "POST", headers: { ...up.headers, "content-type": "application/json" },
         body: JSON.stringify({ ...body, model: up.model }), signal,

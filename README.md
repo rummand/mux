@@ -335,6 +335,17 @@ up to 200 MB. Each mux in the way gives its own id, per tenant; polls are not me
 logged; presence applies as for images. This Mac, the Railway gateway and Thread's tenant at once:
 `./deploy/setup-video.sh` (follow `~/.mux/logs/setup-video.log`).
 
+Camera video (2026-11-17, `docs/video-camera.md`; Thread's long takes): `./deploy/video-camera.sh` ports
+**LingBot-World v2 1.3B causal-fast** (Robbyant, **CC BY-NC-SA 4.0**: non-commercial, credit Robbyant, share-alike —
+allowed, we are research) to PyTorch MPS in `~/.mux/video-camera-venv`, with code and weights pinned and SHA-256 checked
+(the Wan2.1 VAE from Wan-AI, umT5 shared with Wan2.1-VACE), and runs `server/video/camera_server.py` as launchd agent
+com.mux.video-camera (:8315). It becomes `lingbot-world-v2-1.3b` on the route `video-camera` (kind `video-camera`, so it
+and Wan never stand in for each other). Same job API as video, with `model: "video-camera"`, `seconds` 1–60,
+`image_b64` (the first frame) and `camera: {convention: "sets", sensorMm, aspect, frames: [{t, pos, quat, focalMm}]}`
+(Sets' metres, y up, looking down −z), `anchors?`; the take is made a second at a time with a KV cache, and the status
+carries `notes` and `stats` (seconds per chunk, peak memory, a drift record). One video job at a time on the Mac across
+both video servers (`~/.mux/run/video-gpu.lock`). `--measure 30` times a 30 s take; `--railway` puts it on the gateway.
+
 Measure (2026-11-17, `docs/measure.md`; Thread's Reference Build, stage 2): `./deploy/measure.sh` installs PyTorch,
 Apple's **Depth Pro** and Meta's **MapAnything** in `~/.mux/measure-venv`, fetches the weights at pinned revisions
 (Depth Pro's 2024 checkpoint from Apple's CDN, SHA-256 checked, under the repo's permissive licence — *not* the

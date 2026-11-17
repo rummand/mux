@@ -10,6 +10,7 @@ the file merges with git's `union` driver (`.gitattributes`), so keep each Log e
 
 ## Log
 
+- 2026-11-17 · (this commit) · **Camera video (`video-camera`) for Thread's long takes:** LingBot-World v2 1.3B causal-fast (Robbyant, CC BY-NC-SA 4.0 — allowed, we are research; credit and share-alike kept) ported to PyTorch MPS (`server/video/lingbot_mps.py`, itself CC BY-NC-SA: flash-attn → SDPA, no float64, no CUDA imports, float32 DiT with bf16 attention, the causal loop as a stream with the VAE chunk by chunk) behind the video job API in its own server `server/video/camera_server.py` (:8315, launchd `com.mux.video-camera`); Sets' poses → OpenCV framewise poses in `camera_poses.py`; new kind and route `video-camera` (`server/src/router/video.ts`), so Wan and the camera model never stand in for each other; both video servers share `~/.mux/run/video-gpu.lock` (one job on the GPU at a time). Proven on this Mac with tiny weights: every MPS replacement equals upstream's code, the DiT's KV-cache loop on MPS matches the CPU (7e-5), the whole take loop runs; found and fixed an MPS bug (`.to("cpu", float64)` of an int64 tensor gives zeros). Not proven: the real 1.3B's pictures, speed (estimate 20–30 s per second of video at 832x480), memory (~20 GB peak), drift. Fallback Matrix-Game 3.0 pinned, not ported. Contract, mapping, licences, proven/not proven: `docs/video-camera.md`. Owner must: merge to main, rebuild and restart mux, then `./deploy/video-camera.sh --measure 30 --railway` (7.3 GB of weights) and write the numbers into `docs/video-camera.md`.
 - 2026-11-17 · (this commit) · Ran `./deploy/setup-measure.sh` (after the two pip fixes above): **measure works on the Mac and through Railway** — `depth-pro` and `mapanything-apache` on :8314 (`com.mux.measure`), routes `depth`/`reconstruct`, Thread allowed. Depth Pro 2.7 s warm, MapAnything 6.6 s warm (3 views); both loaded in 49 s. On the rendered sample house: depth 35 % off with the model's own focal guess, **~8 % off with the true `focal_px`**; reconstruct 17 % off scaled by the door. Results in `docs/measure.md` ("Measured on the Mac"). Thread should send photos with EXIF or a focal length. Nothing to run on the Mac.
 - 2026-11-17 · (this commit) · `deploy/measure.sh`: Depth Pro declares `numpy<2`, MapAnything (via rerun-sdk) needs `numpy>=2` — pip could not install both. Now everything installs with numpy 2 and Depth Pro alone with `--no-deps` (its real dependencies timm, matplotlib, pillow-heif listed; its pin predates numpy 2). Rerun: `./deploy/setup-measure.sh`.
 - 2026-11-17 · (this commit) · `deploy/measure.sh`: one requirement per line (pip refused `torch==2.14.1 torchvision pillow-heif numpy<2` on one line, so the first `./deploy/setup-measure.sh` stopped before installing anything). Rerun: `./deploy/setup-measure.sh`.
@@ -191,6 +192,11 @@ Studio (was `[]`, which took every chat model in list order); journaled as a rou
   deleted on the owner's word (it was dying of out-of-memory).
 
 ## Waiting on the owner
+
+- **Camera video for Thread (2026-11-17, branch `video-camera`):** merge it to `main`, then on the Mac `git pull --ff-only
+  && npm run build && launchctl kickstart -k gui/$(id -u)/com.mux.server`, then `./deploy/video-camera.sh --measure 30
+  --railway` (LingBot-World v2 1.3B, 7.3 GB, CC BY-NC-SA 4.0); put its numbers in `docs/video-camera.md` ("Measured on
+  the Mac"). If its takes do not hold the camera or the set: Matrix-Game 3.0 is the pinned fallback (not ported).
 
 - **The Mac for Ask mux:** `git pull --ff-only origin main && ./deploy/computer.sh`, then at the Mac switch on Peekaboo in System Settings → Privacy & Security → Screen & System Audio Recording and Accessibility (it waits 15 min for that), and Launch at Login in Peekaboo's Settings.
 

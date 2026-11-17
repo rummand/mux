@@ -237,3 +237,75 @@ test("video: a local video server keeps this Mac's presence: polite only when lo
     up.close();
   }
 });
+
+const CAMERA = { convention: "sets", sensorMm: [36, 24], aspect: "16:9", frames: [{ t: 0, pos: [0, 1.6, 0], quat: [0, 0, 0, 1], focalMm: 24 }, { t: 2, pos: [0, 1.6, -1.2], quat: [0, 0.087, 0, 0.996], focalMm: 24 }] };
+const TAKE = { model: "video-camera", prompt: "a lakeside walk at noon", seconds: 2, fps: 16, size: "832x480", seed: 2, image_b64: Buffer.from("png").toString("base64"), camera: CAMERA };
+
+test("video-camera: its own kind — a camera take goes only to a camera model, a plain video never does", async () => {
+  const Fastify = (await import("fastify")).default;
+  const { upsertModel, upsertRoute } = await import("../src/models.js");
+  const { upsertTenant, createKey } = await import("../src/tenants.js");
+  const { registerGateway } = await import("../src/api/gateway.js");
+  const wan = await fakeVideoServer();
+  const cam = await fakeVideoServer();
+  upsertModel({ id: "wan-cam-test", backend: "external", kind: "video", base_url: wan.url, upstream_model: "wan-test" });
+  upsertModel({ id: "lingbot-cam-test", backend: "external", kind: "video-camera", base_url: cam.url, upstream_model: "lingbot-test" });
+  upsertRoute({ name: "video", kind: "video", strategy: "priority", candidates: [] });           // an empty route takes every model of its kind
+  upsertRoute({ name: "video-camera", kind: "video-camera", strategy: "priority", candidates: [] });
+  upsertTenant({ id: "thread-cam", name: "Thread", allowed: ["video", "video-camera"], aliases: { "sets-long-take": "video-camera" } });
+  upsertTenant({ id: "no-cam", name: "Without the camera route", allowed: ["video"] });
+  const thread = { authorization: `Bearer ${createKey("thread-cam", "t").key}` };
+  const noCam = { authorization: `Bearer ${createKey("no-cam", "n").key}` };
+  const app = Fastify({ bodyLimit: 64 * 1024 * 1024 });
+  registerGateway(app);
+  try {
+    const made = await app.inject({ method: "POST", url: "/v1/videos/generations", headers: thread, payload: TAKE });
+    assert.equal(made.statusCode, 202, made.body);
+    assert.equal(made.headers["x-mux-route"], "video-camera");
+    assert.equal(made.headers["x-mux-model"], "lingbot-cam-test");
+    assert.equal(wan.state.created.length, 0, "Wan never sees a camera take");
+    const sent = cam.state.created[0];
+    assert.equal(sent.model, "lingbot-test", "the camera server gets its own model name");
+    assert.deepEqual(sent.camera, CAMERA, "the camera path goes on untouched");
+    assert.equal(sent.image_b64, TAKE.image_b64);
+    const job = JSON.parse(made.body);
+    const poll = await app.inject({ method: "GET", url: `/v1/videos/${job.id}`, headers: thread });
+    assert.equal(JSON.parse(poll.body).status, "succeeded");
+    const content = await app.inject({ method: "GET", url: `/v1/videos/${job.id}/content`, headers: thread });
+    assert.deepEqual(content.rawPayload, MP4);
+    // by the tenant's alias and with "mux/"
+    for (const model of ["sets-long-take", "mux/video-camera"]) {
+      const r = await app.inject({ method: "POST", url: "/v1/videos/generations", headers: thread, payload: { ...TAKE, model } });
+      assert.equal(r.statusCode, 202, `${model}: ${r.body}`);
+    }
+    assert.equal(wan.state.created.length, 0);
+    assert.equal(cam.state.created.length, 3);
+
+    // A plain video (even with a camera in the body) goes to Wan; the camera model is not of its kind
+    const plain = await app.inject({ method: "POST", url: "/v1/videos/generations", headers: thread, payload: { ...TAKE, model: "video" } });
+    assert.equal(plain.statusCode, 202, plain.body);
+    assert.equal(plain.headers["x-mux-model"], "wan-cam-test");
+    assert.equal(cam.state.created.length, 3);
+
+    // What can never work is refused here, before a machine is asked
+    for (const [change, words] of [[{ camera: undefined }, /camera/], [{ camera: { ...CAMERA, frames: [] } }, /camera/], [{ image_b64: undefined }, /image_b64/]] as const) {
+      const r = await app.inject({ method: "POST", url: "/v1/videos/generations", headers: thread, payload: { ...TAKE, ...change } });
+      assert.equal(r.statusCode, 400, r.body);
+      assert.match(JSON.parse(r.body).error.message, words);
+    }
+    assert.equal(cam.state.created.length, 3);
+    // A key without the route
+    assert.equal((await app.inject({ method: "POST", url: "/v1/videos/generations", headers: noCam, payload: TAKE })).statusCode, 403);
+    // No camera model up: 503 (no_capable_model, as for any route whose models are all resting or off; all_models_failed
+    // when one was tried and failed), never Wan in its place
+    upsertModel({ id: "lingbot-cam-test", backend: "external", kind: "video-camera", base_url: cam.url, upstream_model: "lingbot-test", enabled: false });
+    const none = await app.inject({ method: "POST", url: "/v1/videos/generations", headers: thread, payload: TAKE });
+    assert.equal(none.statusCode, 503, none.body);
+    assert.equal(JSON.parse(none.body).error.type, "no_capable_model");
+    assert.equal(wan.state.created.length, 1);
+  } finally {
+    await app.close();
+    wan.close();
+    cam.close();
+  }
+});

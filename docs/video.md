@@ -3,6 +3,9 @@
 The owner, 2026-11-17: *"we need everything hosted on mux"*. Thread's Sets turns a grey 3D take (a colour pass and
 an exact depth video) into real footage; that runs on the Mac Studio through mux, on no cloud provider.
 
+Long takes along a camera path (the route `video-camera`, LingBot-World v2) are a separate server: `docs/video-camera.md`.
+Both servers take one Mac-wide lock per job (`~/.mux/run/video-gpu.lock`), so only one video job runs at a time.
+
 ## The choice: Wan2.1-VACE-1.3B, diffusers on MPS
 
 | | |

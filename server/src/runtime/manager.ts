@@ -53,11 +53,12 @@ const isLocal = (m: Model) => m.backend === "llamacpp" || m.backend === "mlx" ||
 /**
  * A heavy service on this machine that mux does not start itself but that the presence rules cover like a model it
  * runs: an image server (server/images/image_server.py, launchd com.mux.images), the video server
- * (server/video/video_server.py, com.mux.video) or the measure server (server/measure/measure_server.py, com.mux.measure:
+ * (server/video/video_server.py, com.mux.video), the camera video server (server/video/camera_server.py,
+ * com.mux.video-camera) or the measure server (server/measure/measure_server.py, com.mux.measure:
  * depth and reconstruct) on a loopback address. It loads its model on the first request and lets it go when idle, and
  * says which in GET /v1/models (`loaded`).
  */
-const SERVICE_KINDS = new Set(["image", "video", "depth", "reconstruct"]);
+const SERVICE_KINDS = new Set(["image", "video", "video-camera", "depth", "reconstruct"]);
 export const isLocalService = (m: Model) => m.backend === "external" && SERVICE_KINDS.has(m.kind) && config.role !== "gateway"
   && /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:|\/|$)/i.test(m.base_url ?? "");
 const serviceInflight = new Map<string, number>();

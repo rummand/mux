@@ -24,7 +24,7 @@ Contract (Thread is built against it):
   GET  /v1/videos/{id}/content                         → video/mp4
   POST /v1/videos/{id}/cancel                          → {id, status}
 """
-import base64, binascii, concurrent.futures, gc, io, json, os, queue, secrets, shutil, subprocess, sys, tempfile, threading, time, zipfile
+import base64, binascii, concurrent.futures, contextlib, fcntl, gc, io, json, os, queue, secrets, shutil, subprocess, sys, tempfile, threading, time, zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(os.environ.get("MUX_VIDEO_PORT", "8313"))
@@ -42,6 +42,9 @@ STEPS = {"832x480": int(os.environ.get("MUX_VIDEO_STEPS_DRAFT", "20")), "1280x72
 FLOW_SHIFT = {"832x480": 3.0, "1280x720": 5.0}
 GUIDANCE = float(os.environ.get("MUX_VIDEO_GUIDANCE", "5.0"))
 NAMES = {"video", "video-depth", MODEL}
+# One video job on this Mac at a time, across processes: this server and the camera server (camera_server.py, the
+# `video-camera` route) take this file lock for each job, so the GPU never runs two takes at once.
+GPU_LOCK = os.path.expanduser(os.environ.get("MUX_VIDEO_GPU_LOCK", "~/.mux/run/video-gpu.lock"))
 NEGATIVE = "blurry, low quality, distorted, deformed, flickering, watermark, text, static frame, oversaturated"
 
 
@@ -397,9 +400,34 @@ def _run_on_device(job):
     return data
 
 
+@contextlib.contextmanager
+def gpu_lock(job, path=None):
+    """Hold the Mac-wide video lock while the job runs; wait (the job stays queued) while another server's job has it.
+    Yields False if the job was cancelled while it waited."""
+    path = path or GPU_LOCK
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if job.cancel.is_set() or job.status != "queued":
+                    yield False
+                    return
+                time.sleep(0.5)
+        try:
+            yield True
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
 def run(job):
-    with _gpu:
-        if job.status != "queued":  # cancelled while it waited
+    with _gpu, gpu_lock(job) as mine:
+        if not mine or job.status != "queued":  # cancelled while it waited
             return
         job.status = "running"
         try:

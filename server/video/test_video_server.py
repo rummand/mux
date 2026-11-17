@@ -3,9 +3,10 @@
 Run: python3 server/video/test_video_server.py   (needs numpy and Pillow, as the server does)
 What it cannot prove: that Wan2.1-VACE-1.3B loads and renders on MPS. That is deploy/video.sh's test clip, on the Mac.
 """
-import base64, http.client, importlib.util, io, json, os, sys, threading, time, zipfile
+import base64, http.client, importlib.util, io, json, os, sys, tempfile, threading, time, zipfile
 
 here = os.path.dirname(os.path.abspath(__file__))
+os.environ.setdefault("MUX_VIDEO_GPU_LOCK", os.path.join(tempfile.mkdtemp(prefix="mux-video-test-"), "video-gpu.lock"))
 spec = importlib.util.spec_from_file_location("video_server", os.path.join(here, "video_server.py"))
 vs = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(vs)
