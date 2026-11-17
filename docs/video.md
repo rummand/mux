@@ -63,6 +63,13 @@ owner says yes, it slots in behind the same API as a second model on `video-dept
   way and only scaled. Control frames are resampled evenly to `seconds × fps` frames and resized to `size`.
 - **A first frame** (`image_b64`) is kept as frame 0 (VACE's mask: black = keep, white = make), cropped to fill.
 
+- **The VAE's conv3d on MPS** (2026-11-17). The first label test clip (2 s, 832×480) pushed macOS ~9 GB into swap and
+  ran past 343 s where the deploy's clip had taken ~185 s: the cause found in the LingBot port (`docs/video-camera.md`),
+  a conv3d of the VAE's size holding MPS scratch outside PyTorch's allocator. On MPS the server now runs diffusers'
+  `WanCausalConv3d` as conv2d over its time taps (`conv3d_by_frames`; equal to diffusers' forward within 10⁻⁵ for every
+  shape the VAE has, and a whole tiny Wan VAE encodes and decodes the same) and empties MPS's cache after each job.
+  `MUX_VIDEO_CONV3D=native` keeps diffusers' own.
+
 ## The API (Thread is built against it)
 
 ```

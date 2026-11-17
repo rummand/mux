@@ -264,5 +264,41 @@ assert j["data"][0]["loaded"] is True
 vs.on_device(vs.let_go)
 assert call("GET", "/v1/models")[1]["data"][0]["loaded"] is False
 ok("one device thread: every load, render and let-go ran on the same worker thread, never a request's")
+# ── the VAE's causal conv3d as conv2d over its time taps (MPS memory), against diffusers' own forward ─────────────
+try:
+    import torch
+    from diffusers.models.autoencoders.autoencoder_kl_wan import WanCausalConv3d
+    have_diffusers = True
+except Exception:  # noqa: BLE001
+    have_diffusers = False
+if have_diffusers:
+    torch.manual_seed(0)
+    native = WanCausalConv3d.forward
+    shapes = [((3, 3, 3), 1, (1, 1, 1), 5, 2), ((3, 1, 1), 1, (1, 0, 0), 4, 2), ((3, 1, 1), (2, 1, 1), (0, 0, 0), 5, None),
+              (1, 1, 0, 3, None), ((3, 3, 3), 1, (1, 1, 1), 1, 2), ((3, 3, 3), 1, (1, 1, 1), 4, 1), ((3, 3, 3), 1, (1, 1, 1), 2, None)]
+    for ks, st, pad, t, cache in shapes:
+        conv = WanCausalConv3d(6, 5, ks, stride=st, padding=pad)
+        x = torch.randn(1, 6, t, 10, 12)
+        cx = torch.randn(1, 6, cache, 10, 12) if cache else None
+        want = native(conv, x, cx)
+        got = vs.conv3d_by_frames(conv, x, cx)
+        assert got.shape == want.shape and torch.allclose(got, want, atol=1e-5), (ks, st, pad, t, cache, got.shape, want.shape, (got - want).abs().max())
+    vs.use_conv3d_by_frames()
+    from diffusers.models.autoencoders import autoencoder_kl_wan as akw
+    assert akw.WanCausalConv3d.forward is vs.conv3d_by_frames and vs._CONV3D_FORWARD == [native]
+    vs.use_conv3d_by_frames()
+    assert vs._CONV3D_FORWARD == [native]
+    from diffusers import AutoencoderKLWan
+    vae = AutoencoderKLWan(base_dim=16, z_dim=4, dim_mult=[1, 2, 2], num_res_blocks=1, temperal_downsample=[False, True],
+                           latents_mean=[0] * 4, latents_std=[1] * 4).eval()
+    clip = torch.randn(1, 3, 9, 32, 48)
+    with torch.no_grad():
+        z1 = vae.encode(clip).latent_dist.mode(); d1 = vae.decode(z1).sample   # by frames (patched above)
+        akw.WanCausalConv3d.forward = native
+        z0 = vae.encode(clip).latent_dist.mode(); d0 = vae.decode(z0).sample
+    assert (z1 - z0).abs().max() < 1e-4 and (d1 - d0).abs().max() < 1e-4, ((z1 - z0).abs().max(), (d1 - d0).abs().max())
+    ok("VAE conv3d by frames: equal to diffusers' WanCausalConv3d (3x3x3, time-only, strided, 1x1x1; with and without cached frames); a whole tiny Wan VAE encodes and decodes the same")
+else:
+    print("skip conv3d parity: no diffusers here")
 print("all video server tests passed")
 os._exit(0)

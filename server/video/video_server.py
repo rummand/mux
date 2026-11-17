@@ -120,6 +120,58 @@ def available_gb():
         return None
 
 
+def conv3d_by_frames(self, x, cache_x=None):
+    """diffusers' WanCausalConv3d.forward computed as conv2d over the kernel's time taps, one output frame at a time.
+
+    Same sums as diffusers' (front zero padding in time, cached frames first, spatial zero padding) without its padded
+    input or the conv3d: on MPS a conv3d of the VAE's size holds scratch outside PyTorch's allocator (mux's LingBot port
+    measured the driver at 69 GB with 21 GB in use; docs/video-camera.md), and this server's 2 s clip pushed macOS ~9 GB
+    into swap the same way (2026-11-17). Zero frames add nothing and are skipped. Within float32 rounding of diffusers'
+    own forward (test_video_server.py)."""
+    import torch
+    import torch.nn.functional as F
+    p = self._padding   # (w, w, h, h, front in time, 0)
+    if self.dilation != (1, 1, 1) or self.groups != 1 or p[0] != p[1] or p[2] != p[3] or p[5] != 0:
+        return _CONV3D_FORWARD[0](self, x, cache_x)
+    front = p[4]
+    frames = []
+    if cache_x is not None and front > 0:
+        frames = [f for f in cache_x.to(x.device).unbind(2)]
+        front -= len(frames)
+    frames += list(x.unbind(2))
+    frames = [None] * front + frames if front >= 0 else frames[-front:]
+    kt, st = self.kernel_size[0], self.stride[0]
+    n = (len(frames) - kt) // st + 1
+    out = None
+    for o in range(n):
+        acc = None
+        for k in range(kt):
+            f = frames[o * st + k]
+            if f is not None:
+                y = F.conv2d(f, self.weight[:, :, k], None, self.stride[1:], (p[2], p[0]))
+                acc = y if acc is None else acc.add_(y)
+        if acc is None:   # every tap on padding: the bias alone
+            acc = F.conv2d(torch.zeros_like(x[:, :, 0]), self.weight[:, :, 0], None, self.stride[1:], (p[2], p[0]))
+        if self.bias is not None:
+            acc.add_(self.bias.view(1, -1, 1, 1))
+        if out is None:
+            out = acc.new_empty(acc.shape[0], acc.shape[1], n, acc.shape[2], acc.shape[3])
+        out[:, :, o] = acc
+        del acc
+    return out
+
+
+_CONV3D_FORWARD = []
+
+
+def use_conv3d_by_frames():
+    """Put conv3d_by_frames in place of diffusers' WanCausalConv3d.forward (once)."""
+    from diffusers.models.autoencoders import autoencoder_kl_wan as akw
+    if not _CONV3D_FORWARD:
+        _CONV3D_FORWARD.append(akw.WanCausalConv3d.forward)
+        akw.WanCausalConv3d.forward = conv3d_by_frames
+
+
 def load_pipeline():
     # mux's memory budget does not count this server, so it checks for itself: a load that cannot fit would push the
     # chat models into swap. MUX_VIDEO_MIN_FREE_GB 0 turns the check off.
@@ -131,6 +183,8 @@ def load_pipeline():
     from diffusers import AutoencoderKLWan, WanVACEPipeline
     if DEVICE == "mps" and not torch.backends.mps.is_available():
         raise RuntimeError("PyTorch has no MPS device here (Apple Silicon with macOS 14 or later is needed)")
+    if DEVICE == "mps" and os.environ.get("MUX_VIDEO_CONV3D", "frames") == "frames":
+        use_conv3d_by_frames()   # MUX_VIDEO_CONV3D=native keeps diffusers' conv3d
     t = time.time()
     vae = AutoencoderKLWan.from_pretrained(MODEL_PATH, subfolder="vae", torch_dtype=torch.float32)
     pipe = WanVACEPipeline.from_pretrained(MODEL_PATH, vae=vae, torch_dtype=torch.bfloat16)
@@ -517,7 +571,12 @@ def _run_on_device(job):
 
     pipe = pipeline()
     job.progress = 0.05
-    frames = render(pipe, req, on_step)
+    try:
+        frames = render(pipe, req, on_step)
+    finally:
+        if DEVICE == "mps":
+            import torch
+            torch.mps.empty_cache()
     if job.cancel.is_set():
         raise Cancelled()
     job.progress = 0.97
