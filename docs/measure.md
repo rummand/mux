@@ -61,7 +61,8 @@ This is a reading of the licence texts, not legal advice.
 | VGGT on MPS | **Plausible, not proven here.** | Pure PyTorch; a community port ([vggt-mps](https://github.com/jmanhype/vggt-mps)) runs it on MPS. mux's VGGT path is written from the repo's README and has not run anywhere. |
 | macOS itself | **A known risk.** | An Apple Developer Forums thread (2026) reports macOS 26.4 reserving ~40 GiB of MPS "other allocations" on a 48 GB M5 Pro, blocking large PyTorch tensors; fine on 26.3. If a load fails with plenty free, check the macOS version first. |
 
-**Nothing here has run on Apple Silicon yet.** The job API, validation, the crop and camera maths, the measurement
+**Proven on the Mac Studio (M3 Ultra, macOS, PyTorch 2.14.1 MPS) on 2026-11-17** — see "Measured on the Mac" below.
+Before that: **nothing here had run on Apple Silicon.** The job API, validation, the crop and camera maths, the measurement
 scale and the PLY are tested with stub models (`server/measure/test_measure_server.py`); the gateway's routes, auth,
 isolation, body limits, the node chain and presence in `server/test/measure.test.ts`. `deploy/measure.sh` ends with the
 first real proof: it measures a rendered sample house with known sizes and prints the times and how far off it is.
@@ -70,7 +71,22 @@ If MapAnything will not run on MPS: `./deploy/measure.sh --vggt`. If neither wil
 and Thread falls back to what its proposal names: cameras solved later in Thread by fitting the built house to the
 photos (section 11, "if both fail, the cameras are solved by fitting the built house to the photos").
 
-### Memory and time (estimates until the Mac says otherwise)
+### Measured on the Mac (2026-11-17, `deploy/setup-measure.sh`, the rendered sample house)
+
+| | Load | Time | How far off (the house's known sizes) |
+|---|---|---|---|
+| Depth Pro, focal from the model | 7 s | 11.2 s cold, **2.7 s warm** (through Railway) | wall ahead 5.31 m, truly 8.23 m: **35 % off** (it guessed focal 690–741 px; truly 900) |
+| Depth Pro, `focal_px: 900` given | — | warm | centre 7.57 m, truly 8.23 m: **~8 % off** |
+| MapAnything Apache, its own scale | 37 s | 21.6 s cold, **6.6 s warm** (3 views) | camera 1 → 2: 2.14 m, truly 4.03 m: 47 % off |
+| MapAnything Apache, scaled by the door (0.81 m) | — | 3.1–7.1 s | camera 1 → 2: 3.35 m, truly 4.03 m: **17 % off** (it saw the door as 0.52 m before scaling) |
+
+Both loaded together in 49 s. The depth map's shape is right (the house stands clean against the sky); the error is
+scale, and most of it is the focal length: **give `focal_px` (or send photos with their EXIF) — a rendered scene has
+none, so the model guesses.** Real phone photos carry EXIF, which the server reads. The sample is flat-shaded CG, harder
+for these models than real photos; measure a real room before trusting the reconstruct numbers. Files:
+`~/.mux/logs/measure-test-depth.png`, `measure-test.ply`, `measure-gateway/`.
+
+### Memory and time (estimates, before the Mac measured them above)
 
 | | Weights | Peak (estimate) | Time on the Mac Studio (estimate) |
 |---|---|---|---|
