@@ -77,6 +77,8 @@ echo "✓ mux is back"
 
 step "1/5 this Mac: Piper (com.mux.tts)"
 if ! curl -sf -m 5 -o /dev/null http://127.0.0.1:8311/health; then
+  # No agent at all (2026-11-17: there was none to restart): install it; the routes are set again in the next step
+  [ -f "$HOME/Library/LaunchAgents/com.mux.tts.plist" ] || "$ROOT/deploy/audio.sh" || true
   launchctl kickstart -k "gui/$(id -u)/com.mux.tts" 2>/dev/null \
     || { [ -f "$HOME/Library/LaunchAgents/com.mux.tts.plist" ] && launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.mux.tts.plist"; } || true
   wait_for 60 "Piper on :8311" curl -sf http://127.0.0.1:8311/health || { echo "  Piper's log:"; tail -n 15 "$MUX_HOME/logs/tts.log" 2>/dev/null | sed 's/^/    /'; }
@@ -169,7 +171,7 @@ if [ -s "$T/speak" ] && ! head -c 1 "$T/speak" | grep -q '{'; then cp "$T/speak"
 check transcribe json -F model=transcribe -F response_format=verbose_json -F "file=@$T/a.mp3;type=audio/mpeg" "$GW/v1/audio/transcriptions"
 check transcribe-da json -F model=transcribe-da -F "file=@$T/a.mp3;type=audio/mpeg" "$GW/v1/audio/transcriptions"
 # Video: a 1 s job, followed until done
-VID=$(curl -s -m 60 -H "$H" -H "$J" "$GW/v1/videos/generations" -d '{"model":"video","prompt":"a red apple turning slowly on a table","seconds":1,"fps":8}')
+VID=$(curl -s -m 60 -H "$H" -H "$J" "$GW/v1/videos/generations" -d '{"model":"video","prompt":"a red apple turning slowly on a table","seconds":1,"fps":8,"size":"832x480"}')
 VID_ID=$(printf %s "$VID" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.parse(s).id||"")}catch{console.log("")}})')
 if [ -z "$VID_ID" ]; then row video "✗" "$(printf %s "$VID" | head -c 160)"; else
   st=queued; i=0
