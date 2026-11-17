@@ -296,7 +296,7 @@ git pull --ff-only
 # FLUX.1-Fill-dev for --image) with the owner's account; the script then asks for: ~/.mux/backdrop-venv/bin/hf auth login
 ./deploy/setup-backdrop.sh            # Mac + Railway + Thread's tenant, under launchd; follow ~/.mux/logs/setup-backdrop.log
 # or only this Mac:
-./deploy/backdrop.sh                  # venv, code and weights (pinned), launchd com.mux.backdrop on :8315, route, a test backdrop
+./deploy/backdrop.sh                  # venv, code and weights (pinned), launchd com.mux.backdrop on :8316, route, a test backdrop
 ./deploy/backdrop.sh --image          # and backdrops from an image (FLUX.1-Fill-dev, 24 GB more)
 ```
 

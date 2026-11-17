@@ -11,7 +11,7 @@ on Apple Silicon and what is not: docs/backdrop.md. In short:
   distances (MoGe's own panorama merge), its metric scale kept.
 - The dome: dome.py (no model): the depth shaped into one mesh, the ground below the horizon flattened to a floor.
 
-Runs in ~/.mux/backdrop-venv (deploy/backdrop.sh), launchd agent com.mux.backdrop on 127.0.0.1:8315.
+Runs in ~/.mux/backdrop-venv (deploy/backdrop.sh), launchd agent com.mux.backdrop on 127.0.0.1:8316.
 
 - One job at a time; jobs wait in a queue (at most MUX_BACKDROP_QUEUE).
 - Memory: the text encoders (T5-XXL and CLIP, ~10 GB) and the FLUX transformer (~24 GB) are never needed at once, so
@@ -38,7 +38,7 @@ dome = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(dome)
 
 home = os.path.expanduser
-PORT = int(os.environ.get("MUX_BACKDROP_PORT", "8315"))
+PORT = int(os.environ.get("MUX_BACKDROP_PORT", "8316"))
 MODEL = os.environ.get("MUX_BACKDROP_MODEL", "hunyuanworld-pano-moge2")  # the mux model id this server answers for
 ROUTE = "backdrop"                                                          # what the contract calls it
 DEVICE = os.environ.get("MUX_BACKDROP_DEVICE", "mps")

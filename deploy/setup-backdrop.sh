@@ -5,7 +5,7 @@
 #   ./deploy/setup-backdrop.sh --image  the same, with backdrops from an image too (see deploy/backdrop.sh)
 # Follow it in ~/.mux/logs/setup-backdrop.log; a notification says when it is done or what stopped it.
 #  1. this Mac: main from GitHub (fast-forward only), build, restart mux, then ./deploy/backdrop.sh — the venv,
-#     HunyuanWorld 1.0's code, FLUX.1-dev, the PanoDiT LoRA and MoGe-2 at pinned revisions, com.mux.backdrop on :8315,
+#     HunyuanWorld 1.0's code, FLUX.1-dev, the PanoDiT LoRA and MoGe-2 at pinned revisions, com.mux.backdrop on :8316,
 #     the model hunyuanworld-pano-moge2 on the route backdrop, and one test backdrop (times printed)
 #  2. Railway mux: railway up from a clean worktree of main; wait until the gateway has the route backdrop and has
 #     synced mac-studio/hunyuanworld-pano-moge2; one backdrop through the gateway with a throwaway key (revoked after)
@@ -122,7 +122,7 @@ while IFS="$(printf '\t')" read -r id body; do
 done < "$MUX_HOME/logs/backdrop-tenants.tsv"
 
 step "done"
-echo "✓ this Mac: $MODEL_ID on :8315 (test files in $MUX_HOME/logs/backdrop-test-*)"
+echo "✓ this Mac: $MODEL_ID on :8316 (test files in $MUX_HOME/logs/backdrop-test-*)"
 echo "✓ Railway mux: /v1/backdrops live, mac-studio/$MODEL_ID"
 echo "✓ Thread: calls POST /v1/backdrops with its MUX_BASE_URL and MUX_API_KEY"
 notify "Backdrops are live: Mac and Railway mux"

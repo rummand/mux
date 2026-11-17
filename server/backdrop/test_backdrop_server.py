@@ -68,6 +68,7 @@ def fake_depth(rgb, on_view):
     return depth, valid, SCENE["metric"]
 
 
+assert os.environ.get("MUX_BACKDROP_PORT") or bs.PORT == 8316, bs.PORT  # 8315 is com.mux.video-camera's
 bs.make_panorama, bs.make_depth = fake_panorama, fake_depth
 bs.image_ready = lambda: True
 bs.available_gb = lambda: 100.0

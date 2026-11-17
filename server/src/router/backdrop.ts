@@ -11,7 +11,7 @@ import { ask, failed, upstreamError } from "./video.js";
 
 /**
  * Backdrops (Thread's Sets: a 360° world beyond the set's edge), route and kind `backdrop`, answered by the backdrop
- * server (server/backdrop/backdrop_server.py on the Mac, :8315): an async job, as video is. POST /v1/backdrops answers
+ * server (server/backdrop/backdrop_server.py on the Mac, :8316): an async job, as video is. POST /v1/backdrops answers
  * 202 with an id; GET /v1/backdrops/{id} says how it is going (and, once succeeded, the horizon and the depth's scale);
  * /panorama, /depth and /dome give the three files; /cancel stops it. On the Railway gateway the job goes to the node
  * that has the model, which keeps its own job of it.

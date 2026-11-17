@@ -11,7 +11,7 @@
 # Before the first run, once: FLUX.1-dev (and, for --image, FLUX.1-Fill-dev) are gated on Hugging Face. Accept the
 # FLUX.1 [dev] Non-Commercial License on huggingface.co/black-forest-labs/FLUX.1-dev (and .../FLUX.1-Fill-dev) with the
 # owner's account, then: ~/.mux/backdrop-venv/bin/hf auth login (the script creates the venv and stops to say so).
-# server/backdrop/backdrop_server.py runs on 127.0.0.1:8315 (com.mux.backdrop) and answers /v1/backdrops (async jobs).
+# server/backdrop/backdrop_server.py runs on 127.0.0.1:8316 (com.mux.backdrop) and answers /v1/backdrops (async jobs).
 # It becomes the model `hunyuanworld-pano-moge2` on the route `backdrop`; a gateway that has this Mac as a node gets it
 # as mac-studio/hunyuanworld-pano-moge2. Nothing loaded is unloaded by this script: mux lets idle models go when a
 # backdrop needs the room. Keys and tokens are never printed. Downloads: ~37 GB (text) or ~61 GB (with --image).
@@ -20,7 +20,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MUX_HOME="$HOME/.mux"
 AGENTS="$HOME/Library/LaunchAgents"
 VENV="$MUX_HOME/backdrop-venv"
-PORT=8315
+PORT=8316
 MODEL_ID=hunyuanworld-pano-moge2
 MODELS="$MUX_HOME/models"
 CODE="$MUX_HOME/backdrop"

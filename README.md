@@ -355,7 +355,7 @@ Backdrops (2026-11-17, `docs/backdrop.md`; Thread's Sets, a world beyond the set
 installs PyTorch and diffusers 0.34 in `~/.mux/backdrop-venv`, clones **HunyuanWorld 1.0** (Tencent) at a pinned commit
 for its panorama step, fetches **FLUX.1-dev** (gated: accept its non-commercial licence and `hf auth login` first), the
 PanoDiT LoRA and **MoGe-2** (MIT) at pinned revisions (SHA-256 checked), and runs `server/backdrop/backdrop_server.py`
-as launchd agent com.mux.backdrop (:8315, MPS, bf16, one job at a time). It becomes `hunyuanworld-pano-moge2` on the
+as launchd agent com.mux.backdrop (:8316, MPS, bf16, one job at a time). It becomes `hunyuanworld-pano-moge2` on the
 route `backdrop` (kind `backdrop`) and ends with a test backdrop through this Mac's mux, timed. `POST /v1/backdrops
 {prompt, image_b64?, seed?, size?: "1920x960"}` → 202 `{id, status, model: "backdrop"}`; poll `GET /v1/backdrops/{id}`
 (`meta: {horizon, groundDepth?, depthScale}` once succeeded); `/panorama` (PNG 1920 × 960), `/depth` (16-bit PNG, mm or
