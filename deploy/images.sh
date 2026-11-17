@@ -80,7 +80,9 @@ env HF_HUB_CACHE="$HF_CACHE" $IMAGE_ENV "$VENV/bin/python" "$ROOT/server/images/
 HQ_ID=flux3-image-klein-q8
 HQ_DIR="$MUX_HOME/models/flux-3-image-klein-mflux-q8"
 HQ=; [ -f "$HQ_DIR/transformer/0.safetensors" ] && HQ=1
-[ -z "$HQ" ] || IMAGE_ENV="$IMAGE_ENV MUX_IMAGE_HQ_MODEL=$HQ_ID MUX_IMAGE_HQ_BASE_MODEL=flux3-image-klein MUX_IMAGE_HQ_MODEL_PATH=$HQ_DIR"
+# free memory FLUX 3 wants before it loads: its measured peak was 15.3 GB (docs/image-edit.md), so 18 leaves a margin
+# without refusing whenever the chat model is resident (24 did, with 23 GB free)
+[ -z "$HQ" ] || IMAGE_ENV="$IMAGE_ENV MUX_IMAGE_HQ_MODEL=$HQ_ID MUX_IMAGE_HQ_BASE_MODEL=flux3-image-klein MUX_IMAGE_HQ_MODEL_PATH=$HQ_DIR MUX_IMAGE_HQ_MIN_FREE_GB=${MUX_IMAGE_HQ_MIN_FREE_GB:-18}"
 PLIST_ENV=$(for kv in $IMAGE_ENV; do printf '    <key>%s</key><string>%s</string>\n' "${kv%%=*}" "${kv#*=}"; done)
 
 echo "→ launchd agent com.mux.images on :$PORT"
