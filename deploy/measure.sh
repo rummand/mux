@@ -30,12 +30,16 @@ MAPANYTHING_REV=00f9c245bbcb60522d1ed7f9e9d88462c6e3f38a
 VGGT_COMMIT=a288dd0f14786c93483e45524328726ab7b1b4ce          # github.com/facebookresearch/vggt
 VGGT_REPO=facebook/VGGT-1B-Commercial
 VGGT_REV=ebb29a532abe92960eeb6903a5530f16990ef4ab
+# Depth Pro declares numpy<2 and MapAnything (through rerun-sdk) numpy>=2, which pip cannot satisfy together. Depth Pro's
+# pin dates from before numpy 2; its code is PyTorch. So everything installs with numpy 2, and Depth Pro alone without
+# its declared dependencies (DEPTH_PRO_PIN), its real ones (timm, matplotlib, pillow-heif) listed here.
 PIP_PINS="torch==2.14.1
 torchvision
 pillow-heif
-numpy<2
-depth_pro @ git+https://github.com/apple/ml-depth-pro@$DEPTH_PRO_COMMIT
+timm
+matplotlib
 mapanything @ git+https://github.com/facebookresearch/map-anything@$MAPANYTHING_COMMIT"
+DEPTH_PRO_PIN="depth_pro @ git+https://github.com/apple/ml-depth-pro@$DEPTH_PRO_COMMIT"
 TEST=1 RECON=mapanything
 for a in "$@"; do case "$a" in --no-test) TEST= ;; --vggt) RECON=vggt ;; *) echo "unknown flag $a"; exit 2 ;; esac; done
 [ "$(uname -s)" = Darwin ] || { echo "Run this on the Mac."; exit 2; }
@@ -52,11 +56,12 @@ echo "→ Python packages in $VENV (PyTorch with MPS, Depth Pro, MapAnything)"
 PY="$(command -v python3.12 || command -v python3.11 || true)"
 [ -n "$PY" ] || { echo "python 3.11 or 3.12 is needed (brew install python@3.12)"; exit 1; }
 [ -x "$VENV/bin/python" ] || "$PY" -m venv "$VENV"
-PINS_NOW="$PIP_PINS $RECON"
+PINS_NOW="$PIP_PINS $DEPTH_PRO_PIN $RECON"
 if [ "$(cat "$VENV/.mux-pins" 2>/dev/null || true)" != "$PINS_NOW" ]; then
   "$VENV/bin/pip" install -q --upgrade pip
   printf '%s\n' "$PIP_PINS" > "$VENV/requirements.txt"
   "$VENV/bin/pip" install -q -r "$VENV/requirements.txt" "huggingface_hub[cli]"
+  "$VENV/bin/pip" install -q --no-deps "$DEPTH_PRO_PIN"
   # VGGT asks for opencv-python beside MapAnything's headless build: its own code needs nothing else we lack
   [ "$RECON" != vggt ] || "$VENV/bin/pip" install -q --no-deps "vggt @ git+https://github.com/facebookresearch/vggt@$VGGT_COMMIT" einops
   printf '%s' "$PINS_NOW" > "$VENV/.mux-pins"
