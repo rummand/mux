@@ -94,7 +94,8 @@ NEED_GB=8
 echo "→ weights: $DIT_REPO @ ${DIT_REV%"${DIT_REV#???????}"} (6.8 GB) and the Wan2.1 VAE ($ASSETS_REPO @ ${ASSETS_REV%"${ASSETS_REV#???????}"})"
 if [ ! -f "$DIT/model-00006-of-00006.safetensors" ] || [ ! -f "$ASSETS/Wan2.1_VAE.pth" ]; then
   FREE_GB=$(df -g "$MUX_HOME/models" | awk 'NR == 2 { print $4 }')
-  [ "$FREE_GB" -ge $((NEED_GB + 20)) ] || { echo "only $FREE_GB GB free; $((NEED_GB + 20)) GB wanted ($NEED_GB GB of weights, 20 GB left over)"; exit 1; }
+  SPARE_GB=${MUX_VIDEO_CAMERA_SPARE_GB:-20}   # what must stay free after the weights (the owner ran it with 12 on 2026-11-17)
+  [ "$FREE_GB" -ge $((NEED_GB + SPARE_GB)) ] || { echo "only $FREE_GB GB free; $((NEED_GB + SPARE_GB)) GB wanted ($NEED_GB GB of weights, $SPARE_GB GB left over; MUX_VIDEO_CAMERA_SPARE_GB lowers it)"; exit 1; }
 fi
 [ -f "$DIT/model-00006-of-00006.safetensors" ] || "$VENV/bin/hf" download "$DIT_REPO" --revision "$DIT_REV" --local-dir "$DIT" \
   --include "model-*.safetensors" "model.safetensors.index.json" "README.md"
