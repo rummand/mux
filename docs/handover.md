@@ -1,7 +1,19 @@
-# Handover — 2026-11-06
+# Handover — 2026-11-17
 
 What mux is now, how it runs, what was built in the last stretch (2026-11-02 → 11-04), and what is waiting.
 Read with `README.md` (how mux works) and `docs/decisions.md` (why it is built this way).
+
+**Rule (set by the owner on 2026-11-17):** every commit writes to this file. Add one line at the top of the Log below,
+newest first (date · commit · what changed · what the owner must run or decide), and update *Waiting on the owner* when
+it changes. Merge commits skip it. `tools/githooks/pre-commit` enforces it (`git config core.hooksPath tools/githooks`);
+the file merges with git's `union` driver (`.gitattributes`), so keep each Log entry on one line.
+
+## Log
+
+- 2026-11-17 · handover rule: every commit writes here; pre-commit hook and union merge added.
+- 2026-11-17 · 1ce0567 · Video on the Mac: Wan2.1-VACE-1.3B (Apache-2.0) on PyTorch MPS behind async jobs (`server/video/video_server.py`, :8313, launchd `com.mux.video`), routes `video` and `video-depth`; per-tenant job ids; refused audio/image/video bodies no longer kept in the request log. Not yet run on the Mac: `./deploy/setup-video.sh`. Notes in `docs/video.md`.
+- 2026-11-17 · be05e6d · FLUX 3 bf16 option removed (revert of 804c061); the Q8 worker is unchanged.
+- 2026-11-17 · 51a1526 · `deploy/fix-images.sh`: pull, restart the image workers, test two generations in a row (the MLX one-thread fix, 289802a).
 
 ## Where mux runs
 
@@ -166,6 +178,11 @@ Studio (was `[]`, which took every chat model in list order); journaled as a rou
   deleted on the owner's word (it was dying of out-of-memory).
 
 ## Waiting on the owner
+
+- **Run on the Mac (2026-11-17):** `git pull --ff-only && ./deploy/fix-images.sh` (FLUX answers more than once again),
+  then `./deploy/setup-video.sh` (video for Thread's Make it real; follow `~/.mux/logs/setup-video.log`, and put the
+  2 s test clip's time into `docs/video.md`).
+- **LTX-2 as a second video model:** better pictures, but its licence needs a paid licence above USD 10M revenue.
 
 - **Memory budget 48 → ~58–60 GB.** The autopilot is blocked from trying Gemma 4 26B on the multilingual route
   (advisor 8.8 vs qwen3.6's 7.5; the two need ~58 GB together).

@@ -1,0 +1,10 @@
+#!/bin/sh
+# Every commit writes to docs/handover.md (owner, 2026-11-17). Merge commits skip it.
+# Turn on once per clone: git config core.hooksPath tools/githooks
+[ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ] && exit 0
+staged=$(git diff --cached --name-only)
+[ -z "$staged" ] && exit 0
+echo "$staged" | grep -qx 'docs/handover.md' && exit 0
+echo "pre-commit: add a line to the Log in docs/handover.md (what changed, where it is, what waits) and stage it." >&2
+echo "            The owner asked for it on every commit (2026-11-17). Merge commits skip this." >&2
+exit 1
