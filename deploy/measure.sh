@@ -30,7 +30,10 @@ MAPANYTHING_REV=00f9c245bbcb60522d1ed7f9e9d88462c6e3f38a
 VGGT_COMMIT=a288dd0f14786c93483e45524328726ab7b1b4ce          # github.com/facebookresearch/vggt
 VGGT_REPO=facebook/VGGT-1B-Commercial
 VGGT_REV=ebb29a532abe92960eeb6903a5530f16990ef4ab
-PIP_PINS="torch==2.14.1 torchvision pillow-heif numpy<2
+PIP_PINS="torch==2.14.1
+torchvision
+pillow-heif
+numpy<2
 depth_pro @ git+https://github.com/apple/ml-depth-pro@$DEPTH_PRO_COMMIT
 mapanything @ git+https://github.com/facebookresearch/map-anything@$MAPANYTHING_COMMIT"
 TEST=1 RECON=mapanything
