@@ -36,7 +36,8 @@ for a in "$@"; do case "$a" in --no-test) TEST= ;; --railway) RAILWAY=1 ;; *) ec
 [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ] || { echo "Run this on the Mac (Apple Silicon)."; exit 2; }
 . "$MUX_HOME/mux.env"
 sha() { shasum -a 256 "$1" | awk '{ print $1 }'; }
-js() { node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);$1})"; }
+# js CODE [ARG…]: run CODE with the JSON on stdin as j; ARGs are process.argv[1…] (node -e passes them after a "--")
+js() { local c="$1"; shift; node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);$c})" -- "$@"; }
 
 echo "→ mflux 0.24.0 (FLUX 3 Image Klein's edit pipeline) in $VENV"
 [ -x "$VENV/bin/python" ] || { echo "✗ no $VENV: run ./deploy/images.sh --q4 first"; exit 1; }
