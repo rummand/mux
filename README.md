@@ -304,7 +304,11 @@ Images: `./deploy/images.sh` first unloads every loaded model that is neither pi
 skips that; nothing is deleted), then installs mflux in `~/.mux/images-venv`, fetches FLUX.2 [klein] 4B (Apache-2.0,
 ~16 GB, into `~/.mux/models/hf`) and runs `server/images/image_server.py` as launchd agent com.mux.images (:8312). It
 becomes `flux2-klein-4b` on the routes `image` and `image-edit`, the names LBS Studio's ComfyUI nodes ask for. The
-model loads on the first request (~9 GB at 8-bit) and is let go after 10 idle minutes. An edit takes one or more
+model loads on the first request (~9 GB at 8-bit) and is let go after 10 idle minutes. MLX's buffer cache is capped at
+`MUX_IMAGES_CACHE_GB` (2) and emptied after every request and when a pipeline is let go: uncapped, freed buffers of
+other sizes piled up until the server held 67–71 GB (2026-11-17; five varied requests took it from 9.5 to 41.8 GB,
+with the cap it stays at 2.1–2.6 GB between requests at the same speed). Each request logs its active, cached and peak
+GB (no prompt). An edit takes one or more
 images (`image` or `image[]`); without a `size` it keeps the first image's shape at about a megapixel. Images and their
 prompts are never logged. The script ends with a test image in `~/.mux/logs/images-test.png`.
 

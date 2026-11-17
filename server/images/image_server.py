@@ -5,7 +5,8 @@ The model is FLUX.2 [klein] 4B (Black Forest Labs, Apache-2.0): text to image, a
 images, in 4 steps. Text to image runs mflux's Flux2Klein, edits its Flux2KleinEdit (0.24's edit pipeline needs an input
 image), one of them in memory at a time. Weights come from Hugging Face into HF_HUB_CACHE (deploy/images.sh points it at ~/.mux/models/hf and
 fetches them first). The model loads on the first request and is let go after MUX_IMAGE_IDLE_MIN idle minutes, so
-its ~9 GB (8-bit) go back to the chat models. One image at a time: the GPU does one well, not two at half speed.
+its ~9 GB (8-bit) go back to the chat models. MLX's buffer cache is capped (MUX_IMAGES_CACHE_GB, 2) and emptied after
+every request: uncapped, it grew to 71 GB (2026-11-17). One image at a time: the GPU does one well, not two at half speed.
 Started by deploy/images.sh as launchd agent com.mux.images on 127.0.0.1:8312. Images are never written to disk.
 
 A pre-quantised local copy instead of the Hugging Face cache: MUX_IMAGE_MODEL_PATH (a directory of mflux weights, e.g.
@@ -30,6 +31,12 @@ MAX_BODY = 48 * 1024 * 1024
 # 32 s a step instead of 3 and the next request had the process killed by macOS (the caller saw "fetch failed"). Now a
 # request that would not fit is refused at once with a 503 that says why, and the process lives.
 MIN_FREE_GB = float(os.environ.get("MUX_IMAGES_MIN_FREE_GB", "6"))
+# MLX's buffer cache. MLX keeps every freed GPU buffer for reuse, by default up to its memory limit (~78 GB on this
+# 96 GB Mac). Sizes, input-image counts and the edit/text-to-image switch each make buffers of other shapes, which the
+# next request cannot reuse, so the cache only grew: on 2026-11-17 the server reached 67–71 GB with ~5 GB of model in
+# it and pushed macOS 43 GB into swap. Now the cache is capped (MUX_IMAGES_CACHE_GB) and emptied after every request and
+# whenever a pipeline is let go.
+CACHE_GB = float(os.environ.get("MUX_IMAGES_CACHE_GB", "2"))
 
 
 def available_gb():
@@ -59,12 +66,39 @@ def on_mlx(fn, *args, **kwargs):
     return _mlx.submit(fn, *args, **kwargs).result()
 
 
+def _mx():
+    try:
+        import mlx.core as mx
+        return mx
+    except Exception:  # noqa: BLE001 – no MLX here (tests)
+        return None
+
+
+def cap_cache():
+    """Cap MLX's buffer cache (once, on the MLX thread)."""
+    mx = _mx()
+    if mx is not None:
+        mx.set_cache_limit(int(CACHE_GB * 1024**3))
+
+
+def empty_cache():
+    """Give MLX's cached buffers back to macOS; (active, cache, peak) GB before it, for the log."""
+    mx = _mx()
+    if mx is None:
+        return None
+    seen = (mx.get_active_memory() / 1024**3, mx.get_cache_memory() / 1024**3, mx.get_peak_memory() / 1024**3)
+    mx.clear_cache()
+    mx.reset_peak_memory()
+    return seen
+
+
 def model(kind="txt2img"):
     """The pipeline for this kind, loaded once; the other kind's is let go first, so only one is ever in memory."""
     global _model, _model_kind
     if _model is not None and _model_kind != kind:
         _model = None
         gc.collect()
+        empty_cache()   # else the other pipeline's weights stay in MLX's cache
     if _model is None:
         from mflux.models.common.config import ModelConfig
         from mflux.models.flux2.variants import Flux2Klein, Flux2KleinEdit
@@ -135,8 +169,13 @@ def _generate_on_mlx(prompt, size, n, seed, steps, images):
 def generate(prompt, size, n, seed, steps, images=None):
     global _last_used
     with _gpu:
-        out = on_mlx(_generate_on_mlx, prompt, size, n, seed, steps, images)
-        _last_used = time.time()
+        try:
+            out = on_mlx(_generate_on_mlx, prompt, size, n, seed, steps, images)
+        finally:
+            seen = on_mlx(empty_cache)
+            _last_used = time.time()
+            if seen:  # sizes only; never a prompt or an image
+                print(f"request done: active {seen[0]:.1f} GB, cache {seen[1]:.1f} GB emptied, peak {seen[2]:.1f} GB", file=sys.stderr, flush=True)
     return out
 
 
@@ -225,6 +264,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    on_mlx(cap_cache)
     threading.Thread(target=idle_watch, daemon=True).start()
     if "--warm" in sys.argv:  # deploy/images.sh: fetch the weights and load once, then exit
         on_mlx(model)

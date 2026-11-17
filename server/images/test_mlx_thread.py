@@ -42,3 +42,43 @@ def check(mod, model_name, gen_name):
 
 check(load("image_server"), "model", "generate")
 check(load("flux3_server"), "model", "generate")
+
+
+# MLX's buffer cache: capped, emptied after every request (also a failed one) and when a pipeline is let go, always on
+# the MLX thread. Uncapped it grew to 71 GB on 2026-11-17.
+import types
+
+calls = []
+fake_mx = types.SimpleNamespace(
+    set_cache_limit=lambda n: calls.append(("limit", n, threading.get_ident())),
+    clear_cache=lambda: calls.append(("clear", None, threading.get_ident())),
+    reset_peak_memory=lambda: None,
+    get_active_memory=lambda: 5 * 1024**3, get_cache_memory=lambda: 9 * 1024**3, get_peak_memory=lambda: 12 * 1024**3)
+im = load("image_server")
+im._mx = lambda: fake_mx
+im.on_mlx(im.cap_cache)
+mlx_thread = calls[-1][2]
+assert calls[-1][:2] == ("limit", int(im.CACHE_GB * 1024**3)) and im.CACHE_GB == 2.0, calls
+
+
+class Pipe:
+    fail = False
+
+    def generate_image(self, **_):
+        if Pipe.fail:
+            raise RuntimeError("boom")
+        return type("R", (), {"image": FakeImage()})()
+
+
+im.model = lambda *_: Pipe()
+im.generate("a cat", "512x512", 1, 1, 1, None)
+assert calls[-1][:2] == ("clear", None) and calls[-1][2] == mlx_thread, calls
+n = len(calls)
+Pipe.fail = True
+try:
+    im.generate("a cat", "512x512", 1, 1, 1, None)
+    raise AssertionError("the failure should reach the caller")
+except RuntimeError:
+    pass
+assert len(calls) == n + 1 and calls[-1][0] == "clear", calls
+print("ok image_server: MLX cache capped at 2 GB, emptied on the MLX thread after every request, also a failed one")
