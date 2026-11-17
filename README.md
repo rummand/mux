@@ -35,6 +35,7 @@ SaaS (OpenAI / Anthropic SDK, curl)          Nexus (Railway → Funnel → Caddy
    ├─ /v1/embeddings  /v1/rerank
    ├─ /v1/audio/transcriptions  /v1/audio/speech   OpenAI audio: Whisper in, Piper (Danish) out
    ├─ /v1/images/generations  /v1/images/edits     OpenAI images: FLUX.2 klein 4B (Q4) through mflux, local
+   ├─ /v1/videos/generations  /v1/videos/{id}      async video jobs: Wan2.1-VACE-1.3B (depth control), local
    ├─ /v1/systemone          Jev's System One (Laya / Clef / d3 / d1, or hosted Jev)
    ├─ /v1/search  /v1/read   shared services: web search (SearXNG), the page reader (pages, links, files)
    ├─ keys · tenants · RPM/TPM · monthly budgets · max parallel
@@ -320,6 +321,18 @@ reason naming polite; no cooldown counted). Free: anything.
 
 All of it at once — this Mac, the Railway gateway and LBS Studio — is `./deploy/setup-images.sh` (it hands itself to
 launchd, so Ask mux can start it although it restarts mux; follow `~/.mux/logs/setup-images.log`).
+
+Video (2026-11-17, `docs/video.md`): `./deploy/video.sh` installs PyTorch and diffusers in `~/.mux/video-venv`, fetches
+**Wan2.1-VACE-1.3B** (Apache-2.0, ~19 GB at a pinned revision, into `~/.mux/models/wan2.1-vace-1.3b-diffusers`) and runs
+`server/video/video_server.py` as launchd agent com.mux.video (:8313, MPS, one job at a time, loaded on the first job
+with 24 GB free, let go after 10 idle minutes). It becomes `wan2.1-vace-1.3b` on the routes `video` and `video-depth`
+(Thread's Sets: a grey 3D take's depth pass becomes footage), and ends with a 2 s test clip in
+`~/.mux/logs/video-test.mp4`. Async jobs: `POST /v1/videos/generations {model, prompt, seconds 1–10, fps 8–24, size
+"832x480" | "1280x720", control?: {type: "depth", video_b64, format: "mp4" | "png16-zip"}, image_b64?}` → 202 `{id}`;
+poll `GET /v1/videos/{id}`, fetch `GET /v1/videos/{id}/content` (mp4, kept an hour), `POST /v1/videos/{id}/cancel`. Body
+up to 200 MB. Each mux in the way gives its own id, per tenant; polls are not metered; prompts and media are never
+logged; presence applies as for images. This Mac, the Railway gateway and Thread's tenant at once:
+`./deploy/setup-video.sh` (follow `~/.mux/logs/setup-video.log`).
 
 Danish speech: `./deploy/speech-da.sh` registers Record's Danish engines on this Mac (Record's `speech-da` service,
 :8798) as `roest-v3` (CoRal's Røst v3, a Danish Whisper large-v3), `hviske-v5` and `whisper-turbo`, and the route

@@ -43,6 +43,8 @@ function seed() {
       ["speak", "Text to speech: OpenAI's /v1/audio/speech", "speech", "priority"],
       ["image", "Text to image: OpenAI's /v1/images/generations", "image", "priority"],
       ["image-edit", "Image editing: OpenAI's /v1/images/edits (images and a prompt; LBS Studio's Harmonize)", "image", "priority"],
+      ["video", "Video as an async job: /v1/videos/generations, then poll /v1/videos/{id} (text, an optional first frame)", "video", "priority"],
+      ["video-depth", "Video from a depth pass (Thread's Sets: a grey 3D take becomes footage): /v1/videos/generations with control", "video", "priority"],
     ];
     // Any route missing (a first boot, or one added in a newer mux) is created empty; existing ones are left as they are.
     for (const [name, description, kind, strategy] of routes) if (!getRoute(name)) upsertRoute({ name, description, kind, strategy, candidates: [] });

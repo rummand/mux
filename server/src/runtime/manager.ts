@@ -52,10 +52,11 @@ const isLocal = (m: Model) => m.backend === "llamacpp" || m.backend === "mlx" ||
 
 /**
  * A heavy service on this machine that mux does not start itself but that the presence rules cover like a model it
- * runs: an image server (server/images/image_server.py, launchd com.mux.images) on a loopback address. It loads its
+ * runs: an image server (server/images/image_server.py, launchd com.mux.images) or the video server
+ * (server/video/video_server.py, com.mux.video) on a loopback address. It loads its
  * model on the first request and lets it go when idle, and says which in GET /v1/models (`loaded`).
  */
-export const isLocalService = (m: Model) => m.backend === "external" && m.kind === "image" && config.role !== "gateway"
+export const isLocalService = (m: Model) => m.backend === "external" && (m.kind === "image" || m.kind === "video") && config.role !== "gateway"
   && /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:|\/|$)/i.test(m.base_url ?? "");
 const serviceInflight = new Map<string, number>();
 
@@ -208,6 +209,20 @@ async function load(m: Model): Promise<Instance> {
   return inst;
 }
 
+/**
+ * Where a model that mux does not run itself answers (a cloud API, a node, a service on this machine), without
+ * admitting a new request: what a video job's status and content are read from, after `acquire` let the job in.
+ */
+export function upstreamFor(m: Model): Upstream {
+  const p = m.provider_id ? getProvider(m.provider_id) : undefined;
+  const key = m.api_key || p?.api_key;
+  const headers: Record<string, string> = key ? { authorization: `Bearer ${key}` } : {};
+  // A node is asked for exactly this model: the gateway does the falling back, across nodes and clouds.
+  if (m.backend === "node") headers["x-mux-no-fallback"] = "1";
+  const base = m.backend === "node" ? `${p?.base_url ?? ""}/v1` : m.base_url || p?.base_url || "";
+  return { baseUrl: base.replace(/\/$/, ""), model: m.upstream_model || m.id, headers, coldStartMs: 0 };
+}
+
 /** Load a model if it is not, and say where to reach it. Pair every call with `release`. */
 export async function acquire(m: Model): Promise<Upstream> {
   if (!m.enabled) throw new ModelUnavailable(`${m.id} is disabled`, 403, "model_disabled");
@@ -223,12 +238,7 @@ export async function acquire(m: Model): Promise<Upstream> {
       catch (e) { if (e instanceof Resting) throw new ModelUnavailable(e.message, 503, "node_resting"); throw e; }
       serviceInflight.set(m.id, (serviceInflight.get(m.id) ?? 0) + 1);
     }
-    const key = m.api_key || p?.api_key;
-    const headers: Record<string, string> = key ? { authorization: `Bearer ${key}` } : {};
-    // A node is asked for exactly this model: the gateway does the falling back, across nodes and clouds.
-    if (m.backend === "node") headers["x-mux-no-fallback"] = "1";
-    const base = m.backend === "node" ? `${p?.base_url ?? ""}/v1` : m.base_url || p?.base_url || "";
-    return { baseUrl: base.replace(/\/$/, ""), model: m.upstream_model || m.id, headers, coldStartMs: 0 };
+    return upstreamFor(m);
   }
   const t0 = Date.now();
   // This machine's presence first: a person at it, or its owner, may keep it from new work (presence.ts).

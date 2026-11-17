@@ -10,6 +10,7 @@ import { features } from "../router/select.js";
 import { runSystemOne } from "../router/systemone.js";
 import { runSearch } from "../router/web.js";
 import { runRead } from "../router/reader.js";
+import { cancelVideo, createVideo, videoContent, videoStatus } from "../router/video.js";
 import { authenticate } from "../tenants.js";
 import { anthropicErrorType, fromOpenAI, StreamTranslator, toOpenAI, type MessagesBody } from "./anthropic.js";
 
@@ -34,8 +35,11 @@ function sendError(reply: FastifyReply, flavour: Flavour, e: MuxError) {
   return reply.code(e.status === 499 ? 400 : e.status).send(errorBody(flavour, e));
 }
 
-/** Who is calling, what they may do, and the call's record — or the reply that refuses them. */
-function begin(req: FastifyRequest, reply: FastifyReply, endpoint: string, flavour: Flavour): Ctx | null {
+/**
+ * Who is calling, what they may do, and the call's record — or the reply that refuses them. `logBody` false: the
+ * body is never kept, not even with a refusal (images, audio, video and their prompts).
+ */
+function begin(req: FastifyRequest, reply: FastifyReply, endpoint: string, flavour: Flavour, logBody = true): Ctx | null {
   const who = authenticate(bearer(req));
   if (!who) { sendError(reply, flavour, new MuxError(401, "invalid_api_key", "a mux API key is required (Authorization: Bearer mux-sk-… or x-api-key)")); return null; }
   const body = (req.body ?? {}) as { metadata?: { tags?: string[]; user_id?: string }; user?: string };
@@ -46,7 +50,7 @@ function begin(req: FastifyRequest, reply: FastifyReply, endpoint: string, flavo
   ctx.agent = header(req, "x-mux-agent");
   ctx.endUser = body.user ?? body.metadata?.user_id ?? header(req, "x-mux-user");
   ctx.noFallback = header(req, "x-mux-no-fallback") === "1";
-  ctx.bodyReq = req.body;
+  ctx.bodyReq = logBody ? req.body : null;
   try { check(who.tenant, who.key); enter(who.tenant); ctx.rate = rateLeft(who.tenant); } catch (e) {
     const err = toMuxError(e);
     const rate = rateLeft(who.tenant);
@@ -157,7 +161,7 @@ async function simple(req: FastifyRequest, reply: FastifyReply, endpoint: string
 
 /** Speech to text or text to speech: the upstream's audio or JSON goes back as it came. */
 async function audio(req: FastifyRequest, reply: FastifyReply, kind: AudioKind) {
-  const ctx = begin(req, reply, kind === "transcription" ? "openai.audio.transcriptions" : "openai.audio.speech", "openai");
+  const ctx = begin(req, reply, kind === "transcription" ? "openai.audio.transcriptions" : "openai.audio.speech", "openai", false);
   if (!ctx) return reply;
   ctx.bodyReq = null; // audio is never logged
   const ac = abortOnClose(reply);
@@ -181,7 +185,7 @@ async function audio(req: FastifyRequest, reply: FastifyReply, kind: AudioKind) 
 
 /** Text to image or an edit of images: the upstream's JSON (`data[].b64_json`) goes back as it came. */
 async function image(req: FastifyRequest, reply: FastifyReply, op: ImageOp) {
-  const ctx = begin(req, reply, `openai.images.${op}`, "openai");
+  const ctx = begin(req, reply, `openai.images.${op}`, "openai", false);
   if (!ctx) return reply;
   ctx.bodyReq = null; // images and their prompts are never logged
   const ac = abortOnClose(reply);
@@ -205,6 +209,42 @@ async function image(req: FastifyRequest, reply: FastifyReply, op: ImageOp) {
   }
 }
 
+/** POST /v1/videos/generations: a job starts where the route's model runs; 202 with mux's id for it. */
+async function videoCreate(req: FastifyRequest, reply: FastifyReply) {
+  const ctx = begin(req, reply, "openai.videos.generations", "openai", false);
+  if (!ctx) return reply;
+  const ac = abortOnClose(reply);
+  try {
+    const out = await createVideo(ctx, (req.body ?? {}) as Record<string, unknown>, ac.signal);
+    finish(ctx, 202);
+    reply.headers(muxHeaders(ctx));
+    return reply.code(202).send(out);
+  } catch (e) {
+    const err = toMuxError(e);
+    finish(ctx, err.status, { type: err.type, message: err.message });
+    reply.headers(muxHeaders(ctx));
+    return sendError(reply, "openai", err);
+  } finally {
+    leave(ctx.tenant);
+  }
+}
+
+/** Status, content and cancel of a video job: the caller's key, and only its own jobs. Polls are not metered. */
+async function videoJob(req: FastifyRequest, reply: FastifyReply, what: "status" | "content" | "cancel") {
+  const who = authenticate(bearer(req));
+  if (!who) return sendError(reply, "openai", new MuxError(401, "invalid_api_key", "a mux API key is required (Authorization: Bearer mux-sk-… or x-api-key)"));
+  const id = (req.params as { id: string }).id;
+  try {
+    if (what === "content") {
+      const v = await videoContent(who.tenant, id, abortOnClose(reply).signal);
+      return reply.type(v.type).send(v.body);
+    }
+    return await (what === "status" ? videoStatus(who.tenant, id) : cancelVideo(who.tenant, id));
+  } catch (e) {
+    return sendError(reply, "openai", toMuxError(e));
+  }
+}
+
 export function registerGateway(app: FastifyInstance) {
   // Audio uploads are passed on untouched
   app.addContentTypeParser("multipart/form-data", { parseAs: "buffer" }, (_req, body, done) => done(null, body));
@@ -212,6 +252,11 @@ export function registerGateway(app: FastifyInstance) {
   app.post("/v1/audio/speech", (req, reply) => audio(req, reply, "speech"));
   app.post("/v1/images/generations", (req, reply) => image(req, reply, "generations"));
   app.post("/v1/images/edits", (req, reply) => image(req, reply, "edits"));
+  // Video: async jobs; a depth pass comes as base64 in the JSON, so the body may be up to 200 MB
+  app.post("/v1/videos/generations", { bodyLimit: 200 * 1024 * 1024 }, videoCreate);
+  app.get("/v1/videos/:id", (req, reply) => videoJob(req, reply, "status"));
+  app.get("/v1/videos/:id/content", (req, reply) => videoJob(req, reply, "content"));
+  app.post("/v1/videos/:id/cancel", (req, reply) => videoJob(req, reply, "cancel"));
   app.post("/v1/chat/completions", (req, reply) => chat(req, reply, "openai"));
   app.post("/v1/messages", (req, reply) => chat(req, reply, "anthropic"));
   app.post("/v1/embeddings", (req, reply) => simple(req, reply, "openai.embeddings", (ctx, s) => runEmbeddings(ctx, req.body as never, s)));
