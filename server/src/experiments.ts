@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { statfsSync } from "node:fs";
 import { unit } from "./router/affinity.js";
 import type { FastifyInstance } from "fastify";
 import { advise, ROUTE_CASES, usageOf } from "./advisor.js";
@@ -35,6 +36,8 @@ CREATE TABLE IF NOT EXISTS experiments (
 );
 CREATE INDEX IF NOT EXISTS experiments_route ON experiments(route, status);
 `);
+// Whether the experiment put the challenger on the route (it comes off again unless promoted)
+try { db.exec("ALTER TABLE experiments ADD COLUMN challenger_added INTEGER DEFAULT 0"); } catch { /* there already */ }
 
 export interface Experiment {
   id: string; route: string; champion: string; challenger: string; share: number; status: "running" | "promoted" | "kept" | "rolled_back" | "stopped";
@@ -118,8 +121,12 @@ export function verdict(s: Stats): { promote: boolean; why: string } {
 function fitsTogether(a: Model, b: Model): string | null {
   const local = (m: Model) => ["llamacpp", "mlx", "laya"].includes(m.backend);
   if (local(a) && local(b)) {
-    const need = estimateGb(a) + estimateGb(b), budget = settings().memoryBudgetGb;
-    return need > budget ? `${a.id} and ${b.id} need ~${need.toFixed(1)} GB together, over mux's ${budget} GB memory budget: the experiment would make the champion unload between requests. Raise the budget (Settings) to at least ${Math.ceil(need)} GB, or run the challenger on another node.` : null;
+    // Pinned models never make way, so they count too: on 2026-11-08 a 21 GB challenger "fitted" beside a 1 GB champion
+    // while 41 GB of pinned models filled the budget, and failed every first try.
+    const pinned = listModels().filter((m) => m.pinned && m.enabled && local(m) && m.id !== a.id && m.id !== b.id);
+    const held = pinned.reduce((s, m) => s + estimateGb(m), 0);
+    const need = estimateGb(a) + estimateGb(b) + held, budget = settings().memoryBudgetGb;
+    return need > budget ? `${a.id} and ${b.id} need ~${(need - held).toFixed(1)} GB together, and the pinned ${pinned.map((m) => m.id).join(", ") || "models"} hold ~${held.toFixed(1)} GB: ~${need.toFixed(1)} GB, over mux's ${budget} GB memory budget — the challenger could not load. Raise the budget (Settings) to at least ${Math.ceil(need)} GB, or run the challenger on another node.` : null;
   }
   if (a.backend === "node" && b.backend === "node" && a.provider_id === b.provider_id) {
     const p = getProvider(a.provider_id!);
@@ -146,14 +153,15 @@ export function startExperiment(o: { route: string; challenger: string; share?: 
   const memory = fitsTogether(getModel(champion)!, ch);
   if (memory) throw new Error(memory);
   // The challenger must be on the route for the router to consider it; it goes last, so nothing changes outside arm B.
-  if (!r.candidates.includes(ch.id)) upsertRoute({ ...r, candidates: [...r.candidates, ch.id] });
+  const added = !r.candidates.includes(ch.id);
+  if (added) upsertRoute({ ...r, candidates: [...r.candidates, ch.id] });
   const ex: Experiment = {
     id: `exp_${randomBytes(5).toString("hex")}`, route: r.name, champion, challenger: ch.id, share: Math.min(Math.max(o.share ?? 0.1, 0.01), 0.5),
     status: "running", reason: null, min_requests: Math.max(o.minRequests ?? 50, 10), max_hours: Math.min(Math.max(o.maxHours ?? 72, 1), 24 * 14),
     auto_promote: o.autoPromote ?? true, started_by: o.by ?? "owner", started_at: now(), ended_at: null, verdict: null, stats: null,
   };
-  db.prepare("INSERT INTO experiments(id, route, champion, challenger, share, status, min_requests, max_hours, auto_promote, started_by, started_at) VALUES(?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?)")
-    .run(ex.id, ex.route, ex.champion, ex.challenger, ex.share, ex.min_requests, ex.max_hours, ex.auto_promote ? 1 : 0, ex.started_by, ex.started_at);
+  db.prepare("INSERT INTO experiments(id, route, champion, challenger, share, status, min_requests, max_hours, auto_promote, started_by, started_at, challenger_added) VALUES(?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?)")
+    .run(ex.id, ex.route, ex.champion, ex.challenger, ex.share, ex.min_requests, ex.max_hours, ex.auto_promote ? 1 : 0, ex.started_by, ex.started_at, added ? 1 : 0);
   reload();
   journal({ kind: "experiment", ref: ex.id, who: ex.started_by === "autopilot" ? "autopilot" : undefined, title: `Started an A/B test on ${ex.route}: ${ex.challenger} vs ${ex.champion}`, detail: `${Math.round(ex.share * 100)}% of ${ex.route}'s requests to ${ex.challenger}; each arm keeps the other model behind it.` });
   event("info", "experiments", `started ${ex.id} on ${ex.route}: ${ex.challenger} gets ${Math.round(ex.share * 100)}% against ${ex.champion}`);
@@ -167,6 +175,10 @@ async function endAs(ex: Experiment, status: Experiment["status"], why: string, 
   reload();
   const r = getRoute(ex.route);
   if (status === "promoted" && r) upsertRoute({ ...r, candidates: [ex.challenger, ...r.candidates.filter((c) => c !== ex.challenger)] });
+  // Not promoted: a challenger the experiment put on the route comes off it, so it is not tried later by accident
+  else if (r && r.candidates.includes(ex.challenger) && r.candidates[0] !== ex.challenger
+    && (db.prepare("SELECT challenger_added FROM experiments WHERE id = ?").get(ex.id) as { challenger_added: number } | undefined)?.challenger_added)
+    upsertRoute({ ...r, candidates: r.candidates.filter((c) => c !== ex.challenger) });
   event(status === "rolled_back" ? "warn" : "info", "experiments", `${ex.id} on ${ex.route}: ${status.replace("_", " ")} — ${why}`, { experiment: ex.id });
   // Every verdict is something mux learned: into its brain, so the next experiment starts from it.
   await writePage({
@@ -224,6 +236,7 @@ const downloading = () => !!db.prepare("SELECT 1 FROM downloads WHERE status IN 
  *      on a gateway); the next hours benchmark it and try it.
  * What it cannot do — most often, two models that do not fit in memory together — it records, with what would allow it.
  */
+const AUTOPILOT_DISK_FLOOR_GB = 60;
 export async function autopilot(): Promise<Pilot> { return asActor("autopilot", autopilotAs); }
 async function autopilotAs(): Promise<Pilot> {
   const out: Pilot = { at: now(), actions: [], blocked: [] };
@@ -276,6 +289,11 @@ async function autopilotAs(): Promise<Pilot> {
       if (inCloud && !tested && !benchRunning()) { void runBenchmark(inCloud.id).catch(() => undefined); out.actions.push(`testing ${fresh.name} in the cloud on ${inCloud.provider_id} (free tier) — it cannot run beside ${champ.id} here yet`); }
       out.blocked.push(`${r.name}: ${fresh.name} would rank ${fresh.score.toFixed(1)} against ${champ.id}'s ${base.toFixed(1)}, but the two need ~${together.toFixed(0)} GB together, over the ${settings().memoryBudgetGb} GB memory budget — raise it to ${Math.ceil(together)} GB to let mux try it`); continue; }
     if (downloading()) continue;
+    // The disk is shared with every other project on the Mac: the autopilot leaves at least 60 GB free (the owner's
+    // disk ran down to 0.4 GB on 2026-11-11, with 33 GB of the autopilot's downloads that could not run or got no traffic)
+    const freeGb = (() => { try { const s = statfsSync(config.modelsDir); return (s.bavail * s.bsize) / 1024 ** 3; } catch { return 0; } })();
+    const floor = Math.max(AUTOPILOT_DISK_FLOOR_GB, settings().diskReserveGb);
+    if (freeGb - fresh.sizeGb < floor) { out.blocked.push(`${r.name}: download ${fresh.name} (${fresh.sizeGb.toFixed(1)} GB) — it would leave ${(freeGb - fresh.sizeGb).toFixed(0)} GB free, under the ${floor} GB the autopilot keeps`); continue; }
     try { await startDownload({ catalogId: fresh.id }); out.actions.push(`downloading ${fresh.name} (${fresh.sizeGb.toFixed(1)} GB) to try on ${r.name}: it would rank ${fresh.score.toFixed(1)} against ${base.toFixed(1)}`); }
     catch (e) { out.blocked.push(`${r.name}: download ${fresh.name} — ${(e as Error).message}`); }
   }

@@ -40,6 +40,7 @@ test("guardrails: a challenger that fails much more is rolled back at once, and 
   await tickExperiments();
   assert.equal(getExperiment(ex.id)!.status, "rolled_back");
   assert.equal(getRoute("agent")!.candidates[0], "champ"); // production as it was
+  assert.deepEqual(getRoute("agent")!.candidates, ["champ", "other"]); // and the challenger it added is gone again
   assert.ok((await search("experiment agent chall champ")).some((p) => /Experiment on agent/.test(p.title)));
 });
 
@@ -63,6 +64,16 @@ test("never on an embedding route, and never when the two do not fit in memory t
   model("big-a", "chat", 30); model("big-b", "chat", 25);
   upsertRoute({ name: "code", kind: "chat", strategy: "priority", candidates: ["big-a"] });
   assert.throws(() => startExperiment({ route: "code", challenger: "big-b" }), /memory budget/);
+});
+
+test("pinned models count: a big challenger does not fit beside a tiny champion when pinned models fill the budget", () => {
+  saveSettings({ memoryBudgetGb: 48 });
+  model("tiny", "chat", 1); model("omni-like", "chat", 19);
+  upsertModel({ id: "pinned-big", backend: "llamacpp", kind: "chat", size_bytes: 22 * GB, ctx: 8192, pinned: true });
+  upsertModel({ id: "pinned-more", backend: "llamacpp", kind: "chat", size_bytes: 8 * GB, ctx: 8192, pinned: true });
+  upsertRoute({ name: "fast", kind: "chat", strategy: "priority", candidates: ["tiny"] });
+  assert.throws(() => startExperiment({ route: "fast", challenger: "omni-like" }), /pinned pinned-big, pinned-more/);
+  upsertModel({ id: "pinned-big", pinned: false }); upsertModel({ id: "pinned-more", pinned: false });
 });
 
 test("autopilot: a route whose only model fails starts an A/B test with a reliable model of its family", async () => {
