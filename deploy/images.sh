@@ -106,7 +106,9 @@ $PLIST_ENV
 </dict></plist>
 PL
 launchctl bootout "gui/$(id -u)/com.mux.images" 2>/dev/null || true
-launchctl bootstrap "gui/$(id -u)" "$AGENTS/com.mux.images.plist"
+# bootout returns before the old agent is gone; bootstrapping too soon fails with "5: Input/output error"
+for i in $(seq 1 30); do launchctl print "gui/$(id -u)/com.mux.images" >/dev/null 2>&1 || break; sleep 1; done
+launchctl bootstrap "gui/$(id -u)" "$AGENTS/com.mux.images.plist" || { sleep 3; launchctl bootstrap "gui/$(id -u)" "$AGENTS/com.mux.images.plist"; }
 for i in $(seq 1 30); do curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" && break; sleep 1; done
 
 echo "→ model $MODEL_ID and routes image, image-edit in mux"
