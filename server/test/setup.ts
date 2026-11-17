@@ -10,3 +10,6 @@ process.env.MUX_DB ??= join(dir, "mux.db");
 process.env.MUX_PORT ??= "1";
 // Never fetch a model from a test: the autopilot would download gigabytes into the temporary home.
 process.env.MUX_NO_DOWNLOADS = "1";
+// Never touch the real screen from a test: on the Mac Studio Peekaboo is installed, and the computer tests would look,
+// click and start Peekaboo agent runs for real (2026-11-17: two tests failed there because they did).
+process.env.MUX_NO_COMPUTER = "1";
