@@ -1,4 +1,5 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { config } from "./config.js";
@@ -174,4 +175,86 @@ export function sweepScreenshots() {
     const m = /^see-(\d+)\.png$/.exec(f);
     if (m && Number(m[1]) < cutoff) rmSync(join(SHOTS, f), { force: true });
   }
+}
+
+/**
+ * Long jobs: one approved task that Peekaboo's own agent carries out step by step (look, act, look again) without an
+ * approval per click. Its model is this mux, through the custom provider `mux` that deploy/computer.sh sets up
+ * (~/.peekaboo/config.json): the tenant `computer`, kept on our machines (data_border own), so what is on the screen
+ * never reaches a cloud API. Peekaboo's agent never gets a shell tool; foreground input only when the owner allowed it
+ * for this task. One task at a time; each stops at its step cap or time limit, or when the owner stops it.
+ */
+export interface Task { id: string; task: string; state: "running" | "done" | "failed" | "stopped"; started: number; ended: number | null; steps: number; foreground: boolean; result: unknown; log: string }
+const tasks = new Map<string, Task & { proc?: ChildProcess }>();
+export const TASK_MODEL = process.env.MUX_COMPUTER_MODEL ?? "mux/agent";
+const TASK_MAX_MIN = 30;
+
+const view = (t: Task) => ({ id: t.id, task: t.task, state: t.state, started: new Date(t.started).toISOString(), minutes: Math.round(((t.ended ?? Date.now()) - t.started) / 6000) / 10, max_steps: t.steps, foreground: t.foreground, result: t.result, log_tail: t.log.slice(-1500) || undefined });
+
+/** The arguments of one task run; an error string when it is not well formed. */
+export function taskArgs(a: Record<string, unknown>): string[] | string {
+  const task = str(a.task);
+  if (task.length < 8) return "task needs a clear instruction (what to do, in which app, and when it is done)";
+  if (task.length > 2000) return "task is too long (2000 characters at most)";
+  const steps = Math.max(1, Math.min(60, Number(a.max_steps) || 25));
+  return ["agent", task, "--model", TASK_MODEL, "--max-steps", String(steps), "--quiet", "--json", ...(a.allow_foreground ? ["--allow-foreground"] : [])];
+}
+
+/** computer_task: start one approved task; returns at once with its id (computer_task_status follows it). */
+export function startTask(a: Record<string, unknown>) {
+  const bin = peekabooBin();
+  if (!bin) return { ok: false, error: "Peekaboo is not installed on this Mac: run ./deploy/computer.sh" };
+  const busy = [...tasks.values()].find((t) => t.state === "running");
+  if (busy) return { ok: false, error: `a task is already running (${busy.id}: ${busy.task.slice(0, 80)}); wait for it or stop it` };
+  const args = taskArgs(a);
+  if (typeof args === "string") return { ok: false, error: args };
+  const t: Task & { proc?: ChildProcess } = { id: `task_${randomBytes(4).toString("hex")}`, task: str(a.task), state: "running", started: Date.now(), ended: null, steps: Number(args[args.indexOf("--max-steps") + 1]), foreground: !!a.allow_foreground, result: null, log: "" };
+  const proc = spawn(bin, args, { env: { ...process.env, PATH: `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH ?? ""}` }, stdio: ["ignore", "pipe", "pipe"] });
+  t.proc = proc;
+  let out = "";
+  proc.stdout.on("data", (d: Buffer) => { if (out.length < MAX_OUT) out += d.toString(); });
+  proc.stderr.on("data", (d: Buffer) => { t.log = (t.log + d.toString()).slice(-20_000); });
+  const limit = setTimeout(() => { if (t.state === "running") { t.state = "stopped"; t.result = { error: `stopped after ${TASK_MAX_MIN} minutes` }; proc.kill("SIGTERM"); } }, TASK_MAX_MIN * 60_000);
+  proc.on("close", (code) => {
+    clearTimeout(limit);
+    t.ended = Date.now();
+    delete t.proc;
+    let parsed: unknown = out.trim();
+    try { parsed = JSON.parse(out); } catch { /* text */ }
+    if (t.state === "running") t.state = code === 0 ? "done" : "failed";
+    if (t.result === null) t.result = compactTaskResult(parsed);
+  });
+  tasks.set(t.id, t);
+  for (const [id, old] of tasks) if (old.state !== "running" && tasks.size > 20) tasks.delete(id);
+  return { ok: true, ...view(t), next: "Follow it with computer_task_status; it runs on its own until done, its step cap, or 30 minutes." };
+}
+
+/** What a model needs from Peekaboo's agent result: success, its final answer, the error, the session. */
+export function compactTaskResult(parsed: unknown): unknown {
+  if (!parsed || typeof parsed !== "object") return parsed;
+  const d = parsed as Record<string, unknown>;
+  const r = (d.result ?? d.data ?? {}) as Record<string, unknown>;
+  return {
+    success: d.success ?? null,
+    answer: r.content ?? r.finalAnswer ?? r.summary ?? r.message ?? undefined,
+    tool_calls: Array.isArray(r.toolCalls) ? (r.toolCalls as unknown[]).length : undefined,
+    session: r.sessionId ?? d.sessionId ?? (d.data as Record<string, unknown> | undefined)?.sessionId ?? undefined,
+    error: d.error ?? undefined,
+  };
+}
+
+/** computer_task_status: one task (by id), or the latest few. */
+export function taskStatus(a: Record<string, unknown>) {
+  if (str(a.id)) { const t = tasks.get(str(a.id)); return t ? view(t) : { error: `no task ${a.id}` }; }
+  return { tasks: [...tasks.values()].slice(-5).reverse().map(view) };
+}
+
+/** computer_task_stop: stop a running task (it runs nothing more; what it already did stays done). */
+export function stopTask(a: Record<string, unknown>) {
+  const t = tasks.get(str(a.id)) ?? [...tasks.values()].find((x) => x.state === "running");
+  if (!t || t.state !== "running") return { ok: false, error: "no running task" };
+  t.state = "stopped";
+  t.result = { stopped: "by the owner" };
+  t.proc?.kill("SIGTERM");
+  return { ok: true, ...view(t) };
 }

@@ -353,7 +353,8 @@ Bodies up to 50 / 150 MB; per-tenant job ids; photos never logged; presence as f
 The Mac for Ask mux: `./deploy/computer.sh` installs Peekaboo (CLI and the signed Peekaboo.app, whose Bridge holds
 the Screen Recording and Accessibility grants) so Ask mux can look at the screen and apps (`computer_look`,
 `computer_list`, at once) and act in them (`computer_act`, each action approved in the dashboard). Only the owner's Ask
-mux gets these tools.
+mux gets these tools. A longer job (`computer_task`) is approved once as a whole and carried out by Peekaboo's agent on
+this mux's own models (tenant `computer`, kept on our machines), at most 60 turns and 30 minutes.
 
 Danish speech: `./deploy/speech-da.sh` registers Record's Danish engines on this Mac (Record's `speech-da` service,
 :8798) as `roest-v3` (CoRal's Røst v3, a Danish Whisper large-v3), `hviske-v5` and `whisper-turbo`, and the route

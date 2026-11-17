@@ -47,3 +47,23 @@ test("computer: looking runs at once, acting waits for the owner; only Ask mux g
   const out = JSON.parse(await runTool({} as never, call, () => undefined, "assistant"));
   assert.match(out.error, /Peekaboo is not installed|gateway/);
 });
+
+test("computer tasks: one approved instruction becomes one Peekaboo agent run on mux's own models, capped", async () => {
+  const { taskArgs, compactTaskResult, TASK_MODEL, startTask, taskStatus, stopTask } = await import("../src/computer.js");
+  assert.equal(TASK_MODEL, "mux/agent");
+  assert.deepEqual(taskArgs({ task: "In Numbers, export the open sheet as PDF to Downloads" }), ["agent", "In Numbers, export the open sheet as PDF to Downloads", "--model", "mux/agent", "--max-steps", "25", "--quiet", "--json"]);
+  assert.deepEqual((taskArgs({ task: "Open Notes and write a short line", max_steps: 500, allow_foreground: true }) as string[]).slice(3), ["mux/agent", "--max-steps", "60", "--quiet", "--json", "--allow-foreground"]);
+  assert.match(String(taskArgs({ task: "go" })), /clear instruction/);
+  assert.deepEqual(compactTaskResult({ success: true, result: { content: "Exported to ~/Downloads/Sheet.pdf", toolCalls: [1, 2, 3], sessionId: "s1" } }), { success: true, answer: "Exported to ~/Downloads/Sheet.pdf", tool_calls: 3, session: "s1", error: undefined });
+  // Without Peekaboo (Linux here): refused, nothing started
+  assert.match(String((startTask({ task: "Open Notes and write a line" }) as { error: string }).error), /not installed/);
+  assert.deepEqual(taskStatus({}), { tasks: [] });
+  assert.equal(stopTask({}).ok, false);
+});
+
+test("computer tasks: starting one waits for the owner; following and stopping one do not", async () => {
+  const { isChange } = await import("../src/assistant.js");
+  assert.equal(isChange("computer_task", { task: "x" }), true);
+  assert.equal(isChange("computer_task_status", {}), false);
+  assert.equal(isChange("computer_task_stop", {}), false);
+});

@@ -8,7 +8,10 @@
 #  2. this Mac's mux: main, build, restart (Ask mux gets computer_look, computer_list and computer_act)
 #  3. permissions: System Settings opens on Screen Recording and Accessibility; a person at the Mac switches on
 #     Peekaboo in both (macOS lets no script do it). It waits up to 15 minutes for them.
-#  4. a check from launchd, as mux runs: one look at the frontmost window, and mux's GET /api/admin/computer
+#  4. long jobs (computer_task): this mux as Peekaboo's model provider `mux` — a local tenant `computer` that stays on
+#     our machines (data_border own), its key in Peekaboo's owner-only credentials file, tool calling on for the routes
+#     agent and vision — and a dry run of `peekaboo agent --model mux/agent`
+#  5. a check from launchd, as mux runs: one look at the frontmost window, and mux's GET /api/admin/computer
 # Then in the dashboard: Ask mux "what is on my screen?" — looking runs at once, every action waits for approval.
 set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -49,7 +52,7 @@ cd "$ROOT"
 . "$MUX_HOME/mux.env"
 LOCAL="http://127.0.0.1:${MUX_PORT:-7070}"
 
-step "1/4 Peekaboo"
+step "1/5 Peekaboo"
 MAJOR=$(sw_vers -productVersion | cut -d. -f1)
 [ "$MAJOR" -ge 15 ] || fail "Peekaboo needs macOS 15 or later; this Mac runs $(sw_vers -productVersion)"
 command -v peekaboo >/dev/null || brew install openclaw/tap/peekaboo || fail "brew install openclaw/tap/peekaboo"
@@ -76,7 +79,7 @@ open -g -a /Applications/Peekaboo.app
 sleep 3
 echo "✓ Peekaboo.app runs (menu bar). Switch on Launch at Login in its Settings so it is there after a restart."
 
-step "2/4 mux: code, build, restart"
+step "2/5 mux: code, build, restart"
 git fetch -q origin main
 git merge-base --is-ancestor origin/main HEAD 2>/dev/null || git merge --ff-only origin/main || fail "this working tree cannot fast-forward to main"
 git log --oneline -1
@@ -86,7 +89,7 @@ sleep 5
 i=0; until curl -sf -o /dev/null "$LOCAL/health"; do i=$((i + 5)); [ $i -lt 180 ] || fail "mux did not come back"; sleep 5; done
 echo "✓ mux is back"
 
-step "3/4 permissions: Screen Recording and Accessibility for Peekaboo"
+step "3/5 permissions: Screen Recording and Accessibility for Peekaboo"
 granted() { peekaboo permissions status 2>/dev/null | grep -iE "screen recording" | grep -qiE "granted|enabled|yes|✓|true" && peekaboo permissions status 2>/dev/null | grep -iE "accessibility" | grep -qiE "granted|enabled|yes|✓|true"; }
 if ! granted; then
   peekaboo permissions request screen-recording >/dev/null 2>&1 || true
@@ -101,12 +104,45 @@ fi
 peekaboo permissions status --all-sources 2>&1 | sed 's/^/  /'
 echo "✓ permissions granted"
 
-step "4/4 a check, from launchd as mux runs"
+step "4/5 long jobs: this mux as Peekaboo's model provider"
+mux() { curl -sf -X "$1" -H "Authorization: Bearer $MUX_ADMIN_TOKEN" -H "content-type: application/json" ${3:+-d "$3"} "$LOCAL/api/admin$2"; }
+if peekaboo config provider test mux >/dev/null 2>&1; then
+  echo "  provider mux already answers"
+else
+  mux PUT /tenants/computer '{"name":"computer (Peekaboo on this Mac)","description":"Ask mux long jobs: what is on the screen stays on our machines","status":"active","default_route":"agent","data_border":"own"}' >/dev/null || fail "making the tenant computer"
+  KEY=$(mux POST /tenants/computer/keys '{"name":"peekaboo"}' | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).key))') || fail "making the computer key"
+  printf '%s\n' "$KEY" | peekaboo config credential set MUX_COMPUTER_KEY --credential-stdin --no-input >/dev/null || fail "storing the key in ~/.peekaboo/credentials"
+  KEY=""
+  peekaboo config provider add mux --type openai --name "mux (this Mac)" --base-url "$LOCAL/v1" --credential-ref '${MUX_COMPUTER_KEY}' --force >/dev/null || fail "peekaboo config provider add mux"
+fi
+peekaboo config provider models mux --discover --save >/dev/null 2>&1 || true
+CFG=$(peekaboo config edit --print-path 2>/dev/null | tail -1); CFG=${CFG:-$HOME/.peekaboo/config.json}
+# Discovered models are saved without tool calling; mux's agent and vision routes do call tools
+node -e '
+  const fs = require("fs"); const p = process.argv[1]; const want = new Set(["agent", "vision", "auto"]);
+  const j = JSON.parse(fs.readFileSync(p, "utf8").replace(/^\s*\/\/.*$/gm, ""));
+  let n = 0;
+  const inMux = (o, under) => {
+    if (!o || typeof o !== "object") return;
+    for (const [k, v] of Object.entries(o)) {
+      const here = under || k === "mux" || (v && typeof v === "object" && (v.id === "mux" || v.providerId === "mux"));
+      if (here && v && typeof v === "object" && "supportsTools" in v && (want.has(k) || want.has(v.id) || want.has(v.name) || want.has(v.model))) { v.supportsTools = true; n++; }
+      inMux(v, here);
+    }
+  };
+  inMux(j, false);
+  if (!n) { console.error("  no mux models with supportsTools in " + p + ": set supportsTools true for agent by hand"); process.exit(1); }
+  fs.writeFileSync(p, JSON.stringify(j, null, 2)); console.log("  tool calling on for " + n + " mux models in " + p);' "$CFG" || echo "  (long jobs need that; the rest works without it)"
+peekaboo config provider test mux >/dev/null 2>&1 && echo "✓ provider mux answers" || echo "✗ provider mux does not answer: peekaboo config provider test mux"
+peekaboo agent --dry-run "Open Notes and read the title of the first note" --model mux/agent --json >/dev/null 2>&1 && echo "✓ peekaboo agent accepts mux/agent" || echo "✗ peekaboo agent refuses mux/agent: peekaboo agent --dry-run \"x\" --model mux/agent"
+
+step "5/5 a check, from launchd as mux runs"
 SEE=$(peekaboo see --mode frontmost --json --path "$MUX_HOME/logs/computer-test.png" 2>&1) || true
 printf %s "$SEE" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const d=JSON.parse(s);const b=d.data??d;const n=(b.ui_elements??b.elements??[]).length;if(!(b.snapshot_id??b.snapshotId))throw new Error(JSON.stringify(d).slice(0,300));console.log("  saw "+(b.application_name??"the frontmost window")+": "+n+" elements, snapshot "+(b.snapshot_id??b.snapshotId))}catch(e){console.error("  "+e.message);process.exit(1)}})' \
   || fail "Peekaboo could not look at the screen from launchd (see above; Peekaboo.app must be running)"
 STATUS=$(curl -sf -H "Authorization: Bearer $MUX_ADMIN_TOKEN" "$LOCAL/api/admin/computer") || fail "mux has no /api/admin/computer: is this mux on main?"
 printf %s "$STATUS" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const d=JSON.parse(s);if(!d.available){console.error("  mux says: "+(d.reason||JSON.stringify(d)));process.exit(1)}console.log("  mux: computer tools on, "+(typeof d.version==="string"?d.version.trim():"Peekaboo"))})' \
   || fail "mux does not see Peekaboo"
-echo "✓ Ask mux can see and use this Mac: ask it \"what is on my screen?\" — every action waits for your approval"
+echo "✓ Ask mux can see and use this Mac: ask it \"what is on my screen?\" — every action waits for your approval,"
+echo "  and a longer job (computer_task) waits for one approval for the whole task"
 notify "Ask mux can now see and use this Mac"
