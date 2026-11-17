@@ -97,8 +97,9 @@ if [ ! -f "$DIT/model-00006-of-00006.safetensors" ] || [ ! -f "$ASSETS/Wan2.1_VA
   SPARE_GB=${MUX_VIDEO_CAMERA_SPARE_GB:-20}   # what must stay free after the weights (the owner ran it with 12 on 2026-11-17)
   [ "$FREE_GB" -ge $((NEED_GB + SPARE_GB)) ] || { echo "only $FREE_GB GB free; $((NEED_GB + SPARE_GB)) GB wanted ($NEED_GB GB of weights, $SPARE_GB GB left over; MUX_VIDEO_CAMERA_SPARE_GB lowers it)"; exit 1; }
 fi
-[ -f "$DIT/model-00006-of-00006.safetensors" ] || "$VENV/bin/hf" download "$DIT_REPO" --revision "$DIT_REV" --local-dir "$DIT" \
-  --include "model-*.safetensors" "model.safetensors.index.json" "README.md"
+# the files by name: hf's --include takes one pattern, and further words after it are read as file names
+[ -f "$DIT/model-00006-of-00006.safetensors" ] || "$VENV/bin/hf" download "$DIT_REPO" \
+  model-0000{1,2,3,4,5,6}-of-00006.safetensors model.safetensors.index.json README.md --revision "$DIT_REV" --local-dir "$DIT"
 [ -f "$ASSETS/Wan2.1_VAE.pth" ] || "$VENV/bin/hf" download "$ASSETS_REPO" Wan2.1_VAE.pth LICENSE.txt --revision "$ASSETS_REV" --local-dir "$ASSETS"
 T5_ENV=""
 if [ -d "$VACE/text_encoder" ]; then
