@@ -10,6 +10,9 @@
 # server/images/image_server.py runs on 127.0.0.1:8312 (com.mux.images) and answers /v1/images/generations and
 # /v1/images/edits. It becomes the model `flux2-klein-4b` on the routes `image` and `image-edit`, which are the
 # names LBS Studio asks for; a gateway that has this Mac as a node gets it as mac-studio/flux2-klein-4b.
+# When FLUX 3 Image Klein's weights are on disk (deploy/image-edit-hq.sh fetches them), the same server also serves it
+# as `flux3-image-klein-q8` on the route `image-edit-hq` (identity edits: Thread's try-on), one model in memory at a
+# time; docs/image-edit.md.
 set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MUX_HOME="$HOME/.mux"
@@ -74,6 +77,10 @@ else
   NAME="FLUX.2 [klein] 4B (images)"
 fi
 env HF_HUB_CACHE="$HF_CACHE" $IMAGE_ENV "$VENV/bin/python" "$ROOT/server/images/image_server.py" --warm
+HQ_ID=flux3-image-klein-q8
+HQ_DIR="$MUX_HOME/models/flux-3-image-klein-mflux-q8"
+HQ=; [ -f "$HQ_DIR/transformer/0.safetensors" ] && HQ=1
+[ -z "$HQ" ] || IMAGE_ENV="$IMAGE_ENV MUX_IMAGE_HQ_MODEL=$HQ_ID MUX_IMAGE_HQ_BASE_MODEL=flux3-image-klein MUX_IMAGE_HQ_MODEL_PATH=$HQ_DIR"
 PLIST_ENV=$(for kv in $IMAGE_ENV; do printf '    <key>%s</key><string>%s</string>\n' "${kv%%=*}" "${kv#*=}"; done)
 
 echo "→ launchd agent com.mux.images on :$PORT"
@@ -107,6 +114,13 @@ MODEL=$(node -e 'console.log(JSON.stringify({id:process.argv[1],display_name:pro
 api POST /models "$MODEL" >/dev/null 2>&1 || api PATCH "/models/$MODEL_ID" "$MODEL" >/dev/null
 api PUT /routes/image '{"kind":"image","strategy":"priority","candidates":["'$MODEL_ID'"]}' >/dev/null
 api PUT /routes/image-edit '{"kind":"image","strategy":"priority","candidates":["'$MODEL_ID'"]}' >/dev/null
+if [ -n "$HQ" ]; then
+  echo "→ model $HQ_ID and route image-edit-hq ($HQ_ID, then $MODEL_ID if it cannot)"
+  HQ_NOTES="mflux, FLUX 3 Image Klein (Black Forest Labs, FLUX Kommunity License v1.0: non-commercial use; we are research) pre-quantised to 8 bits (mflux-community/flux-3-image-klein-mflux-q8, 9.9 GB in $HQ_DIR): identity edits from up to 10 references in 16 steps, on the same server as $MODEL_ID (one in memory at a time); docs/image-edit.md. Peak ~15 GB."
+  HQ_MODEL=$(node -e 'console.log(JSON.stringify({id:process.argv[1],display_name:"FLUX 3 Image Klein Q8 (identity edits)",kind:"image",backend:"external",base_url:"http://127.0.0.1:"+process.argv[2]+"/v1",upstream_model:process.argv[1],size_bytes:16*1024**3,caps:{quality:9,speed:4},notes:process.argv[3]}))' "$HQ_ID" "$PORT" "$HQ_NOTES")
+  api POST /models "$HQ_MODEL" >/dev/null 2>&1 || api PATCH "/models/$HQ_ID" "$HQ_MODEL" >/dev/null
+  api PUT /routes/image-edit-hq '{"kind":"image","strategy":"priority","candidates":["'$HQ_ID'","'$MODEL_ID'"]}' >/dev/null
+fi
 
 echo "→ a test image, straight from the image server (512x512, the first one loads the model)"
 curl -sf -m 600 -H "content-type: application/json" -d '{"prompt":"A red bicycle leaning on a brick wall, soft morning light","size":"512x512","seed":7}' \

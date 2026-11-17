@@ -1,5 +1,9 @@
 # FLUX 3 Image Klein on the Mux Mac Studio
 
+> **Superseded (2026-11-17):** FLUX 3 Image Klein is served as the second model of the image server on the route
+> `image-edit-hq` (`docs/image-edit.md`, `deploy/image-edit-hq.sh`). This plan was never installed, and its port 8314
+> is now the measure server's. Do not run `deploy/flux3.sh`.
+
 This setup is for personal, non-commercial use. FLUX 3 Image Klein is open-weight
 under the FLUX Kommunity License v1.0 (not Apache-2.0). Read the original
 license and model card at https://huggingface.co/black-forest-labs/flux-3-image-klein

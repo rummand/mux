@@ -96,3 +96,47 @@ test("audio and images: a model that answers 404 (gone where it was registered) 
     gone.close();
   }
 });
+
+test("images: image-edit-hq reaches the second model by its own name, and the fast model when it fails", async () => {
+  const { upsertModel, upsertRoute } = await import("../src/models.js");
+  const { upsertTenant, createKey } = await import("../src/tenants.js");
+  const { registerGateway } = await import("../src/api/gateway.js");
+  // One image server answering for both models (server/images/image_server.py with MUX_IMAGE_HQ_MODEL): the second
+  // one fails here with a 500 (as an out-of-memory would), so the route falls to the fast one.
+  const seen: string[] = [];
+  const srv = createServer(async (req: IncomingMessage, res) => {
+    for await (const _ of req) { /* drain */ }
+    seen.push(req.url ?? "");
+    res.setHeader("content-type", "application/json");
+    if ((req.url ?? "").includes("flux3-image-klein-q8") && seen.length === 2) { res.statusCode = 500; res.end('{"error":{"message":"boom"}}'); return; }
+    res.end(JSON.stringify({ created: 1, data: [{ b64_json: "cG5n" }] }));
+  });
+  await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+  const url = `http://127.0.0.1:${(srv.address() as AddressInfo).port}/v1`;
+  upsertModel({ id: "hq-test", backend: "external", kind: "image", base_url: url, upstream_model: "flux3-image-klein-q8" });
+  upsertModel({ id: "fast-test", backend: "external", kind: "image", base_url: url, upstream_model: "flux2-klein-4b-q4" });
+  upsertRoute({ name: "image-edit-hq", kind: "image", strategy: "priority", candidates: ["hq-test", "fast-test"] });
+  upsertTenant({ id: "hq-tenant", name: "hq test" });
+  const { key } = createKey("hq-tenant", "test");
+  const app = Fastify({ bodyLimit: 64 * 1024 * 1024 });
+  registerGateway(app);
+  const b = "hq-1";
+  const field = (n: string, v: string) => `--${b}\r\nContent-Disposition: form-data; name="${n}"\r\n\r\n${v}\r\n`;
+  const img = (i: number) => `--${b}\r\nContent-Disposition: form-data; name="image[]"; filename="${i}.png"\r\nContent-Type: image/png\r\n\r\npng${i}\r\n`;
+  const body = Buffer.from(field("model", "image-edit-hq") + field("prompt", "The person from image 1 in the garments of images 2-4") + img(1) + img(2) + img(3) + img(4) + `--${b}--\r\n`);
+  const send = () => app.inject({ method: "POST", url: "/v1/images/edits", headers: { authorization: `Bearer ${key}`, "content-type": `multipart/form-data; boundary=${b}` }, payload: body });
+  try {
+    const ok = await send();
+    assert.equal(ok.statusCode, 200, ok.body);
+    assert.equal(ok.headers["x-mux-route"], "image-edit-hq");
+    assert.equal(ok.headers["x-mux-model"], "hq-test");
+    assert.equal(seen[0], "/v1/images/edits?model=flux3-image-klein-q8");
+    const fell = await send();
+    assert.equal(fell.statusCode, 200, fell.body);
+    assert.equal(fell.headers["x-mux-model"], "fast-test");
+    assert.equal(seen[2], "/v1/images/edits?model=flux2-klein-4b-q4");
+  } finally {
+    await app.close();
+    srv.close();
+  }
+});

@@ -9,6 +9,13 @@ its ~9 GB (8-bit) go back to the chat models. MLX's buffer cache is capped (MUX_
 every request: uncapped, it grew to 71 GB (2026-11-17). One image at a time: the GPU does one well, not two at half speed.
 Started by deploy/images.sh as launchd agent com.mux.images on 127.0.0.1:8312. Images are never written to disk.
 
+A second, stronger model for identity edits (Thread's try-on: a person and garments into one picture), on the same
+server so that only one model is ever in memory, under the same lock, cache cap and idle let-go: MUX_IMAGE_HQ_MODEL
+(the name it answers as, e.g. flux3-image-klein-q8), MUX_IMAGE_HQ_BASE_MODEL (its mflux architecture,
+flux3-image-klein), MUX_IMAGE_HQ_MODEL_PATH (its pre-quantised weights, deploy/image-edit-hq.sh), MUX_IMAGE_HQ_STEPS
+(16, the distilled checkpoint's own). A request whose `model` is that name, `image-edit-hq` or `image-hq` gets it;
+every other request gets the fast model, as before. docs/image-edit.md has the measurements and the licence.
+
 A pre-quantised local copy instead of the Hugging Face cache: MUX_IMAGE_MODEL_PATH (a directory of mflux weights, e.g.
 ~/.mux/models/flux2-klein-4b-mflux-q4, 4.6 GB, from deploy/images.sh --q4), MUX_IMAGE_BASE_MODEL the architecture it
 is (flux2-klein-4b), MUX_IMAGE_MODEL the name it answers as (flux2-klein-4b-q4). Its quantisation is in the weights.
@@ -38,6 +45,37 @@ MIN_FREE_GB = float(os.environ.get("MUX_IMAGES_MIN_FREE_GB", "6"))
 # whenever a pipeline is let go.
 CACHE_GB = float(os.environ.get("MUX_IMAGES_CACHE_GB", "2"))
 
+# The second model (none unless MUX_IMAGE_HQ_MODEL is set). FLUX 3 Image Klein's distilled checkpoint runs 16 steps.
+HQ_MODEL = os.environ.get("MUX_IMAGE_HQ_MODEL", "").strip()
+HQ_BASE_MODEL = os.environ.get("MUX_IMAGE_HQ_BASE_MODEL", "flux3-image-klein")
+HQ_MODEL_PATH = os.path.expanduser(os.environ.get("MUX_IMAGE_HQ_MODEL_PATH", "")) or None
+HQ_STEPS = int(os.environ.get("MUX_IMAGE_HQ_STEPS", "16"))
+HQ_NAMES = {"image-edit-hq", "image-hq"} | ({HQ_MODEL} if HQ_MODEL else set())
+# Free memory the second model needs before it loads (its peak while it works, measured in docs/image-edit.md);
+# once it is in memory, MIN_FREE_GB as for the fast one.
+HQ_MIN_FREE_GB = float(os.environ.get("MUX_IMAGE_HQ_MIN_FREE_GB", "24"))
+# Every input image after the first (the garments of a try-on; the first is the person or the picture being edited) is
+# made at most this many megapixels for the second model: each image is tokens the transformer attends over at every
+# step, so three 1024x1024 garments made a try-on 4x slower (310 s against 77 s, 8 steps, the same look; docs/image-edit.md).
+HQ_REF_MP = float(os.environ.get("MUX_IMAGE_HQ_REF_MP", "0.26"))
+# At most this many input images are used (FLUX 3 Image Klein takes up to 10; klein 4B is given the same).
+MAX_IMAGES = 10
+
+
+def family(base):
+    """mflux's model family for an architecture name: flux3 (FLUX 3 Image Klein) or flux2 (FLUX.2 klein)."""
+    return "flux3" if str(base).startswith(("flux3", "flux-3")) else "flux2"
+
+
+SPECS = {MODEL: {"base": BASE_MODEL, "path": MODEL_PATH, "quantize": QUANTIZE, "steps": STEPS}}
+if HQ_MODEL:
+    SPECS[HQ_MODEL] = {"base": HQ_BASE_MODEL, "path": HQ_MODEL_PATH, "quantize": None if HQ_MODEL_PATH else 8, "steps": HQ_STEPS}
+
+
+def pick(requested):
+    """The model a request gets: the second one when it asks for it by name, else the fast one (as before)."""
+    return HQ_MODEL if HQ_MODEL and str(requested or "").strip() in HQ_NAMES else MODEL
+
 
 def available_gb():
     """What macOS could hand out now (free, inactive, purgeable, speculative pages); None where it cannot be read."""
@@ -53,6 +91,7 @@ def available_gb():
 
 _model = None
 _model_kind = None  # "edit" or "txt2img": mflux 0.24's edit pipeline needs an input image, so text to image has its own
+_model_name = None  # which of SPECS is in memory
 _last_used = 0.0
 _gpu = threading.Lock()  # one generation at a time; also guards loading and letting go
 # MLX keeps its default stream per thread: a model loaded on one thread fails on another with "There is no
@@ -92,34 +131,49 @@ def empty_cache():
     return seen
 
 
-def model(kind="txt2img"):
-    """The pipeline for this kind, loaded once; the other kind's is let go first, so only one is ever in memory."""
-    global _model, _model_kind
-    if _model is not None and _model_kind != kind:
+def model(kind="txt2img", name=None):
+    """The pipeline for this model and kind, loaded once; any other is let go first, so only one is ever in memory."""
+    global _model, _model_kind, _model_name
+    name = name or MODEL
+    if _model is not None and (_model_kind, _model_name) != (kind, name):
         _model = None
         gc.collect()
         empty_cache()   # else the other pipeline's weights stay in MLX's cache
     if _model is None:
         from mflux.models.common.config import ModelConfig
-        from mflux.models.flux2.variants import Flux2Klein, Flux2KleinEdit
+        spec = SPECS[name]
+        if family(spec["base"]) == "flux3":
+            from mflux.models.flux3.variants import Flux3Klein as Txt2Img, Flux3KleinEdit as Edit
+        else:
+            from mflux.models.flux2.variants import Flux2Klein as Txt2Img, Flux2KleinEdit as Edit
         t = time.time()
-        cls = Flux2KleinEdit if kind == "edit" else Flux2Klein
-        _model = cls(quantize=QUANTIZE, model_path=MODEL_PATH, model_config=ModelConfig.from_name(BASE_MODEL))
-        _model_kind = kind
-        print(f"loaded {MODEL} {kind} ({MODEL_PATH or f'q{QUANTIZE or 'bf16'}'}) in {time.time() - t:.0f} s", file=sys.stderr, flush=True)
+        cls = Edit if kind == "edit" else Txt2Img
+        _model = cls(quantize=spec["quantize"], model_path=spec["path"], model_config=ModelConfig.from_name(spec["base"]))
+        _model_kind, _model_name = kind, name
+        how = spec["path"] or f"q{spec['quantize'] or 'bf16'}"
+        print(f"loaded {name} {kind} ({how}) in {time.time() - t:.0f} s", file=sys.stderr, flush=True)
     return _model
 
 
+def forget_prompts():
+    """mflux keeps every prompt's text embeddings (`prompt_cache`) for the life of the pipeline: memory that only grows,
+    and prompts kept after their request. Dropped after every request."""
+    cache = getattr(_model, "prompt_cache", None)
+    if isinstance(cache, dict):
+        cache.clear()
+
+
 def let_go():
-    global _model
+    global _model, _model_name
     _model = None
+    _model_name = None
     gc.collect()
     try:
         import mlx.core as mx
         mx.clear_cache()
     except Exception:  # noqa: BLE001 – an older mlx; the memory still goes when Python frees it
         pass
-    print(f"let go of {MODEL} after {IDLE_MIN:g} idle minutes", file=sys.stderr, flush=True)
+    print(f"let go of the image model after {IDLE_MIN:g} idle minutes", file=sys.stderr, flush=True)
 
 
 def idle_watch():
@@ -152,9 +206,24 @@ def edit_dims(paths):
     return dims(f"{round(w * scale)}x{round(h * scale)}")
 
 
-def _generate_on_mlx(prompt, size, n, seed, steps, images):
+def shrink_refs(paths, max_mp):
+    """Each image after the first made at most max_mp megapixels (in place, aspect kept); the first is left as it came."""
+    from PIL import Image
+    for p in paths[1:]:
+        with Image.open(p) as im:
+            w, h = im.size
+            if w * h <= max_mp * 1e6:
+                continue
+            k = (max_mp * 1e6 / (w * h)) ** 0.5
+            small = im.convert("RGBA" if im.mode in ("RGBA", "LA", "P") else "RGB").resize((max(16, int(w * k)), max(16, int(h * k))), Image.LANCZOS)
+        small.save(p, format="PNG")
+
+
+def _generate_on_mlx(prompt, size, n, seed, steps, images, name=None):
     out = []
-    m = model("edit" if images else "txt2img")
+    if images and name == HQ_MODEL and HQ_REF_MP > 0:
+        shrink_refs(images, HQ_REF_MP)
+    m = model("edit" if images else "txt2img", name)
     w, h = edit_dims(images) if images and size in (None, "", "auto") else dims(size)
     for i in range(n):
         s = (seed + i) if seed is not None else random.randrange(2**31)
@@ -166,16 +235,23 @@ def _generate_on_mlx(prompt, size, n, seed, steps, images):
     return out
 
 
-def generate(prompt, size, n, seed, steps, images=None):
+def _after_request():
+    forget_prompts()
+    return empty_cache()
+
+
+def generate(prompt, size, n, seed, steps, images=None, name=None):
     global _last_used
     with _gpu:
+        t = time.time()
         try:
-            out = on_mlx(_generate_on_mlx, prompt, size, n, seed, steps, images)
+            out = on_mlx(_generate_on_mlx, prompt, size, n, seed, steps, images, name)
         finally:
-            seen = on_mlx(empty_cache)
+            seen = on_mlx(_after_request)
             _last_used = time.time()
             if seen:  # sizes only; never a prompt or an image
-                print(f"request done: active {seen[0]:.1f} GB, cache {seen[1]:.1f} GB emptied, peak {seen[2]:.1f} GB", file=sys.stderr, flush=True)
+                print(f"request done ({name or MODEL}, {len(images or [])} images, {steps} steps, {time.time() - t:.1f} s): active {seen[0]:.1f} GB, "
+                      f"cache {seen[1]:.1f} GB emptied, peak {seen[2]:.1f} GB", file=sys.stderr, flush=True)
     return out
 
 
@@ -210,7 +286,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path.rstrip("/") in ("", "/health", "/v1/models"):
-            return self._send(200, {"object": "list", "data": [{"id": MODEL, "object": "model", "loaded": _model is not None}]})
+            return self._send(200, {"object": "list", "data": [
+                {"id": n, "object": "model", "loaded": _model is not None and _model_name == n, "steps": SPECS[n]["steps"],
+                 **({"need_gb": HQ_MIN_FREE_GB} if n == HQ_MODEL and _model_name != n else {})} for n in SPECS]})
         self._error(404, "not found")
 
     def do_POST(self):
@@ -219,9 +297,6 @@ class Handler(BaseHTTPRequestHandler):
         if length > MAX_BODY:
             return self._error(413, f"at most {MAX_BODY // 1024 // 1024} MB")
         raw = self.rfile.read(length)
-        have = available_gb() if MIN_FREE_GB else None
-        if have is not None and have < MIN_FREE_GB:
-            return self._error(503, f"only {have:.1f} GB free on this Mac right now; an image needs {MIN_FREE_GB:g} GB: try again in a minute")
         tmp = []
         try:
             if path.endswith("/images/generations"):
@@ -234,7 +309,7 @@ class Handler(BaseHTTPRequestHandler):
                 b, data = form(raw, self.headers.get("content-type") or "")
                 if not data:
                     return self._error(400, "an image is required")
-                for d in data[:10]:
+                for d in data[:MAX_IMAGES]:
                     f = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
                     f.write(d)
                     f.close()
@@ -245,11 +320,16 @@ class Handler(BaseHTTPRequestHandler):
             prompt = str(b.get("prompt") or "").strip()
             if not prompt:
                 return self._error(400, "prompt is required")
+            name = pick(b.get("model") or (self.path.split("model=", 1)[1].split("&")[0] if "model=" in self.path else ""))
+            need = HQ_MIN_FREE_GB if name == HQ_MODEL and _model_name != HQ_MODEL else MIN_FREE_GB
+            have = available_gb() if need else None
+            if have is not None and have < need:
+                return self._error(503, f"only {have:.1f} GB free on this Mac right now; {name} needs {need:g} GB: try again in a minute")
             n = max(1, min(MAX_N, int(b.get("n") or 1)))
             seed = int(b["seed"]) if str(b.get("seed", "")).strip().lstrip("-").isdigit() else None
-            steps = max(1, min(50, int(b.get("steps") or STEPS)))
-            data = generate(prompt, b.get("size"), n, seed, steps, images)
-            self._send(200, {"created": int(time.time()), "model": MODEL, "data": data})
+            steps = max(1, min(50, int(b.get("steps") or SPECS[name]["steps"])))
+            data = generate(prompt, b.get("size"), n, seed, steps, images, name)
+            self._send(200, {"created": int(time.time()), "model": name, "data": data})
         except Exception as e:  # noqa: BLE001 – the caller gets the reason, mux falls through to the next model
             self._error(500, str(e)[:300])
         finally:
@@ -269,5 +349,9 @@ if __name__ == "__main__":
     if "--warm" in sys.argv:  # deploy/images.sh: fetch the weights and load once, then exit
         on_mlx(model)
         sys.exit(0)
-    print(f"mflux images on 127.0.0.1:{PORT}: {MODEL} {MODEL_PATH or f'q{QUANTIZE or 'bf16'}'}, {STEPS} steps, idle {IDLE_MIN:g} min", file=sys.stderr, flush=True)
+    if "--warm-hq" in sys.argv:  # deploy/image-edit-hq.sh: load the second model's edit pipeline once, then exit
+        on_mlx(model, "edit", HQ_MODEL)
+        sys.exit(0)
+    hq = f"; {HQ_MODEL} ({HQ_BASE_MODEL}) {HQ_STEPS} steps on image-edit-hq" if HQ_MODEL else ""
+    print(f"mflux images on 127.0.0.1:{PORT}: {MODEL} {MODEL_PATH or f'q{QUANTIZE or 'bf16'}'}, {STEPS} steps{hq}, idle {IDLE_MIN:g} min", file=sys.stderr, flush=True)
     ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
