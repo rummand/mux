@@ -46,6 +46,7 @@ function seed() {
       ["video", "Video as an async job: /v1/videos/generations, then poll /v1/videos/{id} (text, an optional first frame)", "video", "priority"],
       ["video-depth", "Video from a depth pass (Thread's Sets: a grey 3D take becomes footage): /v1/videos/generations with control", "video", "priority"],
       ["video-camera", "Video along a camera path (Thread's Sets: a first frame and a camera pose per frame become a long take, up to 60 s): /v1/videos/generations with camera", "video-camera", "priority"],
+      ["video-subject", "Video of a subject from 1–4 reference pictures (Phantom-Wan 1.3B; Thread's Studio Cast research): /v1/videos/generations with reference_images_b64", "video-subject", "priority"],
       ["depth", "Metric depth and focal length from one photo: POST /v1/depth (Thread's Reference Build, Measure)", "depth", "priority"],
       ["reconstruct", "Cameras and a metric point cloud from 2–12 photos, as an async job: POST /v1/reconstruct, then poll /v1/reconstruct/{id}", "reconstruct", "priority"],
       ["backdrop", "A 360° panorama, its depth and a dome mesh from text or an image (Thread's Sets backdrops), as an async job: POST /v1/backdrops, then poll /v1/backdrops/{id}", "backdrop", "priority"],

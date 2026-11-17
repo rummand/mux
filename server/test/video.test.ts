@@ -311,6 +311,46 @@ test("video-camera: its own kind — a camera take goes only to a camera model, 
   }
 });
 
+test("video-subject: its own kind — a subject take goes only to a subject model, needs reference pictures, and plain video never goes there", async () => {
+  const Fastify = (await import("fastify")).default;
+  const { upsertModel, upsertRoute } = await import("../src/models.js");
+  const { upsertTenant, createKey } = await import("../src/tenants.js");
+  const { registerGateway } = await import("../src/api/gateway.js");
+  const wan = await fakeVideoServer();
+  const sub = await fakeVideoServer();
+  upsertModel({ id: "wan-sub-test", backend: "external", kind: "video", base_url: wan.url, upstream_model: "wan-test" });
+  upsertModel({ id: "phantom-sub-test", backend: "external", kind: "video-subject", base_url: sub.url, upstream_model: "phantom-test" });
+  upsertRoute({ name: "video", kind: "video", strategy: "priority", candidates: [] });
+  upsertRoute({ name: "video-subject", kind: "video-subject", strategy: "priority", candidates: [] });
+  upsertTenant({ id: "thread-sub", name: "Thread", allowed: ["video", "video-subject"] });
+  const h = { authorization: `Bearer ${createKey("thread-sub", "t").key}` };
+  const SUBJECT = { model: "video-subject", prompt: "a mannequin walks across a studio", seconds: 2, fps: 16, size: "832x480", seed: 2, reference_images_b64: [Buffer.from("png").toString("base64")] };
+  const app = Fastify({ bodyLimit: 64 * 1024 * 1024 });
+  registerGateway(app);
+  try {
+    const made = await app.inject({ method: "POST", url: "/v1/videos/generations", headers: h, payload: SUBJECT });
+    assert.equal(made.statusCode, 202, made.body);
+    assert.equal(made.headers["x-mux-route"], "video-subject");
+    assert.equal(made.headers["x-mux-model"], "phantom-sub-test");
+    assert.equal(sub.state.created[0].model, "phantom-test");
+    assert.deepEqual(sub.state.created[0].reference_images_b64, SUBJECT.reference_images_b64);
+    assert.equal(wan.state.created.length, 0, "Wan never sees a subject take");
+    for (const refs of [undefined, [], [""]]) {
+      const r = await app.inject({ method: "POST", url: "/v1/videos/generations", headers: h, payload: { ...SUBJECT, reference_images_b64: refs } });
+      assert.equal(r.statusCode, 400, r.body);
+      assert.match(JSON.parse(r.body).error.message, /reference_images_b64/);
+    }
+    const plain = await app.inject({ method: "POST", url: "/v1/videos/generations", headers: h, payload: { ...SUBJECT, model: "video" } });
+    assert.equal(plain.statusCode, 202, plain.body);
+    assert.equal(plain.headers["x-mux-model"], "wan-sub-test", "plain video with references goes to Wan (VACE's reference images)");
+    assert.equal(sub.state.created.length, 1);
+  } finally {
+    await app.close();
+    wan.close();
+    sub.close();
+  }
+});
+
 test("video-camera: a take the Mac has not the memory for is refused before the camera server is asked, even with the model loaded", async () => {
   const Fastify = (await import("fastify")).default;
   const { upsertModel, upsertRoute } = await import("../src/models.js");

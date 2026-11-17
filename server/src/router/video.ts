@@ -9,15 +9,17 @@ import type { Ctx } from "./metering.js";
 import { decide } from "./select.js";
 
 /**
- * Video as async jobs (routes `video`, `video-depth` and `video-camera`): POST /v1/videos/generations starts one and
+ * Video as async jobs (routes `video`, `video-depth`, `video-camera` and `video-subject`): POST /v1/videos/generations starts one and
  * answers 202 with an id; GET /v1/videos/{id} says how it is going, /content gives the mp4, /cancel stops it. The
  * video server (server/video/video_server.py on the Mac, :8313) does the work, and for `video-camera` the camera
- * server (server/video/camera_server.py, :8315, its models of kind "video-camera"); on the Railway gateway the job
+ * server (server/video/camera_server.py, :8315, its models of kind "video-camera"), for `video-subject` the subject
+ * server (server/video/subject_server.py, :8317, Phantom-Wan, kind "video-subject"); on the Railway gateway the job
  * goes to the node that has the model, which keeps its own job of it.
  *
  * `video-camera` is a kind of its own so that the two never stand in for each other: a route that lists no models
  * takes every model of its kind, and a Wan model would otherwise make a take while ignoring its camera, or a camera
- * model refuse a plain request.
+ * model refuse a plain request. `video-subject` (a subject from reference pictures, no first frame or control) is its
+ * own kind for the same reason.
  *
  * Each mux in the way gives the caller an id of its own and remembers, per tenant, which model and which upstream id
  * it stands for: a tenant can only see its own jobs, and the status and content are read from where the job runs
@@ -41,12 +43,17 @@ export async function upstreamError(res: Response): Promise<{ message: string; t
   return { message: text.slice(0, 300) || `HTTP ${res.status}` };
 }
 
-/** Whether the caller named the camera route or a camera model (after its aliases, with or without "mux/"). */
-export function asksForCamera(tenant: Tenant, requested: string | undefined): boolean {
+/** Whether the caller named a route or model of this kind (after its aliases, with or without "mux/"). */
+function asksForKind(tenant: Tenant, requested: string | undefined, kind: Kind): boolean {
   if (!requested) return false;
   const named = (tenant.aliases[requested.trim()] ?? requested.trim()).replace(/^mux\//, "");
-  return getRoute(named)?.kind === "video-camera" || getModel(named)?.kind === "video-camera"
-    || listModels().some((m) => m.kind === "video-camera" && m.upstream_model === named);
+  return getRoute(named)?.kind === kind || getModel(named)?.kind === kind
+    || listModels().some((m) => m.kind === kind && m.upstream_model === named);
+}
+
+/** Whether the caller named the camera route or a camera model. */
+export function asksForCamera(tenant: Tenant, requested: string | undefined): boolean {
+  return asksForKind(tenant, requested, "video-camera");
 }
 
 /** POST /v1/videos/generations: pick a video model, start the job there, and answer with mux's id for it. */
@@ -54,7 +61,11 @@ export async function createVideo(ctx: Ctx, body: Record<string, unknown>, signa
   if (!body || typeof body !== "object" || Array.isArray(body)) throw new MuxError(400, "invalid_request", "the body must be a JSON object");
   const requested = typeof body.model === "string" ? body.model : undefined;
   if (requested === "video-depth" && !body.control) throw new MuxError(400, "invalid_request", "video-depth needs control: {type: \"depth\", video_b64, format}");
-  const kind: Kind = asksForCamera(ctx.tenant, requested) ? "video-camera" : "video";
+  const kind: Kind = asksForCamera(ctx.tenant, requested) ? "video-camera" : asksForKind(ctx.tenant, requested, "video-subject") ? "video-subject" : "video";
+  if (kind === "video-subject") {
+    const refs = body.reference_images_b64;
+    if (!Array.isArray(refs) || !refs.length || refs.some((r) => typeof r !== "string" || !r)) throw new MuxError(400, "invalid_request", "video-subject needs reference_images_b64: 1 to 4 pictures of the subject, on white");
+  }
   if (kind === "video-camera") {
     // Checked here so a request that can never work does not wake the Mac; the camera server checks the rest
     const cam = body.camera as Record<string, unknown> | undefined;

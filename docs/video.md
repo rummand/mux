@@ -4,6 +4,8 @@ The owner, 2026-11-17: *"we need everything hosted on mux"*. Thread's Sets turns
 an exact depth video) into real footage; that runs on the Mac Studio through mux, on no cloud provider.
 
 Long takes along a camera path (the route `video-camera`, LingBot-World v2) are a separate server: `docs/video-camera.md`.
+A subject from reference pictures alone (the route `video-subject`, Phantom-Wan 1.3B, research for Thread's Studio
+Cast) is a third: `docs/identity.md`, where VACE's own reference images are measured too.
 Both servers take one Mac-wide lock per job (`~/.mux/run/video-gpu.lock`), so only one video job runs at a time.
 
 ## The choice: Wan2.1-VACE-1.3B, diffusers on MPS
