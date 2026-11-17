@@ -78,6 +78,7 @@ POST /v1/videos/generations   {model: "video-depth" | "video", prompt, negative_
                                control?: {type: "depth", video_b64: base64 mp4 or zip of 16-bit PNGs,
                                           format: "mp4" | "png16-zip"},
                                image_b64? (the first frame),
+                               reference_images_b64?: [1–3 images of the subject (a person, a costume, a prop), on white],
                                label?: {text?: "AI-generated", position?: "bottom-right" | "bottom-left" | "top-right" |
                                         "top-left", every_frame?: true, metadata?: text}}
                               → 202 {id, status: "queued", model}
@@ -88,6 +89,12 @@ GET  /v1/videos/{id}/content  → video/mp4 (H.264, yuv420p), kept 1 hour after 
 POST /v1/videos/{id}/cancel   → {id, status}
 ```
 
+- **`reference_images_b64`** (2026-11-17, Studio Cast P3): VACE's reference images, 1–3, PNG or JPEG; transparency
+  becomes white and the long side is cut to 1280 px. Diffusers fits each one to the frame on a white canvas (never
+  cropped), encodes it as one latent frame ahead of the clip with a zero mask (so it is context, not footage), and
+  drops those frames from the output. Each costs one latent frame (four video frames' worth of attention). Works with
+  or without `image_b64` and `control`. Best as VACE was trained: the subject alone on white. What they hold and what
+  they cost, measured: `docs/identity.md`. More than 3, an empty list or a non-image is 400 naming the item.
 - **`label`: the AI label, burned in by mux** (2026-11-17, for Thread's Studio Cast: a made-real take that shows a real
   person, with recorded consent, keeps the file only when the job says `label_burned: true`). After the frames are
   decoded and before they are encoded, mux composites Thread's own mark (`src/identity/aiLabel.ts`, `labelBox` and

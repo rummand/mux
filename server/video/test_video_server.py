@@ -215,6 +215,24 @@ for patch, word in [({"label": "yes"}, "label must be an object"), ({"label": {"
 vs.Labeller(64, 36, vs.read_label(True))(np.zeros((36, 64, 3), np.uint8))   # a tiny frame: the pill fits inside
 ok("AI label: in every frame (bottom-right pill, white words, yellow spark; nothing else touched), the words in the mp4's metadata, label_burned true; not asked, nothing changes; bad label 400")
 
+# ── reference images (VACE's subject references) ────────────────────────────────────────────────────────────────
+def png_b64(size, mode="RGB", color=(10, 200, 10)):
+    b = io.BytesIO(); Image.new(mode, size, color).save(b, format="PNG"); return base64.b64encode(b.getvalue()).decode()
+
+assert seen[-1]["refs"] is None  # backward compatible: none asked, none given
+clear = io.BytesIO(); Image.new("RGBA", (40, 80), (0, 0, 0, 0)).save(clear, format="PNG")
+s, j, _ = call("POST", "/v1/videos/generations", {**BASE, "reference_images_b64": [png_b64((3000, 1500)), "data:image/png;base64," + base64.b64encode(clear.getvalue()).decode()]})
+assert s == 202, j
+wait_for(j["id"], {"succeeded"})
+refs = seen[-1]["refs"]
+assert len(refs) == 2 and refs[0].mode == "RGB" and max(refs[0].size) == 1280 and refs[0].size == (1280, 640), refs[0].size
+assert refs[1].size == (40, 80) and refs[1].getpixel((5, 5)) == (255, 255, 255)  # transparency → white
+for patch, word in [({"reference_images_b64": []}, "reference_images_b64"), ({"reference_images_b64": [png_b64((8, 8))] * 4}, "1 to 3"),
+                    ({"reference_images_b64": "AA=="}, "list"), ({"reference_images_b64": [base64.b64encode(b"nope").decode()]}, "reference_images_b64[0]")]:
+    s, j, _ = call("POST", "/v1/videos/generations", {**BASE, **patch})
+    assert s == 400 and word in j["error"]["message"], (patch, s, j)
+ok("reference images: 1–3, alpha on white, long side at most 1280 px; 400 names the bad one; absent is as before")
+
 # ── body limit ───────────────────────────────────────────────────────────────────────────────────────────────────
 assert vs.MAX_BODY == 200 * 1024 * 1024
 vs.MAX_BODY = 1024

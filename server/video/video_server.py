@@ -19,7 +19,8 @@ Runs in ~/.mux/video-venv (deploy/video.sh). Weights at a pinned revision in MUX
 Contract (Thread is built against it):
   POST /v1/videos/generations {model: "video-depth" | "video", prompt, negative_prompt?, seed?, seconds (1–10),
        fps (8–24), size ("832x480" draft | "1280x720" finish), control?: {type: "depth", video_b64, format: "mp4" |
-       "png16-zip"}, image_b64?, label?: {text?, position?, every_frame?, metadata?}}
+       "png16-zip"}, image_b64?, reference_images_b64?: [1–3 images of the subject, on white],
+       label?: {text?, position?, every_frame?, metadata?}}
                                                        → 202 {id, status: "queued", model}
   GET  /v1/videos/{id}                                 → {id, status, progress, model, error?, seconds, size,
                                                           label_burned? (true once the label is in every frame)}
@@ -47,6 +48,7 @@ NAMES = {"video", "video-depth", MODEL}
 # One video job on this Mac at a time, across processes: this server and the camera server (camera_server.py, the
 # `video-camera` route) take this file lock for each job, so the GPU never runs two takes at once.
 GPU_LOCK = os.path.expanduser(os.environ.get("MUX_VIDEO_GPU_LOCK", "~/.mux/run/video-gpu.lock"))
+MAX_REFS = 3  # VACE's reference images: each is one more latent frame (four video frames' worth of attention)
 NEGATIVE = "blurry, low quality, distorted, deformed, flickering, watermark, text, static frame, oversaturated"
 
 
@@ -247,8 +249,11 @@ def render(pipe, req, on_step):
         on_step(i + 1, steps)
         return kwargs
 
-    out = pipe(prompt=req["prompt"], negative_prompt=req["negative_prompt"], video=video, mask=mask, height=h, width=w,
-               num_frames=n4, num_inference_steps=steps, guidance_scale=GUIDANCE,
+    # VACE's reference images (the subject, on white): diffusers fits each to w×h on a white canvas, encodes it as one
+    # latent frame ahead of the clip with a zero mask, and drops those frames from the output.
+    refs = req.get("refs") or None
+    out = pipe(prompt=req["prompt"], negative_prompt=req["negative_prompt"], video=video, mask=mask, reference_images=refs,
+               height=h, width=w, num_frames=n4, num_inference_steps=steps, guidance_scale=GUIDANCE,
                generator=torch.Generator(device="cpu").manual_seed(req["seed"]), output_type="np",
                callback_on_step_end=cb).frames[0]
     return (np.clip(out[:n], 0, 1) * 255).round().astype("uint8")
@@ -372,6 +377,26 @@ def first_frame(data, w, h):
     return im.crop((left, top, left + w, top + h))
 
 
+def reference_image(data, i):
+    """A reference image → PIL RGB, at most 1280 px on its long side; transparency becomes white (VACE's references
+    are subjects on white). Fitting to the frame is diffusers' (letterboxed on white, never cropped)."""
+    from PIL import Image
+    try:
+        im = Image.open(io.BytesIO(data))
+        im.load()
+    except Exception:  # noqa: BLE001
+        raise BadInput(f"reference_images_b64[{i}] is not an image")
+    if im.mode in ("RGBA", "LA", "P"):
+        im = im.convert("RGBA")
+        bg = Image.new("RGBA", im.size, (255, 255, 255, 255))
+        im = Image.alpha_composite(bg, im)
+    im = im.convert("RGB")
+    if max(im.size) > 1280:
+        k = 1280 / max(im.size)
+        im = im.resize((max(1, round(im.width * k)), max(1, round(im.height * k))), Image.LANCZOS)
+    return im
+
+
 def b64(value, what):
     if not isinstance(value, str) or not value.strip():
         raise BadInput(f"{what} is required")
@@ -424,7 +449,7 @@ def validate(b):
     frames = max(1, round(seconds * fps))
     req = {"prompt": prompt.strip(), "negative_prompt": (neg or "").strip() or NEGATIVE, "seconds": seconds, "fps": fps,
            "size": size, "seed": seed, "frames": frames, "steps": STEPS[size], "control": None, "image": None,
-           "label": read_label(b.get("label"))}
+           "refs": None, "label": read_label(b.get("label"))}
     if control is not None:
         if not isinstance(control, dict):
             raise BadInput("control must be an object")
@@ -437,6 +462,11 @@ def validate(b):
         req["control"] = depth_from_mp4(data, w, h, frames) if fmt == "mp4" else depth_from_png16_zip(data, w, h, frames)
     if b.get("image_b64") is not None:
         req["image"] = first_frame(b64(b.get("image_b64"), "image_b64"), w, h)
+    refs = b.get("reference_images_b64")
+    if refs is not None:
+        if not isinstance(refs, list) or not 1 <= len(refs) <= MAX_REFS:
+            raise BadInput(f"reference_images_b64 must be a list of 1 to {MAX_REFS} images")
+        req["refs"] = [reference_image(b64(r, f"reference_images_b64[{i}]"), i) for i, r in enumerate(refs)]
     return req
 
 
