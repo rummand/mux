@@ -37,6 +37,7 @@ import { registerKeeper } from "../keeper.js";
 import { registerServices } from "../services.js";
 import { registerAgents } from "../agents.js";
 import { choices as intentChoices, intentOf, intentStats } from "../router/intent.js";
+import { computerStatus, screenshot, sweepScreenshots } from "../computer.js";
 
 const ok = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 
@@ -344,6 +345,14 @@ export function registerAdmin(app: FastifyInstance) {
     api.get("/stats/tenant/*", stat(tenantResources));
 
     // ── Logs: the end of mux's own log or a model server's, filtered ───────────────────────────────────────────
+    // The Mac's screen for Ask mux (computer.ts): whether Peekaboo is here and what it may do, and its screenshots
+    api.get("/computer", async () => computerStatus());
+    api.get("/computer/screens/:name", async (req, reply) => {
+      const png = screenshot((req.params as { name: string }).name);
+      return png ? reply.type("image/png").header("cache-control", "no-store").send(png) : reply.code(404).send({ error: "no such screenshot (they are kept an hour)" });
+    });
+    setInterval(sweepScreenshots, 10 * 60_000).unref();
+
     api.get("/logs", async (req, reply) => {
       const q = req.query as { source?: string; model?: string; grep?: string; lines?: string };
       if (q.source === "model" && !/^[a-z0-9][a-z0-9._/-]*$/i.test(q.model ?? "")) return reply.code(400).send({ error: "a model id is required" });

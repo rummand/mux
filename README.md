@@ -350,6 +350,11 @@ Bodies up to 50 / 150 MB; per-tenant job ids; photos never logged; presence as f
 `--vggt` swaps in VGGT-1B-Commercial (gated, not metric). This Mac, the Railway gateway and Thread's tenant at once:
 `./deploy/setup-measure.sh` (follow `~/.mux/logs/setup-measure.log`).
 
+The Mac for Ask mux: `./deploy/computer.sh` installs Peekaboo (CLI and the signed Peekaboo.app, whose Bridge holds
+the Screen Recording and Accessibility grants) so Ask mux can look at the screen and apps (`computer_look`,
+`computer_list`, at once) and act in them (`computer_act`, each action approved in the dashboard). Only the owner's Ask
+mux gets these tools.
+
 Danish speech: `./deploy/speech-da.sh` registers Record's Danish engines on this Mac (Record's `speech-da` service,
 :8798) as `roest-v3` (CoRal's Røst v3, a Danish Whisper large-v3), `hviske-v5` and `whisper-turbo`, and the route
 `transcribe-da` (Røst first, whisper.cpp last). The model is read from `?model=` or, as OpenAI's clients send it, from
