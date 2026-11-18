@@ -68,6 +68,14 @@ export function runDepth(ctx: Ctx, requested: string | undefined, body: Buffer, 
 }
 
 /**
+ * A document to PDF (POST /v1/convert, JSON): the file as base64 in, the PDF as base64 out, on the route `convert`
+ * (kind `document`, server/convert/convert_server.mjs on the Mac). Checked and gated in router/convert.ts first.
+ */
+export function runDocument(ctx: Ctx, requested: string | undefined, body: Buffer, signal: AbortSignal): Promise<Response> {
+  return passThrough(ctx, "document", "convert", true, requested, body, "application/json", signal);
+}
+
+/**
  * A request an upstream answers as it came — audio or images — on the route's models in turn: the body goes on with
  * the upstream's own model name in it (a JSON field, or the multipart form's `model`), and the answer comes back as is.
  */

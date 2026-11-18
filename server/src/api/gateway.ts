@@ -12,6 +12,7 @@ import { runSearch } from "../router/web.js";
 import { runRead } from "../router/reader.js";
 import { cancelVideo, createVideo, videoContent, videoStatus } from "../router/video.js";
 import { cancelReconstruction, createReconstruction, measureName, reconstructionStatus } from "../router/measure.js";
+import { CONVERT_BODY_LIMIT, runConvert } from "../router/convert.js";
 import { BACKDROP_FILES, backdropFile, backdropStatus, cancelBackdrop, createBackdrop, type BackdropFile } from "../router/backdrop.js";
 import { authenticate } from "../tenants.js";
 import { anthropicErrorType, fromOpenAI, StreamTranslator, toOpenAI, type MessagesBody } from "./anthropic.js";
@@ -270,6 +271,27 @@ async function depth(req: FastifyRequest, reply: FastifyReply) {
   }
 }
 
+/** POST /v1/convert: a document in, its PDF out (route `convert`, router/convert.ts). The file and the PDF are never logged. */
+async function convertDoc(req: FastifyRequest, reply: FastifyReply) {
+  const ctx = begin(req, reply, "document.convert", "openai", false);
+  if (!ctx) return reply;
+  const ac = abortOnClose(reply);
+  try {
+    const res = await runConvert(ctx, req.body, ac.signal);
+    const out = Buffer.from(await res.arrayBuffer());
+    finish(ctx, 200);
+    reply.headers(muxHeaders(ctx));
+    return reply.type(res.headers.get("content-type") ?? "application/json").send(out);
+  } catch (e) {
+    const err = toMuxError(e);
+    finish(ctx, err.status, { type: err.type, message: err.message });
+    reply.headers(muxHeaders(ctx));
+    return sendError(reply, "openai", err);
+  } finally {
+    leave(ctx.tenant);
+  }
+}
+
 /** POST /v1/reconstruct: a job starts where the route's model runs; 202 with mux's id for it. */
 async function reconstructCreate(req: FastifyRequest, reply: FastifyReply) {
   const ctx = begin(req, reply, "measure.reconstruct", "openai", false);
@@ -357,6 +379,8 @@ export function registerGateway(app: FastifyInstance) {
   app.post("/v1/reconstruct", { bodyLimit: 150 * 1024 * 1024 }, reconstructCreate);
   app.get("/v1/reconstruct/:id", (req, reply) => reconstructJob(req, reply, "status"));
   app.post("/v1/reconstruct/:id/cancel", (req, reply) => reconstructJob(req, reply, "cancel"));
+  // Documents to PDF (bloom for business's Desk): the file as base64, up to 25 MB of it
+  app.post("/v1/convert", { bodyLimit: CONVERT_BODY_LIMIT }, convertDoc);
   // Backdrops (Thread's Sets): a panorama, its depth and a dome, as an async job; the files fetched one by one
   app.post("/v1/backdrops", { bodyLimit: 50 * 1024 * 1024 }, backdropCreate);
   app.get("/v1/backdrops/:id", (req, reply) => backdropJob(req, reply, "status"));

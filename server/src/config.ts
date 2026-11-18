@@ -90,6 +90,12 @@ export const defaultSettings = {
   readerParallel: 8,
   /** The page reader's render mode (/v1/read {render: true}): pages one tenant may render at once, and this machine's browser takes at once. */
   renderParallel: 2,
+  /**
+   * The tenants that may convert documents (POST /v1/convert), beside their allowed routes: the route is open to these
+   * only, even for a tenant whose allowed list is empty (all routes). bloom for business on the gateway, its test tenant
+   * on the Mac, and the gateway's own tenant on the Mac (Railway's calls arrive as it). The owner, 19 November 2026.
+   */
+  convertTenants: ["bloom-for-business", "bloom-design-composer-test", "gateway-railway"] as string[],
 };
 export type Settings = typeof defaultSettings;
 

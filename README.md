@@ -40,6 +40,7 @@ SaaS (OpenAI / Anthropic SDK, curl)          Nexus (Railway → Funnel → Caddy
    ├─ /v1/backdrops  /v1/backdrops/{id}(/panorama|/depth|/dome)   backdrops: HunyuanWorld 1.0 panorama + MoGe-2 dome, local
    ├─ /v1/systemone          Jev's System One (Laya / Clef / d3 / d1, or hosted Jev)
    ├─ /v1/search  /v1/read   shared services: web search (SearXNG), the page reader (pages, links, files)
+   ├─ /v1/convert            documents to PDF: LibreOffice headless on the Mac, its network denied by the OS
    ├─ keys · tenants · RPM/TPM · monthly budgets · max parallel
    ├─ router: routes (auto · fast · agent · smart · code · multilingual · vision · embed · rerank · systemone),
    │          fallbacks, cooldowns, context/vision pre-checks, forced-tool guard
@@ -147,6 +148,48 @@ answer   { object: "page", url, final_url, status, content_type, fetched_at,
   caller's `x-mux-agent` (letters, digits, `.`, `-`, `_`) in the comment, e.g. `bloom-site-reader`.
 - **Safety**: public addresses only (loopback, private, link-local, CGNAT and `.local`/`.internal` refused), no
   cookies, no JavaScript run (unless `render: true`, above). A page that is not 2xx is `502 upstream_error` naming its status.
+
+## Documents to PDF: the `convert` route
+
+For bloom for business's Desk, which draws a Word or PowerPoint file's pages (the owner, 19 November 2026: "a small
+converter service on the Mac Studio, reached through Mux like the other models, with its network cut off and a time
+limit"). `./deploy/convert.sh` installs LibreOffice (Homebrew cask) if it is missing, runs
+`server/convert/convert_server.mjs` as launchd agent com.mux.convert on 127.0.0.1:**8318**, registers it as
+**`libreoffice`** (kind `document`) on the route **`convert`**, allows the route for bloom's test tenant
+`bloom-design-composer-test`, and ends with the network proof (`server/convert/prove.mjs`). `--railway` then deploys
+Railway mux from origin/main and points its `convert` route at `mac-studio/libreoffice`.
+
+```
+POST /v1/convert {file_b64, filename?, model?}   (JSON, up to 25 MB of file)
+  → 200 {object: "conversion", model, input: "docx"|"pptx"|"xlsx"|"odt"|"odp"|"ods", format: "pdf", bytes, sha256, ms, pdf_b64}
+  400 invalid_request · 403 permission_denied · 413 file_too_large · 415 unsupported_type
+  422 conversion_failed | conversion_timeout · 503 sandbox_unproven | converter_missing | all_models_failed
+```
+
+- **Who may**: the tenants in `settings.convertTenants` only (`bloom-for-business`, `bloom-design-composer-test`, and
+  `gateway-railway`, the gateway's own tenant on the Mac), beside the tenant's allowed routes: a tenant whose allowed
+  list is empty does not get it. Metered per tenant like any call (`document.convert`); the file and the PDF are never
+  logged, and only `file_b64` goes on to the converter (not the file's name).
+- **The network is denied by the operating system**: every conversion runs under macOS `sandbox-exec` with a profile
+  that denies every IP connection, bind and listen, and the name resolver's socket (`/private/var/run/mDNSResponder`);
+  local Unix sockets stay (LibreOffice's own pipe). It also denies reading the home folder (keys live in `~/.mux`,
+  `~/.bloom`), `/private/tmp` and `/Volumes`, and writing there or into `/Applications`, `/Library`, `/usr/local` and
+  `/opt`; only the job's own folder is open. The sandbox matches real paths (`/var` is `/private/var` to it), so the
+  profile is built from them.
+- **Proven, not assumed**: at start and every 10 minutes the converter runs a probe under the same profile that must be
+  refused (EPERM) a TCP connection to a listener it opens (which must see nothing), the resolver's socket and a file in
+  the home folder. Until it passes every job is refused (503 `sandbox_unproven`); there is no switch to run without it.
+  `prove.mjs` also converts a Word file whose picture is linked to a local listener while `lsof` and `nettop` watch the
+  job's LibreOffice processes. On 18 November 2026 (LibreOffice 26.8.3.1): the probe reached the listener outside the
+  sandbox and was refused inside it; the conversion showed 0 internet sockets, 0 connections, and the listener saw
+  nothing. (This LibreOffice did not fetch the linked picture even without the sandbox, unlike 7.4 on Linux; the denial
+  is what is relied on, not that.)
+- **Limits**: 30 s per job, then the whole process group is killed (422 `conversion_timeout`); 25 MB; 2 jobs at once and
+  6 waiting (429 `busy` past that); a fresh folder per job under `~/.mux/convert/jobs` with its own LibreOffice profile
+  and temporary folder, deleted when the job ends (leftovers of a crash swept after 2 minutes); macros never run (the
+  job's profile disables macro execution, sets the highest macro security, turns off active content and recalculation
+  on load). Files are known by their bytes, never by a name.
+- About 1.1–1.7 s a file on the Mac Studio (a fresh profile each time), ~210 MB of memory.
 
 ## Routing
 
