@@ -1,4 +1,4 @@
-import type { Kind } from "../models.js";
+import type { Kind, Model } from "../models.js";
 import { acquire, ModelUnavailable, release } from "../runtime/manager.js";
 import { MuxError } from "./errors.js";
 import { recordFailure, recordSuccess } from "./health.js";
@@ -75,6 +75,25 @@ export function runDocument(ctx: Ctx, requested: string | undefined, body: Buffe
   return passThrough(ctx, "document", "convert", true, requested, body, "application/json", signal);
 }
 
+/** The voices a speech model says it has (`caps.voices`, set by the admin API); null when it does not say. */
+export function voicesOf(m: Pick<Model, "caps">): string[] | null {
+  const v = (m.caps as { voices?: unknown }).voices;
+  return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : null;
+}
+
+/**
+ * A voice asked for by name (`voice` in /v1/audio/speech): the route's models that have it go first, and a model that
+ * lists its voices without this one is left out (Piper has only its Danish voice, Kokoro its English one; asking
+ * Piper for Kokoro's voice failed and counted against it, putting Danish speech in cooldown). When no model lists the
+ * voice, the route's order is kept as it was.
+ */
+export function byVoice<T extends Pick<Model, "caps">>(candidates: T[], voice: unknown): T[] {
+  if (typeof voice !== "string" || !voice.trim()) return candidates;
+  const has = candidates.filter((m) => voicesOf(m)?.includes(voice));
+  if (!has.length) return candidates;
+  return [...has, ...candidates.filter((m) => !has.includes(m) && voicesOf(m) === null)];
+}
+
 /**
  * A request an upstream answers as it came — audio or images — on the route's models in turn: the body goes on with
  * the upstream's own model name in it (a JSON field, or the multipart form's `model`), and the answer comes back as is.
@@ -85,8 +104,15 @@ async function passThrough(ctx: Ctx, kind: Kind, path: string, isJson: boolean, 
   ctx.route = d.route?.name ?? null;
   ctx.reason = d.reason;
   ctx.requested = requested;
+  let candidates = d.candidates;
+  if (kind === "speech" && isJson) {
+    let voice: unknown;
+    try { voice = (JSON.parse(body.toString("utf8") || "{}") as { voice?: unknown }).voice; } catch { voice = undefined; }
+    candidates = byVoice(d.candidates, voice);
+    if (candidates !== d.candidates) ctx.reason = `${d.reason}; voice ${String(voice).slice(0, 60)} → ${candidates.map((m) => m.id).join(", ") || "none"}`;
+  }
   let last = "";
-  for (const [i, m] of (ctx.noFallback ? d.candidates.slice(0, 1) : d.candidates).entries()) {
+  for (const [i, m] of (ctx.noFallback ? candidates.slice(0, 1) : candidates).entries()) {
     if (i > 0) ctx.fallbacks = i;
     let up;
     try { up = await acquire(m); } catch (e) {

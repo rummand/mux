@@ -14,6 +14,8 @@ import { noteCall } from "../services.js";
 
 export type WebResult = { title: string; url: string; snippet: string; engine: string | null; published: string | null };
 
+const hostOf = (url: string) => { try { return new URL(url).hostname; } catch { return ""; } };
+
 /** SearXNG's JSON → results, the junk left out */
 export function resultsFrom(json: unknown, limit: number): WebResult[] {
   const raw = (json as { results?: Record<string, unknown>[] } | null)?.results ?? [];
@@ -21,7 +23,9 @@ export function resultsFrom(json: unknown, limit: number): WebResult[] {
   const out: WebResult[] = [];
   for (const r of raw) {
     const url = typeof r.url === "string" ? r.url : "";
-    if (!/^https?:\/\//.test(url) || seen.has(url)) continue;
+    // A link with no host ("http:///go/v1/…", an engine's own redirect cut from its site: about a third of the
+    // results on Railway's SearXNG, 2026-11-18) leads nowhere and no reader can open it: left out.
+    if (!/^https?:\/\/[^/?#\s]/.test(url) || !hostOf(url) || seen.has(url)) continue;
     seen.add(url);
     out.push({
       title: String(r.title ?? "").replace(/\s+/g, " ").trim().slice(0, 200) || url,

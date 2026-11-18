@@ -33,7 +33,7 @@ SaaS (OpenAI / Anthropic SDK, curl)          Nexus (Railway → Funnel → Caddy
    ├─ /v1/chat/completions   OpenAI, streaming, tools, images
    ├─ /v1/messages           Anthropic Messages, streaming, tool_use
    ├─ /v1/embeddings  /v1/rerank
-   ├─ /v1/audio/transcriptions  /v1/audio/speech   OpenAI audio: Whisper in, Piper (Danish) out
+   ├─ /v1/audio/transcriptions  /v1/audio/speech   OpenAI audio: Whisper in; out Piper (Danish) and Kokoro (English, af_heart), by voice
    ├─ /v1/images/generations  /v1/images/edits     OpenAI images: FLUX.2 klein 4B (Q4) through mflux, local
    ├─ /v1/videos/generations  /v1/videos/{id}      async video jobs: Wan2.1-VACE-1.3B (depth control), local
    ├─ /v1/depth  /v1/reconstruct  /v1/reconstruct/{id}   measure: Depth Pro; MapAnything (cameras, metric points), local
@@ -80,6 +80,11 @@ budgets and `max_parallel`; the reader also takes at most `readerParallel` reads
 a setting). The Services page shows both: calls, errors, latency, tenants, sites, bytes read and what was read.
 
 `POST /v1/search {query, limit?, language?}` → `{object: "search", query, results: [{title, url, snippet, engine, published}]}`.
+
+Where it runs: the SearXNG is a Railway service beside the gateway, on Railway's private network (`MUX_SEARXNG_URL`
+there); a general search asks Google CSE, Wikipedia, Wikidata, Brave and DuckDuckGo (the last two often refused: rate limit
+and CAPTCHA). The Mac Studio's own mux has no SearXNG and answers 503 `search_unavailable`: products search through
+Railway. A result whose link has no host (`http:///go/v1/…`, about a third of them on 2026-11-18) is left out.
 
 `POST /v1/read` (`server/src/router/reader.ts`, route `web.read`, metered as model `reader`):
 
@@ -342,6 +347,15 @@ Speech: `./deploy/audio.sh` installs whisper.cpp (large-v3-turbo, `whisper` on r
 with the Danish voice da_DK-talesyntese-medium (`piper-da` on route `speak`, :8311, `server/tts/piper_server.py`) as
 launchd agents com.mux.whisper and com.mux.tts, and registers them; the gateway gets them as `mac-studio/…` on its
 next sync. Callers use OpenAI's audio API on mux; audio is never logged.
+
+English speech (2026-11-18, the owner: "only an English voice is added to Mux's speak route. No new Danish voice"):
+Kokoro-82M's `af_heart`, the voice of bloom for business's films, served by Nexus's audio service (`com.nexus.audio`,
+mlx_audio on :8093) and registered as `bloom-kokoro-en`, sits on `speak` after Piper. A request names its voice
+(`voice`), and the route sends it to the model whose `caps.voices` lists it (`byVoice` in `router/audio.ts`): `af_heart`
+to Kokoro, `da_DK-talesyntese-medium` to Piper; a model that lists other voices is left out, so Piper is never asked
+for an English voice (that failed and put Danish speech in cooldown). No voice, or one no model lists, keeps the
+route's order. `./deploy/speech-en.sh` sets the voices, keeps both on `speak`, allows `speak` for bloom's test tenant
+and speaks a sentence; `--railway` deploys the gateway, which gets the voices on its next sync.
 
 Images: `./deploy/images.sh` first unloads every loaded model that is neither pinned nor first on `agent` (`--keep`
 skips that; nothing is deleted), then installs mflux in `~/.mux/images-venv`, fetches FLUX.2 [klein] 4B (Apache-2.0,

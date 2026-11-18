@@ -15,6 +15,8 @@ test("search results from SearXNG: links only, no doubles, capped", () => {
     { url: "https://a.it/agriturismo", title: "Agriturismo  Il Poggio", content: "Stone farmhouse\nwith a pool", engine: "duckduckgo" },
     { url: "https://a.it/agriturismo", title: "again" },
     { url: "javascript:alert(1)", title: "no" },
+    { url: "http:///go/v1/AVQ7cZkRijn9av2", title: "A redirect with no host" },
+    { url: "https:///", title: "no host either" },
     { url: "https://b.it", title: "", content: "" },
   ] }, 5);
   assert.deepEqual(r.map((x) => x.url), ["https://a.it/agriturismo", "https://b.it"]);

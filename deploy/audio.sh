@@ -54,7 +54,8 @@ for i in $(seq 1 60); do curl -s -o /dev/null http://127.0.0.1:8310 && curl -sf 
 echo "→ models and routes in mux"
 api() { curl -sf -X "$1" -H "Authorization: Bearer $MUX_ADMIN_TOKEN" -H "content-type: application/json" -d "$3" "http://127.0.0.1:${MUX_PORT:-7070}/api/admin$2" >/dev/null; }
 api POST /models '{"id":"whisper","display_name":"Whisper large-v3-turbo (speech to text)","kind":"transcription","backend":"external","base_url":"http://127.0.0.1:8310/v1","upstream_model":"whisper-1","caps":{"multilingual":9,"speed":8,"quality":8},"notes":"whisper.cpp whisper-server, ggml large-v3-turbo q5_0; com.mux.whisper"}'
-api POST /models '{"id":"piper-da","display_name":"Piper, Danish voice (text to speech)","kind":"speech","backend":"external","base_url":"http://127.0.0.1:8311/v1","upstream_model":"da_DK-talesyntese-medium","caps":{"speed":10,"quality":5},"notes":"rhasspy/piper, da_DK-talesyntese-medium (CC0); server/tts/piper_server.py, com.mux.tts"}'
+api POST /models '{"id":"piper-da","display_name":"Piper, Danish voice (text to speech)","kind":"speech","backend":"external","base_url":"http://127.0.0.1:8311/v1","upstream_model":"da_DK-talesyntese-medium","caps":{"speed":10,"quality":5,"voices":["da_DK-talesyntese-medium"]},"notes":"rhasspy/piper, da_DK-talesyntese-medium (CC0); server/tts/piper_server.py, com.mux.tts"}'
 api PUT /routes/transcribe '{"kind":"transcription","strategy":"priority","candidates":["whisper"]}'
 api PUT /routes/speak '{"kind":"speech","strategy":"priority","candidates":["piper-da"]}'
+# This leaves Kokoro (English, af_heart) off the route: ./deploy/speech-en.sh puts it back after Piper
 echo "✓ speech: whisper on :8310, piper on :8311 — POST /v1/audio/transcriptions and /v1/audio/speech on mux"
