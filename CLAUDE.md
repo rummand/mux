@@ -17,3 +17,12 @@ to them. Read `docs/handover.md` first (state of play), then `README.md` and `do
   what the owner must run on the Mac. `tools/githooks/pre-commit` enforces it (`git config core.hooksPath tools/githooks`).
 - The repo is public: never commit a token or key. Secrets live in `~/.mux/*.env` and Railway variables.
 - `main` moves by fast-forward only, never forced.
+- **Use Peekaboo for what only the Mac's screen can do** (owner, 2026-11-20: *"Remember you can use peekaboo"*). Peekaboo
+  (`/opt/homebrew/bin/peekaboo`, openclaw/Peekaboo, MIT) is installed on the Mac Studio with Screen Recording and
+  Accessibility granted (`./deploy/computer.sh`), so an agent working here can see and drive any app: a setting with no
+  CLI or file (e.g. Orca's *Default agent*), a dialog, a native app. Look before acting — `peekaboo see --app <App>
+  --json` gives a UI map with element ids; then `click --on <id> --snapshot <id>`, `menu`, `press`, `type`, and look again
+  to check the change took. It needs the Mac's GUI session unlocked (a locked screen gives `CAPTURE_FAILED`; then ask
+  the owner, or have them do it from Orca's UI). Prefer a CLI, API or file when one exists; act only on what the owner asked for; never
+  enter passwords or approve payments; say what was clicked. The same tools back Ask mux's `computer_look`,
+  `computer_list`, `computer_act` (`server/src/computer.ts`), where acting waits for the owner's approval.
