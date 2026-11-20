@@ -37,6 +37,8 @@ export const runtimeBus = new EventEmitter();
 /** What a model will take in memory: its weights, plus a KV cache estimate for its context. */
 export function estimateGb(m: Model): number {
   if (m.backend === "external" || m.backend === "jev") return 0;
+  // A measured figure beats the formula (caps.memGb: set after watching the model run)
+  if (typeof m.caps?.memGb === "number" && m.caps.memGb > 0) return m.caps.memGb;
   if (m.backend === "laya") return 2;
   const weights = m.size_bytes / GB;
   // llama-server's prompt cache lives in RAM beside the weights: 4 GiB unless the model's flags say otherwise.
@@ -199,7 +201,15 @@ async function makeRoom(needGb: number, except: string): Promise<{ ok: boolean; 
       : `the Mac's free memory (${sys.memFreeGb.toFixed(1)} GB free, ${needGb.toFixed(1)} GB needed, ${s.memoryHeadroomGb} GB kept for everything else)`;
     if (!victim) return { ok: false, why };
     event("info", "runtime", `unloading ${victim.id} to make room: ${why}`);
+    const before = sys.memFreeGb, freed = victim.estimateGb;
     await unload(victim.id);
+    // macOS reports a big model's memory as free some seconds after its process has gone: wait for most of it to show
+    // before judging again, or the check sees the old figure and refuses (2026-11-20: Qwen3-Coder-Next's 50 GB showed
+    // as 26.9 GB free right after the unload, and the swap to qwen3.6 failed).
+    if (freed >= 5) for (let i = 0; i < 15; i++) {
+      if ((await systemStats()).memFreeGb >= before + freed * 0.7) break;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
   }
 }
 

@@ -9,6 +9,9 @@ export type Kind = "chat" | "embedding" | "rerank" | "systemone" | "transcriptio
 export interface Caps {
   quality?: number; speed?: number; tools?: number; code?: number; reasoning?: number;
   multilingual?: number; vision?: number; context?: number;
+  /** Measured GB the model holds while loaded, in place of mux's estimate (hybrid-attention models need far less
+   *  context memory than the formula assumes: Qwen3-Coder-Next counted 58 GB and could never load). */
+  memGb?: number;
 }
 
 export interface Model {
