@@ -5,6 +5,9 @@
 # every request needs it (the desk asks /api/pair for a one-time sign-in link). The Funnel ports of lv426 itself are
 # all taken (443 by mux and others, 8443 and 10000 by Nexus), and opencode's web app cannot live under a path, so
 # com.mux.opencode-ts runs a second, userspace tailscaled with its own node, "opencode", whose 443 is opencode's alone.
+# OpenCode gets an empty models.dev catalog (OPENCODE_MODELS_PATH, no fetch), so only the providers in its config exist:
+# mux. With the catalog, a fresh server lists OpenCode's paid Zen models for its first second, before the config has
+# loaded, and ACP (Orca's chats) takes the newest of them as the session's model ("Insufficient balance").
 set -eu
 MUX_HOME="$HOME/.mux"
 TS_DIR="$MUX_HOME/opencode-ts"
@@ -12,9 +15,11 @@ SOCK="$TS_DIR/tailscaled.sock"
 TAILSCALED="$(brew --prefix tailscale)/bin/tailscaled"
 OPENCODE="$(command -v opencode)"
 PORT=4097
-mkdir -p "$MUX_HOME/logs" "$TS_DIR"
+CATALOG="$HOME/.config/opencode/no-models-catalog.json"
+mkdir -p "$MUX_HOME/logs" "$TS_DIR" "$(dirname "$CATALOG")"
+echo '{}' > "$CATALOG"
 
-agent() { # label, log name, program arguments…
+agent() { # label, log name, program arguments… (extra environment entries in $ENV_XML)
   label=$1 log=$2; shift 2
   plist="$HOME/Library/LaunchAgents/$label.plist"
   args=""; for a in "$@"; do args="$args<string>$a</string>"; done
@@ -31,7 +36,7 @@ agent() { # label, log name, program arguments…
   <key>ProcessType</key><string>Interactive</string>
   <key>StandardOutPath</key><string>$MUX_HOME/logs/$log.log</string>
   <key>StandardErrorPath</key><string>$MUX_HOME/logs/$log.log</string>
-  <key>EnvironmentVariables</key><dict><key>PATH</key><string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string><key>HOME</key><string>$HOME</string></dict>
+  <key>EnvironmentVariables</key><dict><key>PATH</key><string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string><key>HOME</key><string>$HOME</string>${ENV_XML:-}</dict>
 </dict></plist>
 PL
   launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
@@ -42,7 +47,9 @@ PL
 echo "→ opencode on 127.0.0.1:$PORT"
 "$OPENCODE" service set port $PORT >/dev/null
 "$OPENCODE" service stop >/dev/null 2>&1 || true
+ENV_XML="<key>OPENCODE_MODELS_PATH</key><string>$CATALOG</string><key>OPENCODE_DISABLE_MODELS_FETCH</key><string>1</string>"
 agent com.mux.opencode opencode "$OPENCODE" serve --service --hostname 127.0.0.1 --port $PORT
+ENV_XML=""
 
 echo "→ tailnet node opencode"
 agent com.mux.opencode-ts opencode-ts "$TAILSCALED" --tun=userspace-networking --statedir="$TS_DIR" --socket="$SOCK" --port=0
