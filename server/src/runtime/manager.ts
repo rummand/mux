@@ -213,6 +213,8 @@ async function makeRoom(needGb: number, except: string): Promise<{ ok: boolean; 
   }
 }
 
+const pending = new Map<string, Promise<Instance>>();
+
 async function load(m: Model): Promise<Instance> {
   const need = estimateGb(m);
   if (need > settings().memoryBudgetGb) throw new ModelUnavailable(`${m.id} needs ~${need} GB, more than mux's whole memory budget (${settings().memoryBudgetGb} GB)`, 507, "memory_budget");
@@ -303,7 +305,11 @@ export async function acquire(m: Model): Promise<Upstream> {
   if (!inst) {
     const failed = lastFailure.get(m.id);
     if (failed && Date.now() - failed.at < 30_000) throw new ModelUnavailable(`${m.id} failed to load ${Math.round((Date.now() - failed.at) / 1000)} s ago: ${failed.error.split("\n")[0]}`, 503, "load_failed");
-    inst = await load(m);
+    // One load per model: a second request while it loads (making room included) waits for the same one, rather than
+    // making room for it again and failing (2026-11-20: OpenCode's two requests at once, one got a 503)
+    let p = pending.get(m.id);
+    if (!p) { p = load(m).finally(() => pending.delete(m.id)); pending.set(m.id, p); }
+    inst = await p;
   }
   inst.inflight++;
   inst.lastUsed = Date.now();
@@ -410,7 +416,10 @@ async function sweep() {
   if (s.pressureGuard) {
     const sys = await systemStats();
     if (sys.pressure >= 2) {
-      const victim = [...instances.values()].filter((i) => i.inflight === 0 && i.state === "ready" && !getModel(i.id)?.pinned).sort((a, b) => a.lastUsed - b.lastUsed)[0];
+      // At "warn", only what has been idle 5 minutes: a 50 GB model used a minute ago was unloaded at once and reloaded
+      // 20 s later (2026-11-20). At "critical", any idle model, as before.
+      const idleFor = sys.pressure >= 4 ? 0 : 5 * 60_000;
+      const victim = [...instances.values()].filter((i) => i.inflight === 0 && i.state === "ready" && !getModel(i.id)?.pinned && Date.now() - i.lastUsed >= idleFor).sort((a, b) => a.lastUsed - b.lastUsed)[0];
       if (victim) {
         event("warn", "runtime", `macOS reports memory pressure (${sys.pressure === 4 ? "critical" : "warn"}); unloading idle ${victim.id}`);
         await unload(victim.id);
