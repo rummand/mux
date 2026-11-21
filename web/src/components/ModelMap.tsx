@@ -3,9 +3,7 @@ import { api, type Model, type SystemInfo } from "../api";
 import { Badge, Card, Meter, StatusDot } from "../components/ui";
 import { fmtGb } from "../format";
 import { useApi } from "../hooks";
-// d3-force types are incomplete; cast to any for simulation.
-import * as d3Force from "d3-force";
-type Sim = ReturnType<typeof d3Force.forceSimulation>;
+// The module itself is fine; we just load it at runtime.
 
 interface NodeData {
   id: string;
@@ -63,7 +61,7 @@ export function ModelMap({ sys }: { sys: SystemInfo | undefined }) {
   const { data: models } = useApi<Model[]>("/models", undefined, 5000);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const simulationRef = useRef<Sim | null>(null);
+  const simulationRef = useRef<any>(null);
   const [dimensions, setDimensions] = useState({ w: 800, h: 400 });
 
   const nodes = (models ?? []).map((m) => ({
@@ -92,21 +90,23 @@ export function ModelMap({ sys }: { sys: SystemInfo | undefined }) {
   const totalEstimate = nodes.reduce((sum, n) => sum + n.estimateGb, 0);
 
   const initSimulation = useCallback(
-    (width: number, height: number, currentNodes: NodeData[]) => {
+    async (width: number, height: number, currentNodes: NodeData[]) => {
       (simulationRef.current as any)?.stop();
 
-      const sim = (d3Force as any).forceSimulation(currentNodes)
+      const d3f = await import("d3-force");
+
+      const sim = (d3f as any).forceSimulation(currentNodes)
         .force(
           "link",
-          (d3Force as any).forceLink(
+          (d3f as any).forceLink(
             currentNodes.filter((n) => n.state === "ready").map((n) => ({ source: n, target: n }))
           ).distance((d: any) => Math.max(60, (d.source.estimateGb + d.target.estimateGb) * 20))
         )
-        .force("charge", (d3Force as any).forceManyBody().strength((d: any) => -Math.max(80, d.estimateGb * 50)))
-        .force("center", (d3Force as any).forceCenter(width / 2, height / 2))
-        .force("collision", (d3Force as any).forceCollide().radius((d: any) => d.r + 10))
-        .force("x", (d3Force as any).forceX(width / 2).strength(0.04))
-        .force("y", (d3Force as any).forceY(height / 2).strength(0.04))
+        .force("charge", (d3f as any).forceManyBody().strength((d: any) => -Math.max(80, d.estimateGb * 50)))
+        .force("center", (d3f as any).forceCenter(width / 2, height / 2))
+        .force("collision", (d3f as any).forceCollide().radius((d: any) => d.r + 10))
+        .force("x", (d3f as any).forceX(width / 2).strength(0.04))
+        .force("y", (d3f as any).forceY(height / 2).strength(0.04))
         .on("tick", () => {});
 
       simulationRef.current = sim;
@@ -130,7 +130,7 @@ export function ModelMap({ sys }: { sys: SystemInfo | undefined }) {
   useEffect(() => {
     if (nodes.length === 0) return;
     const { w, h } = dimensions;
-    initSimulation(w, h, nodes as any);
+    void initSimulation(w, h, nodes as any);
 
     return () => {
       simulationRef.current?.stop();
