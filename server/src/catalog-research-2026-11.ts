@@ -687,7 +687,51 @@ export const NEW_MODELS: CatalogEntry[] = [
    }
   ],
   "experimental": "unusual architecture and a 4K context; check llama.cpp loads it"
- }
+ },
+  {
+   "id": "arex-2",
+   "name": "AREX-2",
+   "family": "AREX",
+   "kind": "chat",
+   "repo": "bartowski/BAAI_AREX-2-GGUF",
+   "file": "BAAI_AREX-2-Q4_K_M.gguf",
+   "mmproj": "mmproj-BAAI_AREX-2-bf16.gguf",
+   "sizeGb": 16.03,
+   "params": "27B",
+   "arch": "qwen35",
+   "ctx": 131072,
+   "license": "apache-2.0",
+   "released": "2026-09",
+   "routes": [
+    "agent",
+    "code",
+    "reasoning"
+   ],
+   "caps": {
+    "quality": 8,
+    "speed": 5,
+    "tools": 8.5,
+    "code": 7.5,
+    "reasoning": 8.5,
+    "multilingual": 6,
+    "vision": 7,
+    "context": 7
+   },
+   "defaultCtx": 32768,
+   "notes": "BAAI's 27B multimodal agent/reasoning model based on Qwen3.8 architecture. Image-text-to-text with tool-calling and agentic capabilities. ~220 HF likes, 12.6k GGUF downloads on bartowski. Q4_K_M at 16.03 GB fits in the 70 GB budget with room for 3-4 other models. Vision via bf16 mmproj. Good for deep research, coding, and agent workflows where a larger model is warranted.",
+   "benchmarks": [
+    {
+     "name": "HF downloads (30d GGUF bartowski)",
+     "value": 12600,
+     "url": "https://huggingface.co/bartowski/BAAI_AREX-2-GGUF"
+    },
+    {
+     "name": "HF likes",
+     "value": 220,
+     "url": "https://huggingface.co/BAAI/AREX-2"
+    }
+   ]
+  }
 ];
 
 export interface CatalogPatch {
