@@ -90,6 +90,12 @@ const app = Fastify({ logger: false, bodyLimit: 64 * 1024 * 1024, trustProxy: tr
 await app.register(cors, { origin: true, exposedHeaders: ["x-mux-request-id", "x-mux-model", "x-mux-route", "x-mux-fallbacks", "x-mux-cold-start"] });
 
 app.get("/health", async () => ({ ok: true, models: listModels().length, loaded: (await status()).filter((i) => i.state === "ready").map((i) => i.id) }));
+if (config.role === "gateway") {
+  // OpenCode serves its assets and API from the root of its own origin.
+  for (const path of ["/opencode", "/opencode/"]) {
+    app.get(path, async (_req, reply) => reply.redirect("https://opencode.tail134047.ts.net/"));
+  }
+}
 registerGateway(app);
 registerAdmin(app);
 
