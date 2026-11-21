@@ -64,7 +64,9 @@ export function ModelMap({ sys }: { sys: SystemInfo | undefined }) {
   const nodes = useMemo(() => {
     if (!models) return [] as NodeData[];
     return models.map((m): NodeData => {
-      // Find or reuse existing node to preserve x/y from simulation
+      // Spread nodes randomly initially so d3-force has something to work with
+      const angle = Math.random() * Math.PI * 2;
+      const radius = Math.random() * 100;
       return {
         id: m.id,
         display_name: m.display_name || m.id,
@@ -75,8 +77,8 @@ export function ModelMap({ sys }: { sys: SystemInfo | undefined }) {
         backend: m.backend,
         pinned: m.pinned,
         enabled: m.enabled,
-        x: 0,
-        y: 0,
+        x: 400 + Math.cos(angle) * radius,
+        y: 200 + Math.sin(angle) * radius,
         r: Math.max(20, Math.sqrt(m.estimateGb) * 16),
       };
     });
