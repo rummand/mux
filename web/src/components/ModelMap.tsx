@@ -64,11 +64,11 @@ export function ModelMap({ sys }: { sys: SystemInfo | undefined }) {
   const simulationRef = useRef<any>(null);
   const [dimensions, setDimensions] = useState({ w: 800, h: 400 });
 
-  const nodes = (models ?? []).map((m) => ({
+  const nodes = (models ?? []).map((m): NodeData => ({
     id: m.id,
     display_name: m.display_name || m.id,
     kind: m.kind,
-    state: m.instance?.state ?? "unloaded",
+    state: (m.instance?.state ?? "unloaded") as NodeData["state"],
     estimateGb: m.estimateGb,
     rssGb: m.instance?.rssGb ?? null,
     backend: m.backend,
@@ -82,6 +82,8 @@ export function ModelMap({ sys }: { sys: SystemInfo | undefined }) {
     fy: null,
     r: Math.max(20, Math.sqrt(m.estimateGb) * 16),
   }));
+
+  const [simNodes, setSimNodes] = useState<NodeData[]>(nodes);
 
   const selected = nodes.find((n) => n.id === selectedId) ?? null;
 
@@ -107,7 +109,9 @@ export function ModelMap({ sys }: { sys: SystemInfo | undefined }) {
         .force("collision", (d3f as any).forceCollide().radius((d: any) => d.r + 10))
         .force("x", (d3f as any).forceX(width / 2).strength(0.04))
         .force("y", (d3f as any).forceY(height / 2).strength(0.04))
-        .on("tick", () => {});
+        .on("tick", () => {
+          setSimNodes(Array.from(currentNodes));
+        });
 
       simulationRef.current = sim;
     },
@@ -128,7 +132,8 @@ export function ModelMap({ sys }: { sys: SystemInfo | undefined }) {
 
   // Init simulation when nodes change
   useEffect(() => {
-    if (nodes.length === 0) return;
+    if (nodes.length === 0) { setSimNodes([]); return; }
+    setSimNodes(nodes as any);
     const { w, h } = dimensions;
     void initSimulation(w, h, nodes as any);
 
@@ -167,7 +172,7 @@ export function ModelMap({ sys }: { sys: SystemInfo | undefined }) {
             className="relative flex-1 overflow-hidden select-none"
             style={{ cursor: "grab", minHeight: 300 }}
           >
-            {nodes.map((n) => (
+            {simNodes.map((n) => (
               <div
                 key={n.id}
                 onClick={() => setSelectedId(selectedId === n.id ? null : n.id)}
