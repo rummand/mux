@@ -452,3 +452,4 @@ Logs: `~/.mux/logs/mux.log`, one per model in `~/.mux/logs/models/`. Data: `~/.m
 Models: `~/.mux/models/` (downloads; `imported/` holds links to files elsewhere).
 
 Development: `npm run dev -w server` (tsx watch) and `npm run dev -w web` (Vite, proxied to the server).
+# timestamp: 1795278756
