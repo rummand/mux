@@ -111,16 +111,10 @@ export function ModelMap({ sys }: { sys: SystemInfo | undefined }) {
             // Copy current node positions so React can re-render
             setRendered(currentNodes.map((n) => ({ ...n })));
           })
-          .alpha(0.3)
+          .alpha(0.08)
           .restart();
 
         simulationRef.current = sim;
-
-        // Stop simulation after it settles
-        setTimeout(() => {
-          sim.alpha(0).on("tick", null);
-          setRendered(currentNodes.map((n) => ({ ...n })));
-        }, 3000);
       }).catch((err) => {
         console.error("[ModelMap] failed to load d3-force:", err);
       });
