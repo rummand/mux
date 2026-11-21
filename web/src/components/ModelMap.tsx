@@ -79,7 +79,7 @@ export function ModelMap({ sys }: { sys: SystemInfo | undefined }) {
         enabled: m.enabled,
         x: 400 + Math.cos(angle) * radius,
         y: 200 + Math.sin(angle) * radius,
-        r: Math.max(20, Math.sqrt(m.estimateGb) * 16),
+        r: Math.max(10, Math.sqrt(m.estimateGb) * 6),
       };
     });
   }, [models]);
@@ -102,19 +102,25 @@ export function ModelMap({ sys }: { sys: SystemInfo | undefined }) {
               currentNodes.filter((n) => n.state === "ready").map((n) => ({ source: n, target: n }))
             ).distance((d: any) => Math.max(60, (d.source.estimateGb + d.target.estimateGb) * 20))
           )
-          .force("charge", (d3f as any).forceManyBody().strength((d: any) => -Math.max(80, d.estimateGb * 50)))
+          .force("charge", (d3f as any).forceManyBody().strength((d: any) => -Math.max(15, d.estimateGb * 8)))
           .force("center", (d3f as any).forceCenter(width / 2, height / 2))
-          .force("collision", (d3f as any).forceCollide().radius((d: any) => d.r + 10))
+          .force("collision", (d3f as any).forceCollide().radius((d: any) => d.r + 4))
           .force("x", (d3f as any).forceX(width / 2).strength(0.04))
           .force("y", (d3f as any).forceY(height / 2).strength(0.04))
           .on("tick", () => {
             // Copy current node positions so React can re-render
             setRendered(currentNodes.map((n) => ({ ...n })));
           })
-          .alpha(1)
+          .alpha(0.3)
           .restart();
 
         simulationRef.current = sim;
+
+        // Stop simulation after it settles
+        setTimeout(() => {
+          sim.alpha(0).on("tick", null);
+          setRendered(currentNodes.map((n) => ({ ...n })));
+        }, 3000);
       }).catch((err) => {
         console.error("[ModelMap] failed to load d3-force:", err);
       });
@@ -130,7 +136,7 @@ export function ModelMap({ sys }: { sys: SystemInfo | undefined }) {
     if (!container) return;
     const observer = new ResizeObserver(() => {
       const rect = container.getBoundingClientRect();
-      setDimensions({ w: rect.width, h: Math.max(300, window.innerHeight - 380) });
+      setDimensions({ w: rect.width, h: Math.max(500, window.innerHeight - 340) });
     });
     observer.observe(container);
     return () => observer.disconnect();
@@ -172,7 +178,7 @@ export function ModelMap({ sys }: { sys: SystemInfo | undefined }) {
           <div
             ref={containerRef}
             className="relative flex-1 overflow-hidden select-none"
-            style={{ cursor: "grab", minHeight: 300 }}
+            style={{ cursor: "grab", minHeight: 500 }}
           >
             {rendered.map((n) => (
               <div
