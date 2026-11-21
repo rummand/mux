@@ -12,3 +12,4 @@ RUN npm run build && npm prune --omit=dev && rm -rf node_modules/@receptron node
 ENV NODE_ENV=production MUX_ROLE=gateway MUX_HOME=/data MUX_HOST=0.0.0.0
 WORKDIR /app/server
 CMD ["node", "dist/index.js"]
+# rebuild
