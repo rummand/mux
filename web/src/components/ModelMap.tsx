@@ -16,8 +16,6 @@ interface NodeData {
   enabled: boolean;
   x: number;
   y: number;
-  vx: number;
-  vy: number;
   r: number;
 }
 
@@ -71,95 +69,20 @@ export function ModelMap({ sys }: { sys: SystemInfo | undefined }) {
   const totalRss = displayNodes.reduce((sum, n) => sum + (n.rssGb ?? 0), 0);
   const totalEstimate = displayNodes.reduce((sum, n) => sum + n.estimateGb, 0);
 
-  // Build a new node from model data, preserving position if it exists
-  const buildNode = useCallback((m: Model, existingX?: number, existingY?: number): NodeData => {
-    return {
-      id: m.id,
-      display_name: m.display_name || m.id,
-      kind: m.kind,
-      state: (m.instance?.state ?? "unloaded") as NodeData["state"],
-      estimateGb: m.estimateGb,
-      rssGb: m.instance?.rssGb ?? null,
-      backend: m.backend,
-      pinned: m.pinned,
-      enabled: m.enabled,
-      x: existingX ?? 0,
-      y: existingY ?? 0,
-      vx: 0,
-      vy: 0,
-      r: Math.max(10, Math.sqrt(m.estimateGb) * 6),
-    };
-  }, []);
-
-  // Sync model data into the node pool
-  const syncModels = useCallback(() => {
-    if (!models || models.length === 0) {
-      nodesRef.current = [];
-      setDisplayNodes([]);
-      return;
-    }
-
-    const existingMap = new Map(nodesRef.current.map((n) => [n.id, n]));
-    const newNodes: NodeData[] = [];
-
-    for (const m of models) {
-      const existing = existingMap.get(m.id);
-      if (existing) {
-        // Update non-physics properties
-        existing.display_name = m.display_name || m.id;
-        existing.kind = m.kind;
-        existing.state = (m.instance?.state ?? "unloaded") as NodeData["state"];
-        existing.estimateGb = m.estimateGb;
-        existing.rssGb = m.instance?.rssGb ?? null;
-        existing.backend = m.backend;
-        existing.pinned = m.pinned;
-        existing.enabled = m.enabled;
-        existing.r = Math.max(10, Math.sqrt(m.estimateGb) * 6);
-      } else {
-        // New node — spiral placement
-        const idx = newNodes.length + nodesRef.current.length;
-        const angle = (idx * 2.399963) % (Math.PI * 2);
-        const radius = 50 + (idx % 10) * 40;
-        const nn = buildNode(m, dimensions.w / 2 + Math.cos(angle) * radius, dimensions.h / 2 + Math.sin(angle) * radius);
-        newNodes.push(nn);
-      }
-    }
-
-    // Remove removed models
-    const modelIds = new Set(models.map((m) => m.id));
-    nodesRef.current = nodesRef.current.filter((n) => modelIds.has(n.id));
-    nodesRef.current.push(...newNodes);
-
-    // Update display state
-    if (mountedRef.current) {
-      console.log("[ModelMap] syncModels, nodes:", nodesRef.current.length, "first:", nodesRef.current[0]?.id, "x:", nodesRef.current[0]?.x, "y:", nodesRef.current[0]?.y);
-      setDisplayNodes([...nodesRef.current]);
-    }
-
-    // Reheat simulation
-    if (simRef.current) {
-      simRef.current.alpha(0.4).restart();
-    } else {
-      // First time — initialize
-      initSim(nodesRef.current);
-    }
-  }, [models, dimensions.w, dimensions.h, buildNode]);
-
-  // Initialize the simulation
-  const initSim = useCallback((currentNodes: NodeData[]) => {
+  const initSim = useCallback((currentNodes: NodeData[], width: number, height: number) => {
     if (currentNodes.length === 0) return;
+    (simRef.current as any)?.stop();
 
     import("d3-force").then((d3f: any) => {
       if (!mountedRef.current) return;
-      console.log("[ModelMap] sim init, nodes:", currentNodes.length, "dims:", dimensions.w, "x", dimensions.h);
+
       const sim = d3f.forceSimulation(currentNodes)
-        .force("charge", d3f.forceManyBody().strength(-300))
-        .force("center", d3f.forceCenter(dimensions.w / 2, dimensions.h / 2).strength(0.03))
-        .force("collision", d3f.forceCollide().radius((n: NodeData) => n.r + 6))
+        .force("charge", d3f.forceManyBody().strength(-400))
+        .force("center", d3f.forceCenter(width / 2, height / 2).strength(0.01))
+        .force("collision", d3f.forceCollide().radius((n: NodeData) => n.r + 3))
         .on("tick", () => {
           if (mountedRef.current) {
-            console.log("[ModelMap] tick, nodes:", currentNodes.length, "first:", currentNodes[0]?.id, "x:", currentNodes[0]?.x);
-            setDisplayNodes([...currentNodes]);
+            setDisplayNodes(currentNodes.map((n) => ({ ...n })));
           }
         })
         .alpha(1)
@@ -169,7 +92,7 @@ export function ModelMap({ sys }: { sys: SystemInfo | undefined }) {
     }).catch((err: any) => {
       console.error("[ModelMap] failed to load d3-force:", err);
     });
-  }, [dimensions.w, dimensions.h]);
+  }, []);
 
   // Resize observer
   useEffect(() => {
@@ -183,26 +106,81 @@ export function ModelMap({ sys }: { sys: SystemInfo | undefined }) {
     return () => observer.disconnect();
   }, []);
 
-  // Sync models -> nodes
+  // Main effect: sync models → nodes → simulation
   useEffect(() => {
     mountedRef.current = true;
-    syncModels();
+
+    if (!models || models.length === 0) {
+      nodesRef.current = [];
+      setDisplayNodes([]);
+      return;
+    }
+
+    const existingMap = new Map(nodesRef.current.map((n) => [n.id, n]));
+    const newNodes: NodeData[] = [];
+    const w = dimensions.w;
+    const h = dimensions.h;
+
+    for (const m of models) {
+      const existing = existingMap.get(m.id);
+      if (existing) {
+        // Update non-physics properties only
+        existing.display_name = m.display_name || m.id;
+        existing.kind = m.kind;
+        existing.state = (m.instance?.state ?? "unloaded") as NodeData["state"];
+        existing.estimateGb = m.estimateGb;
+        existing.rssGb = m.instance?.rssGb ?? null;
+        existing.backend = m.backend;
+        existing.pinned = m.pinned;
+        existing.enabled = m.enabled;
+        existing.r = Math.max(10, Math.sqrt(m.estimateGb) * 6);
+      } else {
+        // New node — use a grid layout to guarantee no clipping
+        const totalModels = models.length;
+        const cols = Math.ceil(Math.sqrt(totalModels * (w / h)));
+        const row = newNodes.length % cols;
+        const col = Math.floor(newNodes.length / cols);
+        const cellW = w * 0.85 / cols;
+        const cellH = h * 0.85 / (Math.ceil(totalModels / cols));
+        const nn: NodeData = {
+          id: m.id,
+          display_name: m.display_name || m.id,
+          kind: m.kind,
+          state: (m.instance?.state ?? "unloaded") as NodeData["state"],
+          estimateGb: m.estimateGb,
+          rssGb: m.instance?.rssGb ?? null,
+          backend: m.backend,
+          pinned: m.pinned,
+          enabled: m.enabled,
+          x: w / 2 - w * 0.425 + col * cellW + cellW / 2,
+          y: h / 2 - h * 0.425 + row * cellH + cellH / 2,
+          r: Math.max(10, Math.sqrt(m.estimateGb) * 6),
+        };
+        newNodes.push(nn);
+      }
+    }
+
+    // Remove removed models
+    const modelIds = new Set(models.map((m) => m.id));
+    nodesRef.current = nodesRef.current.filter((n) => modelIds.has(n.id));
+    nodesRef.current.push(...newNodes);
+
+    // Update display
+    setDisplayNodes(nodesRef.current.map((n) => ({ ...n })));
+
+    if (simRef.current) {
+      // Nodes already exist — just reheat
+      simRef.current.alpha(0.5).restart();
+    } else {
+      // First time — initialize simulation
+      initSim(nodesRef.current, w, h);
+    }
+
     return () => {
       mountedRef.current = false;
-      simRef.current?.stop();
+      (simRef.current as any)?.stop();
     };
-  }, [syncModels]);
-
-  // Update simulation center on dimension change
-  useEffect(() => {
-    if (simRef.current && nodesRef.current.length > 0) {
-      const w = dimensions.w;
-      const h = dimensions.h;
-      simRef.current.force("center", simRef.current.force("center") || 
-        (import("d3-force").then((d3f: any) => d3f.forceCenter(w / 2, h / 2)).catch(() => null)));
-      simRef.current.alpha(0.1).restart();
-    }
-  }, [dimensions.w, dimensions.h]);
+  }, [models, dimensions.w, dimensions.h, initSim]);
 
   const hasDetail = sys && displayNodes.length > 0;
 
