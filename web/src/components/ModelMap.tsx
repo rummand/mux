@@ -108,10 +108,10 @@ export function ModelMap({ sys }: { sys: SystemInfo | undefined }) {
           .force("x", (d3f as any).forceX(width / 2).strength(0.04))
           .force("y", (d3f as any).forceY(height / 2).strength(0.04))
           .on("tick", () => {
-            // Copy current node positions so React can re-render
             setRendered(currentNodes.map((n) => ({ ...n })));
           })
-          .alpha(0.08)
+          // alpha=1 runs hot for ~100 ticks then cools to 0 — no more bouncing
+          .alpha(1)
           .restart();
 
         simulationRef.current = sim;
