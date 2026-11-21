@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, type MuxEvent, type Settings, type SystemInfo } from "../api";
 import { SERIES, TimeChart } from "../components/charts";
 import { SystemLivePanel } from "../components/SystemLive";
+import { ModelMap } from "../components/ModelMap";
 import { Badge, Button, Card, ErrorNote, Field, Input, Meter, PageHeader, Segmented, StatusDot, Table, Td, Th, Toggle } from "../components/ui";
 import { fmtAgo, fmtBytes, fmtDuration, fmtGb, fmtTime, machineLabel } from "../format";
 import { useApi } from "../hooks";
@@ -63,6 +64,9 @@ export default function SystemPage() {
         <Card title="Swap" subtitle="GB in use">
           <TimeChart data={series} bucketMs={bucket} kind="area" yFormat={(v) => `${Math.round(v)}`} series={[{ key: "swap", label: "Swap", color: SERIES[1], format: (v) => fmtGb(v) }]} />
         </Card>
+      </div>
+      <div className="mt-4">
+        <ModelMap sys={data} />
       </div>
       <Card title="Model servers" className="mt-4" pad={false}>
         <Table>
