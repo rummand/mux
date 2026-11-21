@@ -132,6 +132,7 @@ export function ModelMap({ sys }: { sys: SystemInfo | undefined }) {
 
     // Update display state
     if (mountedRef.current) {
+      console.log("[ModelMap] syncModels, nodes:", nodesRef.current.length, "first:", nodesRef.current[0]?.id, "x:", nodesRef.current[0]?.x, "y:", nodesRef.current[0]?.y);
       setDisplayNodes([...nodesRef.current]);
     }
 
@@ -150,13 +151,14 @@ export function ModelMap({ sys }: { sys: SystemInfo | undefined }) {
 
     import("d3-force").then((d3f: any) => {
       if (!mountedRef.current) return;
-
+      console.log("[ModelMap] sim init, nodes:", currentNodes.length, "dims:", dimensions.w, "x", dimensions.h);
       const sim = d3f.forceSimulation(currentNodes)
         .force("charge", d3f.forceManyBody().strength(-300))
         .force("center", d3f.forceCenter(dimensions.w / 2, dimensions.h / 2).strength(0.03))
         .force("collision", d3f.forceCollide().radius((n: NodeData) => n.r + 6))
         .on("tick", () => {
           if (mountedRef.current) {
+            console.log("[ModelMap] tick, nodes:", currentNodes.length, "first:", currentNodes[0]?.id, "x:", currentNodes[0]?.x);
             setDisplayNodes([...currentNodes]);
           }
         })
