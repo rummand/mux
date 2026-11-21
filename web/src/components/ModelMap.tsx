@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback, useMemo } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { api, type Model, type SystemInfo } from "../api";
 import { Badge, Card, Meter, StatusDot } from "../components/ui";
 import { fmtGb } from "../format";
@@ -58,71 +58,78 @@ export function ModelMap({ sys }: { sys: SystemInfo | undefined }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const simulationRef = useRef<any>(null);
   const [dimensions, setDimensions] = useState({ w: 800, h: 400 });
+
+  // Single mutable node pool — d3-force mutates x/y in place.
+  // When models update, we merge display data into existing nodes instead of creating new objects.
+  const nodePoolRef = useRef<Record<string, NodeData>>({});
   const [rendered, setRendered] = useState<NodeData[]>([]);
 
-  // Build node list — stable references so d3-force can mutate them
-  const nodes = useMemo(() => {
-    if (!models) return [] as NodeData[];
-    return models.map((m): NodeData => {
-      // Spread nodes randomly initially so d3-force has something to work with
-      const angle = Math.random() * Math.PI * 2;
-      const radius = Math.random() * 100;
-      return {
-        id: m.id,
-        display_name: m.display_name || m.id,
-        kind: m.kind,
-        state: (m.instance?.state ?? "unloaded") as NodeData["state"],
-        estimateGb: m.estimateGb,
-        rssGb: m.instance?.rssGb ?? null,
-        backend: m.backend,
-        pinned: m.pinned,
-        enabled: m.enabled,
-        x: 400 + Math.cos(angle) * radius,
-        y: 200 + Math.sin(angle) * radius,
-        r: Math.max(10, Math.sqrt(m.estimateGb) * 6),
-      };
-    });
-  }, [models]);
+  // Sync node pool with incoming model data
+  // Only adds/removes nodes; existing nodes keep their x/y from the simulation
+  useEffect(() => {
+    if (!models) return;
+
+    // Merge / update existing nodes
+    const newPool: Record<string, NodeData> = {};
+    for (const m of models) {
+      const existing = nodePoolRef.current[m.id];
+      if (existing) {
+        // Update non-simulation data only
+        existing.display_name = m.display_name || m.id;
+        existing.kind = m.kind;
+        existing.state = (m.instance?.state ?? "unloaded") as NodeData["state"];
+        existing.estimateGb = m.estimateGb;
+        existing.rssGb = m.instance?.rssGb ?? null;
+        existing.backend = m.backend;
+        existing.pinned = m.pinned;
+        existing.enabled = m.enabled;
+        existing.r = Math.max(10, Math.sqrt(m.estimateGb) * 6);
+        newPool[m.id] = existing;
+      } else {
+        // Brand new model — place it near center with a slight offset
+        const pool = nodePoolRef.current;
+        const count = Object.keys(pool).length;
+        const angle = (count * 2.399963) % (Math.PI * 2); // golden angle spiral
+        const radius = 30 + (count % 10) * 20;
+        const newNode: NodeData = {
+          id: m.id,
+          display_name: m.display_name || m.id,
+          kind: m.kind,
+          state: (m.instance?.state ?? "unloaded") as NodeData["state"],
+          estimateGb: m.estimateGb,
+          rssGb: m.instance?.rssGb ?? null,
+          backend: m.backend,
+          pinned: m.pinned,
+          enabled: m.enabled,
+          x: dimensions.w / 2 + Math.cos(angle) * radius,
+          y: dimensions.h / 2 + Math.sin(angle) * radius,
+          r: Math.max(10, Math.sqrt(m.estimateGb) * 6),
+        };
+        newPool[m.id] = newNode;
+      }
+    }
+
+    // Remove nodes that are no longer in models
+    const modelIds = new Set(models.map((m) => m.id));
+    for (const id of Object.keys(nodePoolRef.current)) {
+      if (!modelIds.has(id)) delete nodePoolRef.current[id];
+    }
+
+    nodePoolRef.current = newPool;
+    const updatedNodes = Object.values(newPool);
+    setRendered(updatedNodes);
+
+    // Reheat simulation so new nodes spread out
+    if (simulationRef.current) {
+      simulationRef.current.alpha(0.3).restart();
+    }
+  }, [models, dimensions.w, dimensions.h]);
 
   const selected = rendered.find((n) => n.id === selectedId) ?? null;
 
   const loadedCount = rendered.filter((n) => n.state === "ready").length;
   const totalRss = rendered.reduce((sum, n) => sum + (n.rssGb ?? 0), 0);
   const totalEstimate = rendered.reduce((sum, n) => sum + n.estimateGb, 0);
-
-  const initSimulation = useCallback(
-    (width: number, height: number, currentNodes: NodeData[]) => {
-      (simulationRef.current as any)?.stop();
-
-      import("d3-force").then((d3f) => {
-        const sim = (d3f as any).forceSimulation(currentNodes)
-          .force(
-            "link",
-            (d3f as any).forceLink(
-              currentNodes.filter((n) => n.state === "ready").map((n) => ({ source: n, target: n }))
-            ).distance((d: any) => Math.max(60, (d.source.estimateGb + d.target.estimateGb) * 20))
-          )
-          .force("charge", (d3f as any).forceManyBody().strength((d: any) => -Math.max(15, d.estimateGb * 8)))
-          .force("center", (d3f as any).forceCenter(width / 2, height / 2))
-          .force("collision", (d3f as any).forceCollide().radius((d: any) => d.r + 4))
-          .force("x", (d3f as any).forceX(width / 2).strength(0.04))
-          .force("y", (d3f as any).forceY(height / 2).strength(0.04))
-          .on("tick", () => {
-            setRendered(currentNodes.map((n) => ({ ...n })));
-          })
-          // alpha=1 runs hot for ~100 ticks then cools to 0 — no more bouncing
-          .alpha(1)
-          .restart();
-
-        simulationRef.current = sim;
-      }).catch((err) => {
-        console.error("[ModelMap] failed to load d3-force:", err);
-      });
-
-      simulationRef.current = { stop: () => {} };
-    },
-    []
-  );
 
   // Resize observer
   useEffect(() => {
@@ -136,22 +143,50 @@ export function ModelMap({ sys }: { sys: SystemInfo | undefined }) {
     return () => observer.disconnect();
   }, []);
 
-  // Init / restart simulation when nodes or dimensions change
+  // Set up the simulation once
   useEffect(() => {
-    if (nodes.length === 0) {
-      setRendered([]);
-      return;
-    }
-    setRendered(nodes); // show initial positions
-    initSimulation(dimensions.w, dimensions.h, nodes);
+    let stopped = false;
+
+    import("d3-force").then((d3f) => {
+      if (stopped) return;
+
+      const pool = nodePoolRef.current;
+      if (Object.keys(pool).length === 0) return;
+
+      const allNodes = Object.values(pool);
+
+      const sim = (d3f as any).forceSimulation(allNodes)
+        .force(
+          "link",
+          (d3f as any).forceLink(
+            allNodes.filter((n) => n.state === "ready").map((n) => ({ source: n, target: n }))
+          ).distance((d: any) => Math.max(60, (d.source.estimateGb + d.target.estimateGb) * 20))
+        )
+        .force("charge", (d3f as any).forceManyBody().strength((d: any) => -Math.max(15, d.estimateGb * 8)))
+        .force("center", (d3f as any).forceCenter(dimensions.w / 2, dimensions.h / 2))
+        .force("collision", (d3f as any).forceCollide().radius((d: any) => d.r + 4))
+        .force("x", (d3f as any).forceX(dimensions.w / 2).strength(0.04))
+        .force("y", (d3f as any).forceY(dimensions.h / 2).strength(0.04))
+        .on("tick", () => {
+          setRendered(allNodes.map((n) => ({ ...n })));
+        })
+        // Run hot briefly then let alpha decay to 0 — simulation settles and stops
+        .alpha(1)
+        .restart();
+
+      simulationRef.current = sim;
+    }).catch((err) => {
+      console.error("[ModelMap] failed to load d3-force:", err);
+    });
 
     return () => {
+      stopped = true;
       simulationRef.current?.stop();
       simulationRef.current = null;
     };
-  }, [nodes, dimensions, initSimulation]);
+  }, [dimensions.w, dimensions.h]);
 
-  const hasDetail = sys && nodes.length > 0;
+  const hasDetail = sys && rendered.length > 0;
 
   return (
     <Card title="Model Map" subtitle="Every model as a circle: bigger = more RAM. Green = loaded, dashed = not pinned, colored dot above = kind." pad={false}
@@ -163,7 +198,7 @@ export function ModelMap({ sys }: { sys: SystemInfo | undefined }) {
         </div>
       ) : undefined}
     >
-      {nodes.length === 0 ? (
+      {rendered.length === 0 ? (
         <div className="flex h-[300px] items-center justify-center text-ink-3">
           No models installed yet.
         </div>
