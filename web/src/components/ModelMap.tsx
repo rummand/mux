@@ -1,9 +1,8 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { api, type Model, type SystemInfo } from "../api";
 import { Badge, Card, Meter, StatusDot } from "../components/ui";
 import { fmtGb } from "../format";
 import { useApi } from "../hooks";
-// The module itself is fine; we just load it at runtime.
 
 interface NodeData {
   id: string;
@@ -17,10 +16,6 @@ interface NodeData {
   enabled: boolean;
   x: number;
   y: number;
-  vx: number;
-  vy: number;
-  fx: number | null;
-  fy: number | null;
   r: number;
 }
 
@@ -63,57 +58,66 @@ export function ModelMap({ sys }: { sys: SystemInfo | undefined }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const simulationRef = useRef<any>(null);
   const [dimensions, setDimensions] = useState({ w: 800, h: 400 });
+  const [rendered, setRendered] = useState<NodeData[]>([]);
 
-  const nodes = (models ?? []).map((m): NodeData => ({
-    id: m.id,
-    display_name: m.display_name || m.id,
-    kind: m.kind,
-    state: (m.instance?.state ?? "unloaded") as NodeData["state"],
-    estimateGb: m.estimateGb,
-    rssGb: m.instance?.rssGb ?? null,
-    backend: m.backend,
-    pinned: m.pinned,
-    enabled: m.enabled,
-    x: 0,
-    y: 0,
-    vx: 0,
-    vy: 0,
-    fx: null,
-    fy: null,
-    r: Math.max(20, Math.sqrt(m.estimateGb) * 16),
-  }));
+  // Build node list — stable references so d3-force can mutate them
+  const nodes = useMemo(() => {
+    if (!models) return [] as NodeData[];
+    return models.map((m): NodeData => {
+      // Find or reuse existing node to preserve x/y from simulation
+      return {
+        id: m.id,
+        display_name: m.display_name || m.id,
+        kind: m.kind,
+        state: (m.instance?.state ?? "unloaded") as NodeData["state"],
+        estimateGb: m.estimateGb,
+        rssGb: m.instance?.rssGb ?? null,
+        backend: m.backend,
+        pinned: m.pinned,
+        enabled: m.enabled,
+        x: 0,
+        y: 0,
+        r: Math.max(20, Math.sqrt(m.estimateGb) * 16),
+      };
+    });
+  }, [models]);
 
-  const [simNodes, setSimNodes] = useState<NodeData[]>(nodes);
+  const selected = rendered.find((n) => n.id === selectedId) ?? null;
 
-  const selected = nodes.find((n) => n.id === selectedId) ?? null;
-
-  const loadedCount = nodes.filter((n) => n.state === "ready").length;
-  const totalRss = nodes.reduce((sum, n) => sum + (n.rssGb ?? 0), 0);
-  const totalEstimate = nodes.reduce((sum, n) => sum + n.estimateGb, 0);
+  const loadedCount = rendered.filter((n) => n.state === "ready").length;
+  const totalRss = rendered.reduce((sum, n) => sum + (n.rssGb ?? 0), 0);
+  const totalEstimate = rendered.reduce((sum, n) => sum + n.estimateGb, 0);
 
   const initSimulation = useCallback(
-    async (width: number, height: number, currentNodes: NodeData[]) => {
+    (width: number, height: number, currentNodes: NodeData[]) => {
       (simulationRef.current as any)?.stop();
 
-      const d3f = await import("d3-force");
+      import("d3-force").then((d3f) => {
+        const sim = (d3f as any).forceSimulation(currentNodes)
+          .force(
+            "link",
+            (d3f as any).forceLink(
+              currentNodes.filter((n) => n.state === "ready").map((n) => ({ source: n, target: n }))
+            ).distance((d: any) => Math.max(60, (d.source.estimateGb + d.target.estimateGb) * 20))
+          )
+          .force("charge", (d3f as any).forceManyBody().strength((d: any) => -Math.max(80, d.estimateGb * 50)))
+          .force("center", (d3f as any).forceCenter(width / 2, height / 2))
+          .force("collision", (d3f as any).forceCollide().radius((d: any) => d.r + 10))
+          .force("x", (d3f as any).forceX(width / 2).strength(0.04))
+          .force("y", (d3f as any).forceY(height / 2).strength(0.04))
+          .on("tick", () => {
+            // Copy current node positions so React can re-render
+            setRendered(currentNodes.map((n) => ({ ...n })));
+          })
+          .alpha(1)
+          .restart();
 
-      const sim = (d3f as any).forceSimulation(currentNodes)
-        .force(
-          "link",
-          (d3f as any).forceLink(
-            currentNodes.filter((n) => n.state === "ready").map((n) => ({ source: n, target: n }))
-          ).distance((d: any) => Math.max(60, (d.source.estimateGb + d.target.estimateGb) * 20))
-        )
-        .force("charge", (d3f as any).forceManyBody().strength((d: any) => -Math.max(80, d.estimateGb * 50)))
-        .force("center", (d3f as any).forceCenter(width / 2, height / 2))
-        .force("collision", (d3f as any).forceCollide().radius((d: any) => d.r + 10))
-        .force("x", (d3f as any).forceX(width / 2).strength(0.04))
-        .force("y", (d3f as any).forceY(height / 2).strength(0.04))
-        .on("tick", () => {
-          setSimNodes(Array.from(currentNodes));
-        });
+        simulationRef.current = sim;
+      }).catch((err) => {
+        console.error("[ModelMap] failed to load d3-force:", err);
+      });
 
-      simulationRef.current = sim;
+      simulationRef.current = { stop: () => {} };
     },
     []
   );
@@ -130,24 +134,20 @@ export function ModelMap({ sys }: { sys: SystemInfo | undefined }) {
     return () => observer.disconnect();
   }, []);
 
-  // Init simulation when nodes change
+  // Init / restart simulation when nodes or dimensions change
   useEffect(() => {
-    if (nodes.length === 0) { setSimNodes([]); return; }
-    setSimNodes(nodes as any);
-    const { w, h } = dimensions;
-    void initSimulation(w, h, nodes as any);
+    if (nodes.length === 0) {
+      setRendered([]);
+      return;
+    }
+    setRendered(nodes); // show initial positions
+    initSimulation(dimensions.w, dimensions.h, nodes);
 
     return () => {
       simulationRef.current?.stop();
       simulationRef.current = null;
     };
   }, [nodes, dimensions, initSimulation]);
-
-  // Restart simulation on dimension change
-  useEffect(() => {
-    if (nodes.length === 0) return;
-    (simulationRef.current as any)?.alpha(0.3).restart();
-  }, [dimensions, nodes.length]);
 
   const hasDetail = sys && nodes.length > 0;
 
@@ -172,7 +172,7 @@ export function ModelMap({ sys }: { sys: SystemInfo | undefined }) {
             className="relative flex-1 overflow-hidden select-none"
             style={{ cursor: "grab", minHeight: 300 }}
           >
-            {simNodes.map((n) => (
+            {rendered.map((n) => (
               <div
                 key={n.id}
                 onClick={() => setSelectedId(selectedId === n.id ? null : n.id)}
