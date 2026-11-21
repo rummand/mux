@@ -90,7 +90,7 @@ export function ModelMap({ sys }: { sys: SystemInfo | undefined }) {
         const pool = nodePoolRef.current;
         const count = Object.keys(pool).length;
         const angle = (count * 2.399963) % (Math.PI * 2); // golden angle spiral
-        const radius = 30 + (count % 10) * 20;
+        const radius = 40 + (count % 15) * 35;
         const newNode: NodeData = {
           id: m.id,
           display_name: m.display_name || m.id,
@@ -157,20 +157,13 @@ export function ModelMap({ sys }: { sys: SystemInfo | undefined }) {
 
       const sim = (d3f as any).forceSimulation(allNodes)
         .force(
-          "link",
-          (d3f as any).forceLink(
-            allNodes.filter((n) => n.state === "ready").map((n) => ({ source: n, target: n }))
-          ).distance((d: any) => Math.max(60, (d.source.estimateGb + d.target.estimateGb) * 20))
+          "charge", (d3f as any).forceManyBody().strength(-200)
         )
-        .force("charge", (d3f as any).forceManyBody().strength((d: any) => -Math.max(15, d.estimateGb * 8)))
-        .force("center", (d3f as any).forceCenter(dimensions.w / 2, dimensions.h / 2))
-        .force("collision", (d3f as any).forceCollide().radius((d: any) => d.r + 4))
-        .force("x", (d3f as any).forceX(dimensions.w / 2).strength(0.04))
-        .force("y", (d3f as any).forceY(dimensions.h / 2).strength(0.04))
+        .force("center", (d3f as any).forceCenter(dimensions.w / 2, dimensions.h / 2).strength(0.05))
+        .force("collision", (d3f as any).forceCollide().radius((d: any) => d.r + 8))
         .on("tick", () => {
           setRendered(allNodes.map((n) => ({ ...n })));
         })
-        // Run hot briefly then let alpha decay to 0 — simulation settles and stops
         .alpha(1)
         .restart();
 
