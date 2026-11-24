@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createWriteStream, existsSync, mkdirSync, readFileSync, statSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { EventEmitter } from "node:events";
 import { createServer } from "node:net";
-import { join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { config } from "../config.js";
 import { event, settings } from "../db.js";
 import { getModel, listModels, type Model } from "../models.js";
@@ -100,6 +100,16 @@ async function freePort(): Promise<number> {
   throw new ModelUnavailable("no free port in mux's model port range");
 }
 
+/** The model's own llama-server (server_bin), only a file named llama-server under ~/.mux/llama.cpp/. */
+export function llamaServerFor(m: Model): string {
+  const own = m.server_bin;
+  if (!own) return config.llamaServer;
+  const p = resolve(own);
+  if (basename(p) !== "llama-server" || !p.startsWith(join(config.home, "llama.cpp") + "/")) throw new ModelUnavailable(`${m.id}'s llama-server must be under ${join(config.home, "llama.cpp")}/ (${own})`, 500, "backend_missing");
+  if (!existsSync(p)) throw new ModelUnavailable(`${m.id}'s llama-server is not on disk (${p})`, 500, "backend_missing");
+  return p;
+}
+
 function command(m: Model, port: number): { cmd: string; args: string[]; env?: Record<string, string> } {
   if (m.backend === "llamacpp") {
     if (!m.path || !existsSync(m.path)) throw new ModelUnavailable(`the weights for ${m.id} are not on disk (${m.path ?? "no path"})`, 500, "model_missing");
@@ -115,7 +125,7 @@ function command(m: Model, port: number): { cmd: string; args: string[]; env?: R
       if (!m.extra_args.some((a) => a === "--cache-ram" || a === "-cram")) args.push("--cache-ram", "4096");
       if (m.mmproj && existsSync(m.mmproj)) args.push("--mmproj", m.mmproj);
     }
-    return { cmd: config.llamaServer, args: [...args, ...m.extra_args] };
+    return { cmd: llamaServerFor(m), args: [...args, ...m.extra_args] };
   }
   if (m.backend === "mlx") {
     if (!existsSync(config.mlxPython)) throw new ModelUnavailable("MLX is not installed (no python with mlx-lm at " + config.mlxPython + ")", 500, "backend_missing");

@@ -101,7 +101,7 @@ export function registerAdmin(app: FastifyInstance) {
       const changed = Object.keys(b).filter((k) => JSON.stringify((b as Record<string, unknown>)[k]) !== JSON.stringify((prev as unknown as Record<string, unknown>)[k]));
       if (changed.length) journal({ kind: "model", ref: id, title: `Model ${id}: ${changed.join(", ")}`, before: Object.fromEntries(changed.map((k) => [k, (prev as unknown as Record<string, unknown>)[k]])), after: Object.fromEntries(changed.map((k) => [k, (b as Record<string, unknown>)[k]])) });
       // Flags that change how the server starts take effect on its next load.
-      const restart = ["path", "mmproj", "ctx", "parallel", "extra_args", "reasoning", "backend"].some((k) => k in b && JSON.stringify((b as Record<string, unknown>)[k]) !== JSON.stringify((prev as unknown as Record<string, unknown>)[k]));
+      const restart = ["path", "mmproj", "ctx", "parallel", "extra_args", "reasoning", "backend", "server_bin"].some((k) => k in b && JSON.stringify((b as Record<string, unknown>)[k]) !== JSON.stringify((prev as unknown as Record<string, unknown>)[k]));
       if (restart) await unload(id);
       return publicModel(next);
     });

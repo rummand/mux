@@ -26,6 +26,9 @@ export interface Model {
   provider_id: string | null;
   /** USD per million input / output tokens; 0 for local compute. */
   cost_in: number; cost_out: number;
+  /** A llama-server build for this model alone, under ~/.mux/llama.cpp/ (an architecture newer than the shared
+   *  Homebrew build: Inkling 2 Mini needs a nightly); null: config.llamaServer. */
+  server_bin: string | null;
 }
 
 type Row = Omit<Model, "extra_args" | "caps" | "pinned" | "enabled"> & { extra_args: string; caps: string; pinned: number; enabled: number };
@@ -43,19 +46,19 @@ export function upsertModel(m: Partial<Model> & Pick<Model, "id" | "backend">): 
   const next: Model = {
     display_name: m.id, kind: "chat", path: null, mmproj: null, base_url: null, api_key: null, upstream_model: null,
     catalog_id: null, size_bytes: 0, ctx: 32768, parallel: 2, extra_args: [], reasoning: "off", caps: {},
-    keep_alive_min: null, pinned: false, enabled: true, notes: "", created_at: now(), provider_id: null, cost_in: 0, cost_out: 0,
+    keep_alive_min: null, pinned: false, enabled: true, notes: "", created_at: now(), provider_id: null, cost_in: 0, cost_out: 0, server_bin: null,
     ...prev, ...m,
   } as Model;
   db.prepare(`INSERT INTO models(id, display_name, kind, backend, path, mmproj, base_url, api_key, upstream_model, catalog_id, size_bytes,
-      ctx, parallel, extra_args, reasoning, caps, keep_alive_min, pinned, enabled, notes, created_at, provider_id, cost_in, cost_out)
+      ctx, parallel, extra_args, reasoning, caps, keep_alive_min, pinned, enabled, notes, created_at, provider_id, cost_in, cost_out, server_bin)
     VALUES(@id, @display_name, @kind, @backend, @path, @mmproj, @base_url, @api_key, @upstream_model, @catalog_id, @size_bytes,
-      @ctx, @parallel, @extra_args, @reasoning, @caps, @keep_alive_min, @pinned, @enabled, @notes, @created_at, @provider_id, @cost_in, @cost_out)
+      @ctx, @parallel, @extra_args, @reasoning, @caps, @keep_alive_min, @pinned, @enabled, @notes, @created_at, @provider_id, @cost_in, @cost_out, @server_bin)
     ON CONFLICT(id) DO UPDATE SET display_name=excluded.display_name, kind=excluded.kind, backend=excluded.backend, path=excluded.path,
       mmproj=excluded.mmproj, base_url=excluded.base_url, api_key=excluded.api_key, upstream_model=excluded.upstream_model,
       catalog_id=excluded.catalog_id, size_bytes=excluded.size_bytes, ctx=excluded.ctx, parallel=excluded.parallel,
       extra_args=excluded.extra_args, reasoning=excluded.reasoning, caps=excluded.caps, keep_alive_min=excluded.keep_alive_min,
       pinned=excluded.pinned, enabled=excluded.enabled, notes=excluded.notes, provider_id=excluded.provider_id,
-      cost_in=excluded.cost_in, cost_out=excluded.cost_out`)
+      cost_in=excluded.cost_in, cost_out=excluded.cost_out, server_bin=excluded.server_bin`)
     .run({ ...next, extra_args: JSON.stringify(next.extra_args), caps: JSON.stringify(next.caps), pinned: next.pinned ? 1 : 0, enabled: next.enabled ? 1 : 0 });
   return next;
 }
