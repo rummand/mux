@@ -37,8 +37,9 @@ test("a CI step and everything under it is found, paused and resumed", { skip: p
   writeFileSync(script, "sleep 30 & wait\n");
   const p = spawn("/bin/bash", ["-e", script], { stdio: "ignore" });
   try {
-    await new Promise((res) => setTimeout(res, 400));
-    const steps = await runningSteps();
+    // Wait for the script to have started its child (slow when the whole suite runs at once).
+    let steps = await runningSteps();
+    for (let i = 0; i < 50 && !(steps[0]?.procs.length >= 2); i++) { await new Promise((res) => setTimeout(res, 100)); steps = await runningSteps(); }
     assert.deepEqual(steps.map((s) => s.runner), ["mac-steps"]);
     assert.ok(steps[0].procs.length >= 2, "the script and the sleep under it");
     const stat = (pid: number) => execFileSync("/bin/ps", ["-o", "stat=", "-p", String(pid)]).toString().trim();
