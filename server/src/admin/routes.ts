@@ -35,7 +35,7 @@ import { modelResources, providerResources, tenantResources } from "./resources.
 import { entries, journal } from "../journal.js";
 import { registerKeeper } from "../keeper.js";
 import { registerServices } from "../services.js";
-import { registerBuild } from "../build.js";
+import { registerBuild, registerBuildGateway } from "../build.js";
 import { registerBuildKeeper } from "../buildKeeper.js";
 import { registerAgents } from "../agents.js";
 import { choices as intentChoices, intentOf, intentStats } from "../router/intent.js";
@@ -329,8 +329,9 @@ export function registerAdmin(app: FastifyInstance) {
     registerBrain(api);
     registerKeeper(api);
     registerServices(api);
-    registerBuild(api);
-    registerBuildKeeper(api);
+    // A gateway runs no runners: its Build server tab is the node's.
+    if (config.role === "gateway") registerBuildGateway(api);
+    else { registerBuild(api); registerBuildKeeper(api); }
     registerAgents(api);
     // Arch-Router on auto routes: how often it decided, where to, how fast (router/intent.ts)
     api.get("/routes/intent", async () => ({ ...intentStats(), routes: intentChoices().map((r) => ({ name: r.name, intent: intentOf(r), own: !!r.intent?.trim() })) }));

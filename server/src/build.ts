@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { config } from "./config.js";
 import { db, event, now } from "./db.js";
+import { listProviders } from "./providers.js";
 import { RANGES } from "./admin/stats.js";
 
 /**
@@ -435,6 +436,29 @@ export async function say(o: { repo: string; body: string; job?: number; comment
 }
 
 export { gh, calls as ghCalls };
+
+/**
+ * On a gateway (mux on Railway), which runs no runners: the Build server tab and its buttons are the node's, so every
+ * /build call goes to the first online mux node (the Mac Studio) through its admin API, as the brain does.
+ */
+export function registerBuildGateway(api: FastifyInstance) {
+  const forward = async (req: { method: string; url: string; body?: unknown }, reply: { code: (n: number) => { send: (b: unknown) => unknown; header: (k: string, v: string) => { send: (b: unknown) => unknown } } }) => {
+    const nodes = listProviders().filter((p) => p.kind === "mux" && p.enabled && p.admin_token);
+    const node = nodes.find((p) => p.status === "online") ?? nodes[0];
+    if (!node) return reply.code(503).send({ error: "no mux node with runners is joined to this gateway" });
+    const path = req.url.slice(req.url.indexOf("/build"));
+    try {
+      const r = await fetch(`${node.base_url}/api/admin${path}`, {
+        method: req.method, signal: AbortSignal.timeout(120_000),
+        headers: { authorization: `Bearer ${node.admin_token}`, ...(req.body !== undefined ? { "content-type": "application/json" } : {}) },
+        body: req.body !== undefined && req.method !== "GET" ? JSON.stringify(req.body) : undefined,
+      });
+      return reply.code(r.status).header("content-type", r.headers.get("content-type") ?? "application/json").send(Buffer.from(await r.arrayBuffer()));
+    } catch (e) { return reply.code(502).send({ error: `${node.name}: ${(e as Error).message}` }); }
+  };
+  api.all("/build", forward as never);
+  api.all("/build/*", forward as never);
+}
 
 export function registerBuild(api: FastifyInstance) {
   api.get("/build", async (req) => buildView((req.query as { range?: string }).range ?? "24h"));
