@@ -13,3 +13,5 @@ process.env.MUX_NO_DOWNLOADS = "1";
 // Never touch the real screen from a test: on the Mac Studio Peekaboo is installed, and the computer tests would look,
 // click and start Peekaboo agent runs for real (2026-11-17: two tests failed there because they did).
 process.env.MUX_NO_COMPUTER = "1";
+// Never ask GitHub or restart the Mac's CI runners from a test.
+process.env.MUX_NO_BUILD = "1";

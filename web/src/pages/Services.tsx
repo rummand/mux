@@ -1,15 +1,16 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api";
 import { BarList, SERIES, TimeChart } from "../components/charts";
-import { Badge, Button, Card, Empty, ErrorNote, Input, PageHeader, Segmented, StatusDot, Table, Td, Th } from "../components/ui";
+import { Badge, Button, Card, Empty, ErrorNote, Input, PageHeader, Segmented, StatusDot, Table, Tabs, Td, Th } from "../components/ui";
 import { fmtAgo, fmtBytes, fmtInt, fmtMs, fmtPct, fmtTime } from "../format";
 import { useApi } from "../hooks";
+import BuildServer from "./BuildServer";
 
 /**
  * mux's shared services — not models, but what every product calls through mux with its key: web search (SearXNG
  * beside mux) and the page reader (server/src/services.ts). Their health, their traffic, who uses them, which search
- * engines answer and which fail, and a box to try them.
+ * engines answer and which fail, and a box to try them. The Build server tab is the Mac's CI runners (BuildServer.tsx).
  */
 type Count = { name: string; n: number };
 interface Service {
@@ -30,13 +31,25 @@ interface Service {
 const BUCKET: Record<string, number> = { "1h": 60_000, "24h": 900_000, "7d": 7_200_000, "30d": 43_200_000 };
 
 export default function ServicesPage() {
+  const [params, setParams] = useSearchParams();
+  const tab = params.get("tab") === "build" ? "build" : "web";
+  const setTab = (t: "web" | "build") => setParams(t === "web" ? {} : { tab: t }, { replace: true });
+  return (
+    <>
+      <PageHeader title="Services" subtitle={tab === "web" ? "Shared services every product calls through mux with its key — not models, but metered and limited the same way." : "The GitHub Actions runners on this Mac, which mux owns: what they build, how it goes, and what it costs the Mac."} />
+      <div className="mb-4"><Tabs value={tab} onChange={setTab} tabs={[{ value: "web", label: "Search and reading" }, { value: "build", label: "Build server" }]} /></div>
+      {tab === "web" ? <WebServices /> : <BuildServer />}
+    </>
+  );
+}
+
+function WebServices() {
   const [range, setRange] = useState("24h");
   const { data, error } = useApi<{ services: Service[] }>("/services", { range }, 15_000, null);
   if (error) return <ErrorNote error={error} />;
   return (
     <>
-      <PageHeader title="Services" subtitle="Shared services every product calls through mux with its key — not models, but metered and limited the same way."
-        actions={<Segmented value={range} onChange={setRange} options={["1h", "24h", "7d", "30d"].map((v) => ({ value: v, label: v }))} />} />
+      <div className="mb-4 flex justify-end"><Segmented value={range} onChange={setRange} options={["1h", "24h", "7d", "30d"].map((v) => ({ value: v, label: v }))} /></div>
       {data?.services.map((s) => <ServiceView key={s.id} s={s} bucket={BUCKET[range]} />)}
     </>
   );
