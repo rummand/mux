@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { api } from "../api";
+import { Markdown } from "../components/Assistant";
 import { BarList, SERIES, TimeChart } from "../components/charts";
 import { Badge, Button, Card, Empty, ErrorNote, Segmented, StatusDot, Table, Td, Th } from "../components/ui";
 import { fmtAgo, fmtInt, fmtMs, fmtPct, fmtTime } from "../format";
@@ -111,6 +112,8 @@ export default function BuildServer() {
           <Kpi label="Queued now" value={fmtInt(k.queuedNow)} tone={k.queuedNow ? "warn" : undefined} />
         </div>
       </Card>
+
+      <Keeper repo={repo} />
 
       <Runners runners={pick(data.runners)} busy={busy} onRestart={(n) => void act(n, `/build/runners/${encodeURIComponent(n)}/restart`)} />
 
@@ -327,5 +330,63 @@ function JobsTable({ jobs }: { jobs: Build["jobs"] }) {
     </Table>
     {!jobs.length && <div className="p-4"><Empty>No jobs in this range.</Empty></div>}
     </>
+  );
+}
+
+interface Case {
+  id: string; ts: number; updated_at: number; kind: string; repo: string | null; subject: string; status: "open" | "resolved"; title: string; detail: string | null; evidence: (string | number)[];
+  actions: { ts: number; by: string; action: string; ok: boolean; detail?: string; proposal?: { function: { arguments: string } } }[]; report: string | null; said: { url: string }[]; looked_at: number | null; looks: number; fresh: boolean;
+}
+
+/** The build keeper's cases (server/src/buildKeeper.ts): what it is looking after, what it found, did and told the repositories. */
+function Keeper({ repo }: { repo: string }) {
+  const { data, reload } = useApi<{ busy: boolean; cases: Case[] }>("/build/cases", { limit: 40 }, 15_000, null);
+  const [open, setOpen] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const call = async (k: string, path: string, body?: unknown) => { setBusy(k); try { await api(path, { method: "POST", body, scope: null }); await reload(true); } finally { setBusy(null); } };
+  const cases = (data?.cases ?? []).filter((c) => repo === "all" || !c.repo || c.repo === repo);
+  const live = cases.filter((c) => c.status === "open"), done = cases.filter((c) => c.status !== "open").slice(0, 6);
+  const KIND: Record<string, string> = { failed: "failing job", runner: "runner down", queue: "waiting", disk: "disk", message: "message" };
+  const row = (c: Case) => {
+    const shown = open === c.id;
+    return (
+      <div key={c.id} className="border-t border-line py-2.5 first:border-t-0">
+        <button className="flex w-full items-center gap-2 text-left" onClick={() => setOpen(shown ? null : c.id)}>
+          <StatusDot tone={c.status !== "open" ? "good" : c.kind === "message" ? "accent" : "bad"} label="" pulse={data?.busy && c.fresh} />
+          <span className="text-[13px] font-medium">{c.title}</span>
+          <Badge tone="muted">{KIND[c.kind] ?? c.kind}</Badge>
+          {c.evidence.length > 1 && <span className="text-[11.5px] text-ink-3">×{c.evidence.length}</span>}
+          {c.said.length > 0 && <Badge tone="good">told the repository</Badge>}
+          {c.actions.some((a) => a.proposal) && c.status === "open" && <Badge tone="warn">needs you</Badge>}
+          <span className="ml-auto text-[11.5px] text-ink-3">{c.looked_at ? `looked ${fmtAgo(c.looked_at)}` : c.status === "open" ? "not looked at yet" : ""} · {fmtAgo(c.updated_at)}</span>
+        </button>
+        {shown && (
+          <div className="mt-2 space-y-3 pl-5 text-[12.5px]">
+            {c.detail && <pre className="whitespace-pre-wrap font-sans text-ink-2">{c.detail}</pre>}
+            {c.report && <div className="rounded-md border border-line bg-s2 p-3"><Markdown text={c.report} /></div>}
+            {c.said.length > 0 && <div className="text-ink-3">Wrote to the repository: {c.said.map((x, i) => <a key={i} className="mr-2 text-accent hover:underline" href={x.url} target="_blank" rel="noreferrer">comment {i + 1}</a>)}</div>}
+            <div className="space-y-1">
+              {c.actions.map((a, i) => (
+                <div key={i} className="text-[12px]">
+                  <span className="text-ink-3 num">{fmtTime(a.ts, true)}</span> <span className={a.ok ? "text-ink-2" : "text-bad"}>{a.by}: {a.action}</span>
+                  {a.proposal && c.status === "open" && <Button size="sm" variant="primary" className="ml-2" disabled={!!busy} onClick={() => void call(`apply${i}`, `/build/cases/${c.id}/apply`, { index: i })}>{busy === `apply${i}` ? "…" : "Approve & run"}</Button>}
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              <Button size="sm" disabled={!!busy || data?.busy} onClick={() => void call("work", `/build/cases/${c.id}/work`)}>{data?.busy ? "keeper busy" : "Look again"}</Button>
+              {c.status === "open" && <Button size="sm" variant="ghost" disabled={!!busy} onClick={() => void call("resolve", `/build/cases/${c.id}/resolve`)}>Mark resolved</Button>}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+  return (
+    <Card className="mb-4" title="Build keeper" subtitle={`the agent that runs the build server: ${live.length} open case(s)${data?.busy ? " · working on one now" : ""} · it fixes what is the build server's, tells the repositories what is theirs, and answers them in their “Build server (mux)” issue`}
+      actions={<Button size="sm" disabled={!!busy} onClick={() => void call("look", "/build/keeper/run")}>{busy === "look" ? "…" : "Look now"}</Button>}>
+      {live.length ? live.map(row) : <Empty>Nothing needs attention: every runner is up and nothing is failing.</Empty>}
+      {done.length > 0 && <details className="mt-2"><summary className="cursor-pointer text-[11.5px] text-ink-3">Recently closed ({done.length})</summary>{done.map(row)}</details>}
+    </Card>
   );
 }

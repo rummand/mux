@@ -6,10 +6,11 @@ import { healerState } from "./healer.js";
 import { entries } from "./journal.js";
 import { keeperRuns } from "./keeper.js";
 import { listWatches } from "./lens.js";
+import { keeperState as buildState } from "./buildKeeper.js";
 
 /**
  * The agents that act on mux — its hands and feet — in one view: the healer and its doctor, the experiments autopilot,
- * Lens's watches and the brain keeper. For each: what it does, whether it is on, how often it runs, when it last ran
+ * Lens's watches, the brain keeper and the build keeper. For each: what it does, whether it is on, how often it runs, when it last ran
  * and what came of it, what it changed (from the journal), and how to run it now. The owner, 2026-11-03: "is there an
  * agent that does … the hands and feet?" — there are several; this shows them.
  */
@@ -36,6 +37,7 @@ export function agents(): Agent[] {
   const fixes = (db.prepare("SELECT COUNT(*) n FROM events WHERE source = 'healer' AND level = 'info' AND ts >= ?").get(now() - 86400_000) as { n: number }).n;
   const p = lastPilot();
   const k = keeperRuns(1)[0];
+  const b = buildState();
   const watches = listWatches();
   const lastWatch = watches.filter((w) => w.last_run).sort((a, b) => (b.last_run ?? 0) - (a.last_run ?? 0))[0];
   const watchRun = lastWatch?.last_run_id ? db.prepare("SELECT status, findings FROM lens_runs WHERE id = ?").get(lastWatch.last_run_id) as { status: string; findings: string } | undefined : undefined;
@@ -70,6 +72,13 @@ export function agents(): Agent[] {
       schedule: "every 15 min", next: k ? k.ts + 15 * 60_000 : null,
       last: k ? { at: k.ts, ok: k.status !== "error", summary: k.status === "error" ? `failed: ${k.error}` : k.status === "running" ? "running now" : (k.report ?? "").split("\n").find((l) => l.trim())?.replace(/^[#*\s-]+/, "").slice(0, 300) ?? "" } : null,
       ...changed(["brain-keeper"]), run: [{ label: "Run it now", path: "/brain/keeper/run" }], settings: "/brain",
+    },
+    {
+      id: "build-keeper", name: "Build keeper", actor: ["build-keeper"], on: node && s.selfHealAi, busy: b.busy,
+      does: "Runs the build server: the GitHub Actions runners on the Mac. Every minute it keeps them up (restarts a runner that stops, gives each LaunchAgent KeepAlive and background priority, empties idle runners' work folders when the disk runs low) and opens a case for each failing job, runner down, job left waiting, low disk or message in a repository's \"Build server (mux)\" issue. A model works each case with mux's tools and brain: reads the log, fixes what is the build server's (restart, clean, one re-run), tells the repository what is the repository's, and answers its messages. Anything else is a proposal for you.",
+      schedule: "every minute", next: null,
+      last: b.lastRun ? { at: b.lastRun, ok: true, summary: `${b.open} open case(s)${b.last ? ` · last: “${b.last.title}”` : ""}` } : null,
+      ...changed(["build-keeper"]), run: [{ label: "Look now", path: "/build/keeper/run" }], settings: "/services?tab=build",
     },
   ];
 }

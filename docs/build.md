@@ -44,3 +44,28 @@ mux finds them itself: every LaunchAgent in `~/Library/LaunchAgents` whose worki
 It checks the runner download against GitHub's SHA-256 digest, writes the runner's `.path` as a bare PATH (Bloom's own
 script wrote `PATH=…`, so its runner fell back to Node 22), and puts Homebrew's `node@24` first on the runner's PATH
 without relinking Homebrew's `node`, which mux runs on (Node 22, with a native SQLite module built for it).
+
+## The build keeper (the agent)
+
+Owner, 2026-11-25: *"it's your task to secure that the build server is running all time … an agent running on that
+and fully integrated to brain … keep it alive 24-7 and secure it has the right resources … taking over all issues and
+commands for the build service, failed builds … communicate back and forth with the repos."* `server/src/buildKeeper.ts`,
+on the Agents page and at the top of Services → Build server. After every look at GitHub (each minute):
+
+- **Rules, no model:** a runner whose LaunchAgent lacks KeepAlive or background priority is hardened when idle
+  (`POST /build/runners/{name}/harden`: KeepAlive, ProcessType Background, Nice 10, LowPriorityIO, as Nexus's runners
+  have; at most once an hour per runner); with under 20 GB of disk free, the 3 largest idle runners' work folders are
+  emptied (`/clean`; the tool cache stays). build.ts restarts a stopped runner.
+- **Cases** (`build_cases`), one per problem, with new evidence added: a job failing on this Mac (per repository and
+  job; closed when it passes again), a runner still down 15 minutes on, a job waiting over 20 minutes, the disk under
+  30 GB, and each message in a repository's **"Build server (mux)"** issue (read every 3 minutes).
+- **The agent** works one case at a time (≤ 20 an hour; a failing job at most every 30 minutes): the assistant
+  headless (route `auto`, today qwen3.6), with mux's tools and brain, as the healer's doctor. It reads the log
+  (`GET /build/jobs/{id}/log?grep=`), decides whose problem it is, fixes the build server's (restart, clean, harden,
+  **one** re-run of a job that failed for the server's reasons), tells the repository what is the repository's
+  (`POST /build/say`: on the job's pull request or commit, editing its own comment when there is news, at most 3
+  times an hour per case), answers messages in the thread, and writes runbooks into the brain. Every other change is a
+  proposal the owner approves on the case. Its reports go to the brain keeper with the doctor's.
+- Talking with a repository: write in its "Build server (mux)" issue (mux opens it the first time it has something to
+  say: bloom-for-business #152); mux answers there within minutes. Its own comments end with "— mux build server
+  (automated …)", which is how it tells them from yours (they are posted with the owner's `gh` login).

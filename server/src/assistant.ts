@@ -380,7 +380,7 @@ async function admin(app: FastifyInstance, method: string, path: string, query?:
 }
 
 export async function runTool(app: FastifyInstance, call: Call, emit: (type: string, data: unknown) => void, source = "assistant"): Promise<string> {
-  const who = source === "doctor" ? "doctor" : source === "brain-keeper" ? "brain-keeper" : "assistant";
+  const who = source === "doctor" ? "doctor" : source === "brain-keeper" ? "brain-keeper" : source === "build-keeper" ? "build-keeper" : "assistant";
   const a = parse(call.function.arguments);
   try {
     switch (call.function.name) {

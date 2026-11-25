@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS journal (
 CREATE INDEX IF NOT EXISTS journal_ts ON journal(ts);
 `);
 
-export type Actor = "autopilot" | "experiments" | "doctor" | "healer" | "brain-keeper" | "assistant" | "lens";
+export type Actor = "autopilot" | "experiments" | "doctor" | "healer" | "brain-keeper" | "build-keeper" | "assistant" | "lens";
 const current = new AsyncLocalStorage<Actor>();
 
 /** Do `fn` as `who`: what it changes about mux is journaled under that name. */

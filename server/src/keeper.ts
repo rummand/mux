@@ -9,7 +9,7 @@ import { asActor, journal } from "./journal.js";
 /**
  * The brain keeper: the part of mux that looks after its memory, on its own — the owner gave mux its brain to run.
  * Every 15 minutes (or when asked) it reads what happened since it last ran — the assistant's conversations, incidents the
- * doctor diagnosed, Lens's new findings — and keeps the brain: writes down what will matter later, updates pages
+ * doctor diagnosed, the build keeper's cases, Lens's new findings — and keeps the brain: writes down what will matter later, updates pages
  * instead of adding near-copies, records facts about tenants, models and machines, merges duplicates and forgets what
  * is no longer true. It changes nothing else about mux: it reads mux, and writes only its brain. What it changes is in
  * the journal, and its report is shown to the owner.
@@ -38,6 +38,11 @@ function material(since: number) {
     });
   const incidents = (db.prepare("SELECT title, kind, subject, diagnosis, status FROM incidents WHERE updated_at > ? AND diagnosis IS NOT NULL ORDER BY updated_at DESC LIMIT 6").all(since) as { title: string; kind: string; subject: string; diagnosis: string; status: string }[])
     .map((i) => `### Incident: ${i.title} (${i.kind} · ${i.subject} · ${i.status})\n${clip(i.diagnosis, 1500)}`);
+  // The build keeper's cases (buildKeeper.ts): what it found and did about the build server.
+  try {
+    incidents.push(...(db.prepare("SELECT title, kind, subject, report, status FROM build_cases WHERE updated_at > ? AND report IS NOT NULL ORDER BY updated_at DESC LIMIT 6").all(since) as { title: string; kind: string; subject: string; report: string; status: string }[])
+      .map((c) => `### Build case: ${c.title} (${c.kind} · ${c.subject} · ${c.status})\n${clip(c.report, 1500)}`));
+  } catch { /* no build keeper on this mux */ }
   const findings = (db.prepare("SELECT title, findings, ts FROM lens_runs WHERE ts > ? AND status = 'done' ORDER BY ts DESC LIMIT 4").all(since) as { title: string; findings: string; ts: number }[])
     .flatMap((r) => json<{ title: string; status?: string; priority: string; description: string }[]>(r.findings, []).filter((f) => f.status === "new" && f.priority !== "low").map((f) => `- Lens (${r.title}): ${f.title} — ${clip(f.description, 300)}`));
   return { convs, incidents, findings };

@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, statfsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { config } from "./config.js";
@@ -36,7 +36,7 @@ const GH = process.env.MUX_GH_BIN ?? "/opt/homebrew/bin/gh";
 
 interface Local { name: string; repo: string; dir: string; label: string; pid: number | null; lastExit: number | null; path: string | null; node: string | null }
 interface Remote { id: number; status: string; busy: boolean; labels: string[]; os: string }
-const remote = new Map<string, Remote & { seen: number; offlineSince: number | null }>();
+export const remote = new Map<string, Remote & { seen: number; offlineSince: number | null }>();
 const restarted = new Map<string, number>();
 const fetchedJobs = new Map<number, number>(); // run id → its updated_at when its jobs were last read
 let lastPoll: { ts: number; ok: boolean; error: string | null; calls: number } = { ts: 0, ok: true, error: null, calls: 0 };
@@ -110,11 +110,14 @@ async function pollRepo(repo: string, first: boolean) {
   }
 }
 
+const afterPoll: (() => Promise<void>)[] = [];
+/** Run after every look at GitHub (the build keeper looks for problems then). */
+export const onPolled = (f: () => Promise<void>) => { afterPoll.push(f); };
 const polledOnce = new Set<string>();
 let polling: Promise<void> | null = null;
 /** One look at every runner and its repository; keeps the runners up. The first look reads 100 runs a repository. */
 export function pollBuild(): Promise<void> {
-  polling ??= poll().finally(() => { polling = null; });
+  polling ??= poll().then(async () => { for (const f of afterPoll) await f().catch((e) => event("warn", "build", `after the poll: ${(e as Error).message}`)); }).finally(() => { polling = null; });
   return polling;
 }
 
@@ -169,11 +172,11 @@ export function startBuild() {
 
 // ── What the Build server tab shows ─────────────────────────────────────────────────────────────────────────────────
 type Step = { n: number; name: string; conclusion: string | null; status: string; start: number | null; end: number | null };
-type JobRow = { id: number; run_id: number; repo: string; name: string; workflow: string; branch: string; status: string; conclusion: string | null; runner: string | null; labels: string; attempt: number; created_at: number; started_at: number | null; completed_at: number | null; steps: string; url: string };
+export type JobRow = { id: number; run_id: number; repo: string; name: string; workflow: string; branch: string; status: string; conclusion: string | null; runner: string | null; labels: string; attempt: number; created_at: number; started_at: number | null; completed_at: number | null; steps: string; url: string };
 const pct = (xs: number[], p: number) => { if (!xs.length) return null; const s = [...xs].sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.floor(p * s.length))]; };
-const parse = <T>(s: string | null): T[] => { try { return s ? (JSON.parse(s) as T[]) : []; } catch { return []; } };
+export const parse = <T>(s: string | null): T[] => { try { return s ? (JSON.parse(s) as T[]) : []; } catch { return []; } };
 const ok = (c: string | null) => c === "success";
-const failed = (c: string | null) => c === "failure" || c === "timed_out" || c === "startup_failure";
+export const failed = (c: string | null) => c === "failure" || c === "timed_out" || c === "startup_failure";
 
 export async function buildView(range: string) {
   const R = RANGES[range] ?? RANGES["24h"];
@@ -282,9 +285,167 @@ export async function buildView(range: string) {
   };
 }
 
+// ── What the runners have to work with, and what can be done to them ──────────────────────────────────────────────
+/** Bytes a folder holds (du), or null. */
+const duBytes = async (dir: string) => { try { return Number((await sh("/usr/bin/du", ["-sk", dir], 120_000)).split("\t")[0]) * 1024; } catch { return null; } };
+let resCache: { at: number; value: Awaited<ReturnType<typeof readResources>> } | null = null;
+
+async function readResources() {
+  const fs = statfsSync(process.env.HOME ?? "/");
+  const locals = await localRunners();
+  const runners = await Promise.all(locals.map(async (l) => {
+    let plist: Record<string, unknown> = {};
+    if (l.label) try { plist = JSON.parse(await sh("/usr/bin/plutil", ["-convert", "json", "-o", "-", join(AGENTS, `${l.label}.plist`)], 5_000)); } catch { /* not a file of that name */ }
+    let node: string | null = null;
+    if (l.node) try { node = (await sh(l.node, ["-v"], 5_000)).trim(); } catch { /* none */ }
+    return { name: l.name, repo: l.repo, workBytes: await duBytes(join(l.dir, "_work")), node,
+      keepAlive: plist.KeepAlive != null && plist.KeepAlive !== false, background: plist.ProcessType === "Background", nice: typeof plist.Nice === "number" ? plist.Nice : null };
+  }));
+  const sys = db.prepare("SELECT mem_used_gb, mem_total_gb, swap_gb, cpu_pct, disk_free_gb FROM system_samples ORDER BY ts DESC LIMIT 1").get() as Record<string, number | null> | undefined;
+  let xcode: string | null = null;
+  try { xcode = (await sh("/usr/bin/xcodebuild", ["-version"], 15_000)).split("\n")[0]; } catch { /* no Xcode */ }
+  return { diskFreeGb: (fs.bavail * fs.bsize) / 1e9, diskTotalGb: (fs.blocks * fs.bsize) / 1e9, memUsedGb: sys?.mem_used_gb ?? null, memTotalGb: sys?.mem_total_gb ?? null, swapGb: sys?.swap_gb ?? null, cpuPct: sys?.cpu_pct ?? null, xcode, runners };
+}
+
+/** Disk, memory, toolchains and each runner's work folder and launchd settings (work folder sizes kept 10 minutes). */
+export async function resources(fresh = false) {
+  if (!fresh && resCache && Date.now() - resCache.at < 10 * 60_000) return resCache.value;
+  resCache = { at: Date.now(), value: await readResources() };
+  return resCache.value;
+}
+
+/** Empty an idle runner's work folder (checkouts, temp files, downloaded actions); its tool cache (_tool) is kept. */
+export async function cleanRunner(name: string): Promise<{ freedBytes: number; removed: string[] }> {
+  const l = (await localRunners()).find((x) => x.name === name);
+  if (!l) throw Object.assign(new Error("no such runner on this Mac"), { status: 404 });
+  if (remote.get(name)?.busy) throw Object.assign(new Error(`${name} is running a job: clean it when it is idle`), { status: 409 });
+  const work = join(l.dir, "_work");
+  const before = (await duBytes(work)) ?? 0;
+  const removed: string[] = [];
+  if (existsSync(work)) for (const e of readdirSync(work)) if (e !== "_tool") { rmSync(join(work, e), { recursive: true, force: true }); removed.push(e); }
+  const freedBytes = before - ((await duBytes(work)) ?? 0);
+  resCache = null;
+  event("info", "build", `cleaned ${name}'s work folder: ${(freedBytes / 1e9).toFixed(1)} GB freed`);
+  return { freedBytes, removed };
+}
+
+/**
+ * Give a runner's LaunchAgent what every runner here should have (Nexus's settings): launchd restarts it if it stops
+ * (KeepAlive), and it runs at background priority (ProcessType Background, Nice 10, LowPriorityIO), so the models keep
+ * the Mac's attention. Reloads it, so only while it is idle.
+ */
+export async function hardenRunner(name: string): Promise<{ changed: string[] }> {
+  const l = (await localRunners()).find((x) => x.name === name);
+  if (!l?.label) throw Object.assign(new Error(l ? `${name} has no LaunchAgent` : "no such runner on this Mac"), { status: 404 });
+  if (remote.get(name)?.busy) throw Object.assign(new Error(`${name} is running a job: harden it when it is idle`), { status: 409 });
+  const plist = join(AGENTS, `${l.label}.plist`);
+  const want: [string, string, string][] = [["KeepAlive", "bool", "true"], ["ProcessType", "string", "Background"], ["Nice", "integer", "10"], ["LowPriorityIO", "bool", "true"]];
+  const cur = JSON.parse(await sh("/usr/bin/plutil", ["-convert", "json", "-o", "-", plist], 5_000)) as Record<string, unknown>;
+  const changed: string[] = [];
+  for (const [k, type, v] of want) {
+    if (String(cur[k]) === v) continue;
+    await sh("/usr/libexec/PlistBuddy", ["-c", `Delete :${k}`, plist]).catch(() => undefined);
+    await sh("/usr/libexec/PlistBuddy", ["-c", `Add :${k} ${type} ${v}`, plist]);
+    changed.push(`${k}=${v}`);
+  }
+  if (changed.length) {
+    const uid = process.getuid?.() ?? 501;
+    await sh("/bin/launchctl", ["bootout", `gui/${uid}/${l.label}`], 30_000).catch(() => undefined);
+    await sh("/bin/launchctl", ["bootstrap", `gui/${uid}`, plist], 30_000);
+    resCache = null;
+    event("info", "build", `hardened runner ${name}: ${changed.join(", ")}`);
+  }
+  return { changed };
+}
+
+const jobRow = (id: number) => db.prepare("SELECT * FROM build_jobs WHERE id = ?").get(id) as JobRow | undefined;
+
+/** A job's log from GitHub, timestamps cut; with grep only matching lines (and 2 around), else the last `lines`. */
+export async function jobLog(id: number, o: { grep?: string; lines?: number } = {}) {
+  const j = jobRow(id);
+  if (!j) throw Object.assign(new Error("no such job in mux's build data"), { status: 404 });
+  calls++;
+  // Logs carry terminal colours: gh refuses to print them unless told, and they are cut here.
+  const raw = await sh(GH, ["api", "--allow-escape-sequences", `repos/${j.repo}/actions/jobs/${id}/logs`], 60_000);
+  const lines = raw.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").split("\n").map((l) => l.replace(/^\uFEFF?\d{4}-\d\d-\d\dT[\d:.]+Z /, ""));
+  let out: string[];
+  if (o.grep) {
+    const re = new RegExp(o.grep, "i"), keep = new Set<number>();
+    lines.forEach((l, i) => { if (re.test(l)) for (let k = i - 2; k <= i + 2; k++) keep.add(k); });
+    out = [...keep].filter((i) => i >= 0 && i < lines.length).sort((a, b) => a - b).map((i) => lines[i]);
+  } else out = lines.slice(-(o.lines ?? 200));
+  return { job: { id, repo: j.repo, name: j.name, workflow: j.workflow, branch: j.branch, conclusion: j.conclusion, runner: j.runner, url: j.url }, lines: lines.length, log: out.join("\n").slice(-24_000) };
+}
+
+/** Run a failed job again (GitHub re-runs it with the same commit). */
+export async function rerunJob(id: number) {
+  const j = jobRow(id);
+  if (!j) throw Object.assign(new Error("no such job in mux's build data"), { status: 404 });
+  calls++;
+  await sh(GH, ["api", "-X", "POST", `repos/${j.repo}/actions/jobs/${id}/rerun`], 30_000);
+  event("info", "build", `asked GitHub to re-run ${j.repo} ${j.workflow}/${j.name} (job ${id})`);
+  return { ok: true, url: j.url };
+}
+
+/**
+ * Where a repository talks with its build server: one open issue per repository titled THREAD, opened by mux when it
+ * first has something to say. The repository (people, and agents working in it) writes there; mux reads new comments
+ * every few minutes and answers (buildKeeper.ts).
+ */
+export const THREAD = "Build server (mux)";
+const SIGN = "\n\n— mux build server (automated; reply here, mux reads this thread)";
+
+export async function threadOf(repo: string, create: boolean): Promise<{ number: number; url: string } | null> {
+  const found = (await gh<{ number: number; title: string; html_url: string; pull_request?: unknown }[]>(`repos/${repo}/issues?state=open&creator=@me&per_page=50`)).find((i) => i.title === THREAD && !i.pull_request);
+  if (found || !create) return found ? { number: found.number, url: found.html_url } : null;
+  calls++;
+  const body = `mux runs this repository's self-hosted GitHub Actions runners on the Mac Studio. It keeps them up, looks into every failed job on them, and writes here what it found and did.\n\nWrite here to ask it something (a re-run, why a job waits, a tool the runner lacks); it answers within a few minutes.${SIGN}`;
+  const r = JSON.parse(await sh(GH, ["api", "-X", "POST", `repos/${repo}/issues`, "-f", `title=${THREAD}`, "-f", `body=${body}`], 30_000)) as { number: number; html_url: string };
+  event("info", "build", `opened the build server thread in ${repo}: ${r.html_url}`);
+  return { number: r.number, url: r.html_url };
+}
+
+/**
+ * Say something to a repository: in its build server thread, or about a job (on the job's pull request if it has one,
+ * else on its commit). With `comment`, that comment (one mux wrote) is edited instead of adding another.
+ */
+export async function say(o: { repo: string; body: string; job?: number; comment?: string }) {
+  const text = o.body.trim().slice(0, 60_000) + SIGN;
+  calls++;
+  if (o.comment) {
+    const kind = o.comment.includes("/comments/") ? o.comment : null;
+    if (!kind) throw Object.assign(new Error("comment must be the API url of a comment mux wrote"), { status: 400 });
+    const r = JSON.parse(await sh(GH, ["api", "-X", "PATCH", o.comment.replace("https://api.github.com/", ""), "-f", `body=${text}`], 30_000)) as { html_url: string; url: string };
+    return { url: r.html_url, comment: r.url };
+  }
+  let path: string;
+  if (o.job != null) {
+    const j = jobRow(o.job);
+    if (!j) throw Object.assign(new Error("no such job in mux's build data"), { status: 404 });
+    const run = db.prepare("SELECT sha, branch FROM build_runs WHERE id = ?").get(j.run_id) as { sha: string; branch: string } | undefined;
+    const prs = run ? await gh<{ number: number }[]>(`repos/${j.repo}/commits/${run.sha}/pulls`).catch(() => []) : [];
+    path = prs[0] ? `repos/${j.repo}/issues/${prs[0].number}/comments` : `repos/${j.repo}/commits/${run?.sha}/comments`;
+  } else {
+    const t = await threadOf(o.repo, true);
+    path = `repos/${o.repo}/issues/${t!.number}/comments`;
+  }
+  const r = JSON.parse(await sh(GH, ["api", "-X", "POST", path, "-f", `body=${text}`], 30_000)) as { html_url: string; url: string };
+  event("info", "build", `wrote to ${o.repo}: ${r.html_url}`);
+  return { url: r.html_url, comment: r.url };
+}
+
+export { gh, calls as ghCalls };
+
 export function registerBuild(api: FastifyInstance) {
   api.get("/build", async (req) => buildView((req.query as { range?: string }).range ?? "24h"));
   api.post("/build/refresh", async () => { await pollBuild(); return { ok: lastPoll.ok, poll: lastPoll }; });
+  const fail = (reply: { code: (n: number) => { send: (b: unknown) => unknown } }, e: unknown) => reply.code((e as { status?: number }).status ?? 502).send({ error: (e as Error).message });
+  api.get("/build/resources", async (req) => resources((req.query as { fresh?: string }).fresh === "1"));
+  api.get("/build/jobs/:id/log", async (req, reply) => { const q = req.query as { grep?: string; lines?: string }; try { return await jobLog(Number((req.params as { id: string }).id), { grep: q.grep, lines: q.lines ? Number(q.lines) : undefined }); } catch (e) { return fail(reply, e); } });
+  api.post("/build/jobs/:id/rerun", async (req, reply) => { try { return await rerunJob(Number((req.params as { id: string }).id)); } catch (e) { return fail(reply, e); } });
+  api.post("/build/runners/:name/harden", async (req, reply) => { try { return await hardenRunner((req.params as { name: string }).name); } catch (e) { return fail(reply, e); } });
+  api.post("/build/runners/:name/clean", async (req, reply) => { try { return await cleanRunner((req.params as { name: string }).name); } catch (e) { return fail(reply, e); } });
+  api.post("/build/say", async (req, reply) => { try { return await say(req.body as { repo: string; body: string; job?: number; comment?: string }); } catch (e) { return fail(reply, e); } });
   api.post("/build/runners/:name/restart", async (req, reply) => {
     const l = (await localRunners()).find((x) => x.name === (req.params as { name: string }).name);
     if (!l) return reply.code(404).send({ error: "no such runner on this Mac" });

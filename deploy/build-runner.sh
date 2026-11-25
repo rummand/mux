@@ -56,6 +56,13 @@ TOKEN=$(gh api -X POST "repos/$REPO/actions/runners/registration-token" --jq .to
 ./config.sh --unattended --replace --url "https://github.com/$REPO" --token "$TOKEN" --name "$NAME" --labels "$LABELS" --work _work
 echo "$PATH_FOR_RUNNER" > .path
 ./svc.sh install >/dev/null
+# Like every runner here: launchd restarts it if it stops, and it runs at background priority so the models come first.
+PLIST="$HOME/Library/LaunchAgents/actions.runner.${REPO/\//-}.$NAME.plist"
+for kv in "KeepAlive bool true" "ProcessType string Background" "Nice integer 10" "LowPriorityIO bool true"; do
+  set -- $kv
+  /usr/libexec/PlistBuddy -c "Delete :$1" "$PLIST" 2>/dev/null || true
+  /usr/libexec/PlistBuddy -c "Add :$1 $2 $3" "$PLIST"
+done
 ./svc.sh start >/dev/null
 echo "✓ $NAME serves $REPO (labels self-hosted,$LABELS), Node $(PATH="$PATH_FOR_RUNNER" node -v 2>/dev/null || echo none)"
 echo "  mux shows it on Services → Build server within a minute; GitHub: https://github.com/$REPO/settings/actions/runners"
