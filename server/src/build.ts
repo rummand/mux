@@ -154,10 +154,29 @@ async function poll() {
   }
 }
 
+const uid = () => process.getuid?.() ?? 501;
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Load a runner's LaunchAgent. launchd refuses to load one it is still taking down ("Bootstrap failed: 5: Input/output
+ * error": on 2026-11-25 hardening macstudio-bloom unloaded it, the load failed, and it stayed down for hours), so wait
+ * until the old one is gone, then try a few times.
+ */
+async function load(label: string) {
+  for (let i = 0; i < 30; i++) { try { await sh("/bin/launchctl", ["print", `gui/${uid()}/${label}`], 5_000); await wait(500); } catch { break; } }
+  let last: unknown;
+  for (let i = 0; i < 5; i++) {
+    try { await sh("/bin/launchctl", ["bootstrap", `gui/${uid()}`, join(AGENTS, `${label}.plist`)], 30_000); return; } catch (e) { last = e; await wait(2000 * (i + 1)); }
+  }
+  throw last;
+}
+
 async function restartRunner(l: Local, why: string) {
   if (!l.label) { event("warn", "build", `runner ${l.name} (${l.repo}) has no LaunchAgent: install it with deploy/build-runner.sh`); return; }
   try {
-    await sh("/bin/launchctl", ["kickstart", "-k", `gui/${process.getuid?.() ?? 501}/${l.label}`], 20_000);
+    // A LaunchAgent that is not loaded cannot be kick-started: load it (it starts at load).
+    try { await sh("/bin/launchctl", ["kickstart", "-k", `gui/${uid()}/${l.label}`], 20_000); }
+    catch (e) { if (!/Could not find service/i.test((e as Error).message)) throw e; await load(l.label); }
     event("warn", "build", `restarted runner ${l.name} (${l.repo}): ${why}`);
   } catch (e) {
     event("error", "build", `could not restart runner ${l.name} (${l.repo}): ${why}; ${(e as Error).message}`);
@@ -350,9 +369,8 @@ export async function hardenRunner(name: string): Promise<{ changed: string[] }>
     changed.push(`${k}=${v}`);
   }
   if (changed.length) {
-    const uid = process.getuid?.() ?? 501;
-    await sh("/bin/launchctl", ["bootout", `gui/${uid}/${l.label}`], 30_000).catch(() => undefined);
-    await sh("/bin/launchctl", ["bootstrap", `gui/${uid}`, plist], 30_000);
+    await sh("/bin/launchctl", ["bootout", `gui/${process.getuid?.() ?? 501}/${l.label}`], 30_000).catch(() => undefined);
+    await load(l.label);
     resCache = null;
     event("info", "build", `hardened runner ${name}: ${changed.join(", ")}`);
   }
