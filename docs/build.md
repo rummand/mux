@@ -69,3 +69,13 @@ on the Agents page and at the top of Services → Build server. After every look
 - Talking with a repository: write in its "Build server (mux)" issue (mux opens it the first time it has something to
   say: bloom-for-business #152); mux answers there within minutes. Its own comments end with "— mux build server
   (automated …)", which is how it tells them from yours (they are posted with the owner's `gh` login).
+
+## Record first
+
+Record's own services (speech-da on :8798, the speakers service, record-training) share this Mac's GPU and cores with
+the builds. Every 15 s the build keeper asks Record what record-training asks (speech-da `/live/status`, Record
+`/api/training/busy`, with `SPEECH_DA_KEY` from `~/.record/etc`); while a live meeting streams or parts wait to be
+written down, every CI step running here is paused (SIGSTOP to the step's script and all under it; the runner process
+is left running so GitHub keeps seeing it), and resumed when Record is clear, after 20 minutes at most (then not paused
+again for 10), when mux stops, and when mux starts. Why: on 2026-11-25 Record's CI diarization check made a 43-minute
+recording's Røst and speakers calls time out.

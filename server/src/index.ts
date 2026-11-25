@@ -16,7 +16,7 @@ import { loadCounts } from "./quota.js";
 import { startKeeper } from "./keeper.js";
 import { startServices } from "./services.js";
 import { startBuild } from "./build.js";
-import { startBuildKeeper } from "./buildKeeper.js";
+import { resumeAll, startBuildKeeper } from "./buildKeeper.js";
 import { startPresence } from "./presence.js";
 import { startGbrain, stopGbrain } from "./gbrain.js";
 import { moveToGbrain } from "./brain.js";
@@ -131,6 +131,7 @@ event("info", "mux", `${config.role} \"${config.name}\" listening on ${config.ho
 
 const stop = async (sig: string) => {
   event("info", "mux", `${sig}: stopping the model servers`);
+  resumeAll(); // never leave a CI step paused for Record behind (buildKeeper.ts)
   await app.close().catch(() => undefined);
   stopGbrain();
   await stopAll();

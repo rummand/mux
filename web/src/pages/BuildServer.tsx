@@ -340,7 +340,8 @@ interface Case {
 
 /** The build keeper's cases (server/src/buildKeeper.ts): what it is looking after, what it found, did and told the repositories. */
 function Keeper({ repo }: { repo: string }) {
-  const { data, reload } = useApi<{ busy: boolean; cases: Case[] }>("/build/cases", { limit: 40 }, 15_000, null);
+  const { data, reload } = useApi<{ busy: boolean; cases: Case[]; recordFirst: { checked: number; streams: number; waiting: number; error: string | null; paused: { runner: string; since: number; processes: number }[] } }>("/build/cases", { limit: 40 }, 15_000, null);
+  const rf = data?.recordFirst;
   const [open, setOpen] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const call = async (k: string, path: string, body?: unknown) => { setBusy(k); try { await api(path, { method: "POST", body, scope: null }); await reload(true); } finally { setBusy(null); } };
@@ -385,6 +386,15 @@ function Keeper({ repo }: { repo: string }) {
   return (
     <Card className="mb-4" title="Build keeper" subtitle={`the agent that runs the build server: ${live.length} open case(s)${data?.busy ? " · working on one now" : ""} · it fixes what is the build server's, tells the repositories what is theirs, and answers them in their “Build server (mux)” issue`}
       actions={<Button size="sm" disabled={!!busy} onClick={() => void call("look", "/build/keeper/run")}>{busy === "look" ? "…" : "Look now"}</Button>}>
+      {rf && (
+        <div className={`mb-2 rounded-md px-3 py-2 text-[12px] ${rf.paused.length ? "bg-[var(--warning-soft)]" : "bg-s2"}`}>
+          <span className="font-medium">Record first:</span>{" "}
+          {rf.paused.length
+            ? <>builds paused on {rf.paused.map((p) => `${p.runner} (${fmtMs(Date.now() - p.since)})`).join(", ")} while Record has {rf.streams ? `${rf.streams} live meeting(s)` : `${rf.waiting} part(s) to write down`}; they resume when it is clear, or after 20 minutes. <button className="text-accent hover:underline" onClick={() => void call("resume", "/build/record-first/resume")}>Resume now</button></>
+            : <>builds run; they pause while Record has a live meeting or parts to write down{rf.checked ? ` (now: ${rf.streams} live, ${rf.waiting} waiting · ${fmtAgo(rf.checked)})` : ""}.</>}
+          {rf.error && <span className="text-warn"> · {rf.error}</span>}
+        </div>
+      )}
       {live.length ? live.map(row) : <Empty>Nothing needs attention: every runner is up and nothing is failing.</Empty>}
       {done.length > 0 && <details className="mt-2"><summary className="cursor-pointer text-[11.5px] text-ink-3">Recently closed ({done.length})</summary>{done.map(row)}</details>}
     </Card>

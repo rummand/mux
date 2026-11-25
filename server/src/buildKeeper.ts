@@ -1,4 +1,7 @@
+import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { API_REFERENCE, converse, isChange, parse as parseArgs, runTool, snapshot, type Call, type Msg } from "./assistant.js";
 import { recall } from "./brain.js";
@@ -274,25 +277,114 @@ async function afterPoll() {
   if (next) void work(next.id);
 }
 
+// ── Record first ─────────────────────────────────────────────────────────────────────────────────────────────────
+/*
+ * Record's own work runs on this Mac too (speech-da on :8798, the speakers service), on the same GPU and cores as the
+ * builds. On 2026-11-25 a 43-minute recording stuck at 74 of 91 parts: Røst and the speakers service timed out while
+ * Record's CI ran its diarization check over the whole corpus on mac-studio-record. Record's trainer already steps
+ * aside for live work (record_training: a live meeting, or parts waiting); now the builds do too. Every 15 s: when a
+ * live meeting streams through speech-da (/live/status) or Record has parts waiting to be written down
+ * (/api/training/busy), every CI step running on this Mac is paused (SIGSTOP to the step's script and all under it;
+ * the runner itself keeps talking to GitHub), and resumed (SIGCONT) when Record is clear — or after 20 minutes, so a
+ * job's own time limit is not reached; a job resumed that way is not paused again for 10 minutes.
+ */
+const RECORD_ETC = process.env.RECORD_ETC ?? join(process.env.HOME ?? "", ".record", "etc");
+const run = (cmd: string, args: string[], timeout = 10_000) => new Promise<string>((res, rej) => execFile(cmd, args, { timeout, maxBuffer: 8 << 20 }, (e, out) => (e ? rej(e) : res(out))));
+const paused = new Map<number, { pid: number; runner: string; since: number; procs: number[] }>(); // step script pid →
+const spared = new Map<number, number>(); // step script pid → when it was resumed after the 20-minute limit
+let recordState: { checked: number; streams: number; waiting: number; error: string | null } = { checked: 0, streams: 0, waiting: 0, error: null };
+
+/** Record's key and address, from its env files on this Mac (the trainer reads the same ones). */
+function recordAccess(): { key: string; url: string } | null {
+  const env: Record<string, string> = {};
+  for (const f of ["speech-da.env", "training.env"]) {
+    const p = join(RECORD_ETC, f);
+    if (!existsSync(p)) continue;
+    for (const line of readFileSync(p, "utf8").split("\n")) { const m = /^\s*([A-Z_]+)=(.*)$/.exec(line); if (m) env[m[1]] = m[2].trim().replace(/^["']|["']$/g, ""); }
+  }
+  return env.SPEECH_DA_KEY ? { key: env.SPEECH_DA_KEY, url: (env.RECORD_URL ?? "https://record-web-production.up.railway.app").replace(/\/$/, "") } : null;
+}
+
+async function recordBusy(): Promise<boolean> {
+  const a = recordAccess();
+  if (!a) { recordState = { checked: now(), streams: 0, waiting: 0, error: "no Record key on this Mac" }; return false; }
+  const get = async (url: string) => { const r = await fetch(url, { headers: { authorization: `Bearer ${a.key}` }, signal: AbortSignal.timeout(8_000) }); if (!r.ok) throw new Error(`${url.replace(/\?.*/, "")} answered ${r.status}`); return r.json() as Promise<Record<string, unknown>>; };
+  const [live, busyR] = await Promise.allSettled([get(`${process.env.SPEECH_LOCAL_URL ?? "http://127.0.0.1:8798"}/live/status`), get(`${a.url}/api/training/busy`)]);
+  const streams = live.status === "fulfilled" ? ((live.value.streams as unknown[]) ?? []).length : 0;
+  const waiting = busyR.status === "fulfilled" ? Number(busyR.value.waiting ?? 0) : 0;
+  const errs = [live, busyR].filter((x): x is PromiseRejectedResult => x.status === "rejected").map((x) => (x.reason as Error).message);
+  recordState = { checked: now(), streams, waiting, error: errs.join("; ") || null };
+  return streams > 0 || waiting > 0;
+}
+
+/** The CI steps running on this Mac: each step's script (under a runner's _work/_temp) and every process under it. */
+export async function runningSteps(): Promise<{ pid: number; runner: string; procs: number[] }[]> {
+  const locals = await localRunners();
+  const rows = (await run("/bin/ps", ["-Ao", "pid=,ppid=,command="])).split("\n").map((l) => /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(l)).filter((m): m is RegExpExecArray => !!m).map((m) => ({ pid: Number(m[1]), ppid: Number(m[2]), cmd: m[3] }));
+  const kids = new Map<number, number[]>();
+  for (const r of rows) kids.set(r.ppid, [...(kids.get(r.ppid) ?? []), r.pid]);
+  const under = (pid: number): number[] => [pid, ...(kids.get(pid) ?? []).flatMap(under)];
+  const out: { pid: number; runner: string; procs: number[] }[] = [];
+  for (const r of rows) {
+    const l = locals.find((x) => r.cmd.includes(`${x.dir}/_work/_temp/`) && /\.sh\b/.test(r.cmd));
+    if (l) out.push({ pid: r.pid, runner: l.name, procs: under(r.pid) });
+  }
+  return out;
+}
+
+export const signal = (pids: number[], sig: "SIGSTOP" | "SIGCONT") => { for (const p of pids) try { process.kill(p, sig); } catch { /* gone */ } };
+
+async function recordFirst() {
+  const busyNow = await recordBusy().catch(() => false);
+  const t = now();
+  // Resume what should run again: Record is clear, the step has waited 20 minutes, or it ended.
+  for (const [pid, p] of paused) {
+    const over = t - p.since > 20 * 60_000;
+    if (!busyNow || over) {
+      signal(p.procs, "SIGCONT");
+      paused.delete(pid);
+      if (over) spared.set(pid, t);
+      event("info", "build", `resumed the CI step on ${p.runner} after ${Math.round((t - p.since) / 1000)} s${over ? " (20-minute limit; Record still busy)" : ": Record is clear"}`);
+    }
+  }
+  if (!busyNow) return;
+  for (const s of await runningSteps()) {
+    if (paused.has(s.pid) || t - (spared.get(s.pid) ?? 0) < 10 * 60_000) continue;
+    signal(s.procs, "SIGSTOP");
+    paused.set(s.pid, { ...s, since: t });
+    event("warn", "build", `paused the CI step on ${s.runner} (${s.procs.length} processes): Record has ${recordState.streams ? `${recordState.streams} live meeting(s)` : `${recordState.waiting} part(s) waiting to be written down`}`);
+    journal({ who: "build-keeper", kind: "build", ref: s.runner, title: `Build keeper: paused a CI step on ${s.runner} for Record's live work` });
+  }
+  for (const [pid, at] of spared) if (t - at > 3600_000) spared.delete(pid);
+}
+
+/** Resume every paused step (mux is stopping — index.ts — or the owner asks): a build is never left stopped behind. */
+export function resumeAll() { for (const [pid, p] of paused) { signal(p.procs, "SIGCONT"); paused.delete(pid); } }
+export const recordFirstState = () => ({ ...recordState, paused: [...paused.values()].map((p) => ({ runner: p.runner, since: p.since, processes: p.procs.length })) });
+
 export function startBuildKeeper(a: FastifyInstance) {
   app = a;
   if (config.role === "gateway" || process.env.MUX_NO_BUILD) return;
   onPolled(afterPoll);
+  // A mux that was killed outright (no stop()) may have left steps paused: wake every running step once at start.
+  void runningSteps().then((steps) => { for (const st of steps) signal(st.procs, "SIGCONT"); }).catch(() => undefined);
+  setInterval(() => void recordFirst().catch((e) => event("warn", "build", `record first: ${(e as Error).message}`)), 15_000).unref();
 }
 
 /** For the Agents page. */
 export const keeperState = () => {
   const openN = (db.prepare("SELECT COUNT(*) n FROM build_cases WHERE status = 'open'").get() as { n: number }).n;
   const last = db.prepare("SELECT title, looked_at, report FROM build_cases WHERE looked_at IS NOT NULL ORDER BY looked_at DESC LIMIT 1").get() as { title: string; looked_at: number; report: string } | undefined;
-  return { busy, lastRun, open: openN, last };
+  return { busy, lastRun, open: openN, last, recordFirst: recordFirstState() };
 };
 
 export function registerBuildKeeper(api: FastifyInstance) {
   api.get("/build/cases", async (req) => {
     const q = req.query as { status?: string; limit?: string };
     const rows = db.prepare(`SELECT * FROM build_cases ${q.status === "open" ? "WHERE status = 'open'" : ""} ORDER BY updated_at DESC LIMIT ?`).all(Math.min(Number(q.limit) || 50, 200)) as Row[];
-    return { busy, cases: rows.map(fromRow) };
+    return { busy, cases: rows.map(fromRow), recordFirst: recordFirstState() };
   });
+  api.post("/build/record-first/resume", async () => { resumeAll(); return recordFirstState(); });
   api.get("/build/cases/:id", async (req, reply) => getCase((req.params as { id: string }).id) ?? reply.code(404).send({ error: "no such case" }));
   api.post("/build/keeper/run", async () => { await look(); return { ok: true, open: keeperState().open }; });
   api.post("/build/cases/:id/work", async (req, reply) => {
