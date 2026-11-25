@@ -8,6 +8,8 @@
 # attention), so caps.memGb 50 replaces mux's formula (which counted 58 and never let it load). It and qwen3.6 still do
 # not fit together (50 + 36 of a 70 GB budget), and a pinned model is never unloaded, so neither is pinned: mux keeps the
 # one in use and swaps (13–17 s each way, measured). 64 tokens/s; tool calls work.
+# 2026-11-25 (owner): 262K context in one pool both slots share (+~1.6 GB, so memGb 52) and ngram speculation
+# (copies from the context: code edits 3-4x faster, output unchanged; docs/speed.md).
 # Routes: agent and code → qwen3-coder-next, then qwen3.6; vision, multilingual and smart keep qwen3.6 first.
 # OpenCode: provider `mux` on http://127.0.0.1:7070/v1 with the tenant `opencode` (data border own) and its key in
 # ~/.config/opencode/mux-opencode.key (make it with MUX_TARGET=mac ./deploy/tenant.sh opencode …; never in the repo).
@@ -28,7 +30,7 @@ mkdir -p "$DIR"
 SIZE=$(stat -f %z "$DIR/$FILE")
 
 echo "→ model $ID"
-MODEL='{"id":"'$ID'","display_name":"Qwen3-Coder-Next 80B-A3B (UD-Q4_K_XL)","kind":"chat","backend":"llamacpp","path":"'$DIR/$FILE'","size_bytes":'$SIZE',"ctx":131072,"parallel":2,"reasoning":"off","pinned":false,"extra_args":["--cache-type-k","q8_0","--cache-type-v","q8_0","--cache-ram","1024"],"caps":{"quality":8,"code":9.5,"tools":9,"speed":8,"reasoning":7,"multilingual":6,"context":9,"memGb":50},"notes":"Qwen/Qwen3-Coder-Next (Apache-2.0), unsloth UD-Q4_K_XL: the main model for agent and code (owner, 2026-11-20). Not pinned: it and qwen3.6 swap. deploy/coder-next.sh"}'
+MODEL='{"id":"'$ID'","display_name":"Qwen3-Coder-Next 80B-A3B (UD-Q4_K_XL)","kind":"chat","backend":"llamacpp","path":"'$DIR/$FILE'","size_bytes":'$SIZE',"ctx":262144,"parallel":2,"reasoning":"off","pinned":false,"extra_args":["--kv-unified","--cache-type-k","q8_0","--cache-type-v","q8_0","--cache-ram","1024","--spec-type","ngram-simple","--spec-draft-n-max","16"],"caps":{"quality":8,"code":9.5,"tools":9,"speed":8,"reasoning":7,"multilingual":6,"context":9,"memGb":52},"notes":"Qwen/Qwen3-Coder-Next (Apache-2.0), unsloth UD-Q4_K_XL: the main model for agent and code (owner, 2026-11-20). Not pinned: it and qwen3.6 swap. deploy/coder-next.sh"}'
 api POST /models "$MODEL" >/dev/null 2>&1 || api PATCH "/models/$ID" "$MODEL" >/dev/null
 api PATCH /models/qwen3.6-35b-a3b '{"pinned":false}' >/dev/null
 api PUT /routes/agent '{"candidates":["'$ID'","qwen3.6-35b-a3b","qwen3.5-0.8b"]}' >/dev/null
@@ -62,9 +64,9 @@ cat > "$OC/opencode.json" <<'JSON'
       "name": "mux (this Mac)",
       "options": { "baseURL": "http://127.0.0.1:7070/v1", "apiKey": "{file:~/.config/opencode/mux-opencode.key}" },
       "models": {
-        "code": { "name": "Code — Qwen3-Coder-Next (mux route)", "tool_call": true, "limit": { "context": 131072, "output": 32768 } },
-        "agent": { "name": "Agent — Qwen3-Coder-Next (mux route)", "tool_call": true, "limit": { "context": 131072, "output": 32768 } },
-        "smart": { "name": "Smart — qwen3.6 (mux route)", "tool_call": true, "limit": { "context": 131072, "output": 16384 } },
+        "code": { "name": "Code — Qwen3-Coder-Next (mux route)", "tool_call": true, "limit": { "context": 262144, "output": 32768 } },
+        "agent": { "name": "Agent — Qwen3-Coder-Next (mux route)", "tool_call": true, "limit": { "context": 262144, "output": 32768 } },
+        "smart": { "name": "Smart — qwen3.6 (mux route)", "tool_call": true, "limit": { "context": 262144, "output": 16384 } },
         "fast": { "name": "Fast — small model (mux route)", "tool_call": true, "limit": { "context": 32768, "output": 4096 } }
       }
     }

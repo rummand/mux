@@ -36,7 +36,7 @@ mkdir -p "$DIR"
 SIZE=$(stat -f %z "$DIR/$FILE")
 
 echo "→ model $ID"
-MODEL='{"id":"'$ID'","display_name":"Inkling 2 Mini 26B-A3B looped (IQ4_NL)","kind":"chat","backend":"llamacpp","path":"'$DIR/$FILE'","mmproj":"'$DIR/$MMPROJ'","server_bin":"'$BIN'","size_bytes":'$SIZE',"ctx":131072,"parallel":2,"reasoning":"auto","pinned":false,"extra_args":["--reasoning-effort","medium","--cache-ram","1024"],"caps":{"quality":7.5,"code":7,"tools":7.5,"speed":6,"reasoning":8,"multilingual":6,"vision":7,"context":9},"notes":"thinkingmachines/Inkling-2-Mini (Apache-2.0 + Thinking Machines AUP), ggml-org IQ4_NL + BF16 mmproj, on llama.cpp '$BUILD' (server_bin). Reasoning effort medium by default (the model card warns of long reasoning loops). No route yet. deploy/inkling.sh, docs/inkling.md"}'
+MODEL='{"id":"'$ID'","display_name":"Inkling 2 Mini 26B-A3B looped (IQ4_NL)","kind":"chat","backend":"llamacpp","path":"'$DIR/$FILE'","mmproj":"'$DIR/$MMPROJ'","server_bin":"'$BIN'","size_bytes":'$SIZE',"ctx":131072,"parallel":2,"reasoning":"auto","pinned":false,"extra_args":["--kv-unified","--reasoning-effort","medium","--cache-ram","1024","--spec-type","ngram-simple","--spec-draft-n-max","16"],"caps":{"quality":7.5,"code":7,"tools":7.5,"speed":6,"reasoning":8,"multilingual":6,"vision":7,"context":9},"notes":"thinkingmachines/Inkling-2-Mini (Apache-2.0 + Thinking Machines AUP), ggml-org IQ4_NL + BF16 mmproj, on llama.cpp '$BUILD' (server_bin). Reasoning effort medium by default (the model card warns of long reasoning loops). No route yet. deploy/inkling.sh, docs/inkling.md"}'
 api POST /models "$MODEL" >/dev/null 2>&1 || api PATCH "/models/$ID" "$MODEL" >/dev/null
 echo "→ loading (unloads idle models if it needs the room)"
 T0=$(date +%s)

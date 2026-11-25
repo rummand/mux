@@ -162,10 +162,12 @@ async function probeModels() {
       }
       continue;
     }
-    // Busy but stuck: requests processing, and no token counted for 3 minutes.
+    // Busy but stuck: requests processing, and no token counted for 3 minutes. llama-server counts a prompt's tokens
+    // only once the whole prompt is read, so its log counts too: it logs progress every 16K prompt tokens, and a cold
+    // 165K prompt on qwen3.6 reads for ~4 min (2026-11-25: restarted as stuck at 79%, and then could not reload).
     const m = stats.find((s) => s.id === t.id)?.metrics;
     if (!m) continue;
-    const total = (m.tokens_predicted_total ?? 0) + (m.prompt_tokens_total ?? 0);
+    const total = (m.tokens_predicted_total ?? 0) + (m.prompt_tokens_total ?? 0) + logBytes(t.id);
     const p = progress.get(t.id);
     if (!p || p.total !== total || !(m.requests_processing > 0)) { progress.set(t.id, { total, since: Date.now() }); resolve("stuck", t.id, "making progress"); continue; }
     if (Date.now() - p.since > 3 * 60_000) {
@@ -212,6 +214,11 @@ async function errorSpikes() {
   }
   for (const r of rows.filter((x) => !bad.includes(x) && x.n >= 3 && x.e / x.n < 0.2)) resolve("errors", r.model_id, "requests succeed again");
   report("errors", "No model is failing most of its requests", !bad.length, bad.length ? bad.map((r) => `${r.model_id} ${r.e}/${r.n}`).join(", ") : "error rates normal", fixed);
+}
+
+/** How much a model server has written to its log (it logs progress while it reads a long prompt). */
+function logBytes(id: string): number {
+  try { return statSync(join(config.logsDir, "models", `${id}.log`)).size; } catch { return 0; }
 }
 
 /** llama-server processes on mux's ports that mux does not know: left by a crash of mux itself. */
