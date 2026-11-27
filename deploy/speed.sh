@@ -54,6 +54,8 @@ state() {
 }
 
 KEY_ID=""
+# The Mac's measurements run as mux's own `assistant` tenant: bloom's test tenant may not use `agent` and allows 1 request
+# at a time, so the background workers and the turns were refused (2026-11-27)
 mkkey() { # $1 base url, $2 admin token, $3 tenant → $T/key
   curl -sf -X POST -H "Authorization: Bearer $2" -H "content-type: application/json" -d '{"name":"speed.sh check (one day)","expiresInDays":1}' "$1/api/admin/tenants/$3/keys" > "$T/key.json"
   KEY_ID=$(js 'console.log(j.record.id)' < "$T/key.json"); js 'console.log(j.key)' < "$T/key.json" > "$T/key"; rm -f "$T/key.json"
@@ -67,7 +69,7 @@ measure() { # $1 url, $2 label, $3.. chat-latency flags
 
 echo "== Before"
 state
-if [ -n "$TEST" ]; then mkkey "$BASE" "$MUX_ADMIN_TOKEN" bloom-design-composer-test; measure "$BASE" before; rmkey "$BASE" "$MUX_ADMIN_TOKEN"; fi
+if [ -n "$TEST" ]; then mkkey "$BASE" "$MUX_ADMIN_TOKEN" assistant; measure "$BASE" before; rmkey "$BASE" "$MUX_ADMIN_TOKEN"; fi
 
 echo "== The memory plan"
 RW_FIRST=""
@@ -212,7 +214,7 @@ fi
 echo "== After"
 state
 if [ -n "$TEST" ]; then
-  mkkey "$BASE" "$MUX_ADMIN_TOKEN" bloom-design-composer-test
+  mkkey "$BASE" "$MUX_ADMIN_TOKEN" assistant
   ADMIN_FOR_MEASURE="$MUX_ADMIN_TOKEN" measure "$BASE" mac --compare
   if [ -n "$INTER" ]; then
     measure "$BASE" mac-interactive --model interactive

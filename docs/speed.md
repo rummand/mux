@@ -100,4 +100,21 @@ models that cannot answer (saved to `~/.mux/speed-railway-agent.json`). It measu
 before and after (priority off, then on, under a background load).
 
 Measured: with fakes only (tests: a person's first wait p90 ~0 ms with priority on against > 40 ms behind a 120 ms
-batch with it off). **Real numbers: run `./deploy/speed.sh` and write them here.**
+batch with it off). **Real numbers (2026-11-27, `./deploy/speed.sh --railway`, then measured again by hand):**
+
+| On the Mac, 3 background workers filling the model | First token p50 · p90 | Total p50 · p90 | mux queue p90 |
+| --- | --- | --- | --- |
+| `interactive` (qwen3.6, thinking off), priority **off** | 8862 · 8947 ms | 9682 · 9770 ms | 8835 ms |
+| `interactive`, priority **on** | **99 · 118 ms** | 933 · 950 ms | 0 ms |
+| `agent` (qwen3.6), priority off | 8890 · 14901 ms | 9687 · 15733 ms | 14799 ms |
+| `agent`, priority on | **100 · 110 ms** | 935 · 948 ms | 0 ms |
+
+- Through Railway, `agent` starts with Inkling (pinned now): every turn reasoned first (10 of 10), the first reasoning
+  token at 324–991 ms, the whole answer 2.6–3.4 s (p50 2805 ms). Bloom's live paths ask for `interactive` (qwen3.6,
+  thinking off) instead.
+- The script's own Mac measurement failed: it used `bloom-design-composer-test`, which may not use `agent` (403), and
+  allows 30 requests a minute and 1 at a time, so the background workers and turns were refused (429). The numbers above
+  were taken with a one-day key of mux's own `assistant` tenant (no limits), revoked after; the script now does the same.
+- Left as they were: Railway's `agent` keeps `mac-studio/qwen3.8-flash-next` (its MTPLX service passed the script's
+  check but has never answered); `mac-studio/arex-2` was dropped (old list in `~/.mux/speed-railway-agent.json`).
+  Memory after: inkling-2-mini and qwen3.6 pinned and hot, 64.3 of 70 GB of mux's budget, 21 GB free on the Mac.
