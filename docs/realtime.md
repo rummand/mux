@@ -232,8 +232,21 @@ them the energy VAD's silence: the turn decision is the biggest part of the budg
 
 ## Measured
 
-Nothing on the Mac yet. Put the first numbers of `deploy/realtime.sh` and `deploy/realtime.sh --railway` here (p50,
-p90, barge-in, hearing), with the date and what was loaded.
+2026-11-27, cascade engine, hearing Silero VAD + Smart Turn v3 + parakeet-tdt-0.6b-v3 (com.mux.hear on :8326), LLM
+qwen3.6-35b-a3b (warm), voice Kokoro af_heart; 5 English turns each, spoken by Kokoro; end of speech → first audio:
+
+| Through | Client p50 · p90 | Server p50 · p90 | Turn decided p50 | Transcript p50 | First LLM token p50 | Barge-in |
+| --- | --- | --- | --- | --- | --- | --- |
+| The Mac (127.0.0.1:7070), first run | 827 · 885 ms | 798 · 861 ms | 264 ms | 347 ms | 487 ms | 373 ms |
+| The Mac, second run | 904 · 1071 ms | 859 · 1003 ms | 277 ms | 367 ms | 506 ms | 415 ms |
+| Railway (bloom-for-business) | **1250 · 3598 ms** | 1081 · 3457 ms | 282 ms | 413 ms | 559 ms | 470 ms |
+
+- On the Mac it is inside the 1.1 s target; through Railway the client's p50 (1250 ms) is just over it, ~170 ms of it
+  the trip to Railway and back. One Railway turn waited 2.9 s for the first LLM token (qwen3.6 busy with other work):
+  that is the p90.
+- Barge-in (373–470 ms, the VAD's ~120 ms start delay included) is well over the 150 ms target.
+- Loaded on the Mac at the time: qwen3.6 (pinned), bge-m3, arch-router; Record's speech-da and speakers services; the
+  9 CI runners.
 
 ## Licences
 
