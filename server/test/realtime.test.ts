@@ -339,11 +339,20 @@ test("a duplex engine: its words and voice stream back as responses; vad events 
   assert.equal(done.length, 1);
   assert.equal(done[0].text, "Hi");
   assert.equal(typeof h.of("metrics")[0].speech_end_to_first_audio_ms, "number");
+  // A second turn: the model answers before the session's own VAD has ended the turn; no time from the turn before leaks in
+  h.s.audio(tone(600)); h.s.audio(silence(300));
+  onEvent({ type: "audio", pcm: tone(133, 24_000), rate: 24_000 });
+  for (let i = 0; i < 8; i++) onEvent({ type: "audio", pcm: silence(133, 24_000), rate: 24_000 });
+  h.s.audio(silence(800));
+  const m2 = h.of("metrics")[1];
+  assert.ok(m2.speech_end_to_turn_ms === null || (m2.speech_end_to_turn_ms as number) >= 0, `turn time ${m2.speech_end_to_turn_ms}`);
+  assert.equal(typeof m2.speech_end_to_first_audio_ms, "number");
   // The forced-text experiment's door: response.create say
   await h.s.handle({ type: "response.create", say: "Three invoices are late." });
   assert.ok(h.of("response.text.delta").some((e) => e.delta === "[Three invoices are late.]"));
   h.s.stop("done");
   assert.equal(h.of("session.ended")[0].reason, "done");
+  assert.equal(h.of("session.ended")[0].turns, 2);
 });
 
 test("a session that has not started refuses audio; session.end ends it with what it used", async () => {

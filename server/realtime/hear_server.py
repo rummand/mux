@@ -76,6 +76,7 @@ class Listener:
         self.vad = VADIterator(models.silero, sampling_rate=RATE, threshold=0.5, min_silence_duration_ms=200, speech_pad_ms=30)
         self.turn_silence_ms = turn_silence_ms
         self.clock = 0  # samples received
+        self.vad_base = 0  # VADIterator counts from its last reset_states(): its sample indexes are offset by this
         self.pending = np.zeros(0, dtype=np.float32)
         self.turn_audio: list[np.ndarray] = []
         self.in_speech = False
@@ -116,12 +117,12 @@ class Listener:
                 self.stt_buf = [chunk]
                 self.partial = ""
                 self.stream = await self.run(self._open_stream)
-            await self.send({"type": "vad.start", "at_ms": self.ms(int(ev["start"]))})
+            await self.send({"type": "vad.start", "at_ms": self.ms(self.vad_base + int(ev["start"]))})
         if self.in_speech:
             self.last_voiced_end = self.clock
         if ev and "end" in ev:
             self.in_speech = False
-            self.last_voiced_end = int(ev["end"])
+            self.last_voiced_end = self.vad_base + int(ev["end"])
             await self.send({"type": "vad.end", "at_ms": self.ms(self.last_voiced_end)})
             # Smart Turn on each pause: is the person done, or thinking?
             p = await self.run(self.m.turn_probability, np.concatenate(self.turn_audio))
@@ -168,6 +169,7 @@ class Listener:
         text = await self.run(self._close, rest)
         await self.send({"type": "final", "text": text})
         self.vad.reset_states()
+        self.vad_base = self.clock
 
     async def close(self):
         if self.stream is not None:

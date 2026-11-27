@@ -24,8 +24,13 @@ import { EnergyVad, type HearEvent, type Hearing, type HearingFactory } from "./
 export type Caller = Pick<Ctx, "tenant" | "key" | "ip" | "userAgent"> & { user: string | null; sessionId: string };
 
 function innerCtx(c: Caller, endpoint: string): Ctx {
-  check(c.tenant, c.key); // the tenant's budget and rates hold inside a session too
-  const ctx = newCtx(c.tenant, c.key, endpoint, c.ip, c.userAgent, ["realtime"]);
+  // The tenant's budgets and tokens a minute hold inside a session too; its requests a minute do not (one spoken answer
+  // is a transcription, an LLM call and a speech call per sentence: the session was counted when it opened)
+  check({ ...c.tenant, rpm_limit: 0 }, { ...c.key, rpm_limit: 0 });
+  // What a person says stays on our machines: no cloud model and no free tier answers an inner call, whatever the
+  // tenant's own border ("servers" stays as strict as it is)
+  const tenant = { ...c.tenant, data_border: c.tenant.data_border === "servers" ? "servers" as const : "own" as const };
+  const ctx = newCtx(tenant, c.key, endpoint, c.ip, c.userAgent, ["realtime"]);
   ctx.traceId = c.sessionId;
   ctx.affinity = c.sessionId; // one session's turns stay on one model (its prompt cache stays warm)
   ctx.endUser = c.user;

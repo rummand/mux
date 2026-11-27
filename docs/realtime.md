@@ -43,6 +43,16 @@ session; it keeps nothing of what was said after the session (every inner call i
   no de-duplication. Through the gateway the person is named `<tenant>:<user>` on the Mac.
 - The tenant needs the routes a session uses in its `allowed` list (or an empty list): `transcribe`, `speak`, its chat
   route, and for a duplex trial the model (`haru-4b`, `minicpm-o-4.5`).
+- Inner calls keep the tenant's budgets and tokens a minute but not its requests a minute (one spoken answer is a
+  transcription, an LLM call and a speech call per sentence; the session was counted when it opened). Through the
+  gateway, bloom's budget there is checked when the session opens and each turn's tokens are charged as it ends, so a
+  long session can run past a budget by up to one session's worth before the next one is refused.
+- **What a person says stays on our machines:** every inner call runs inside the data border `own` (or `servers` if
+  the tenant has that), so no cloud model and no free-tier rescue answers it, whatever the tenant's own border.
+- **Through Railway, Bloom's `llm` is Railway's choice:** the gateway resolves `llm` (or a `model` that is not a duplex
+  engine, or bloom's default route) with its own routes, aliases and bloom's allowed list, takes the first candidate
+  that is on the node running the session, and names it to the node as the node's model (`agent` → `inkling-2-mini`).
+  If none is on that node the session is refused with `error` `llm_unavailable`.
 
 ## Protocol `mux.realtime.v1`
 
@@ -133,7 +143,7 @@ const ctx = new AudioContext({ sampleRate: 16000 });   // capture at 16 kHz; con
 | Stage | What | Where | Notes |
 | --- | --- | --- | --- |
 | Hearing | **energy VAD** (`vad.ts`): adaptive noise floor; speech after 120 ms voiced; ends after 250 ms quiet; the turn ends after `turn_silence_ms` (700) | in mux | Always there; a person pausing to think for > 700 ms is cut off |
-| Hearing | **hear sidecar**: Silero VAD (32 ms windows) + **Smart Turn v3** on every pause (P(complete) > 0.5 ends the turn; else 1.5 s of silence) + **parakeet-mlx** streaming (partials every 320 ms, the final at the turn's end) | `server/realtime/hear_server.py`, com.mux.hear :8320 | `hearing: "auto"` uses it when it answers within 800 ms, else the energy VAD |
+| Hearing | **hear sidecar**: Silero VAD (32 ms windows) + **Smart Turn v3** on every pause (P(complete) > 0.5 ends the turn; else 1.5 s of silence) + **parakeet-mlx** streaming (partials every 320 ms, the final at the turn's end) | `server/realtime/hear_server.py`, com.mux.hear :8320 | `hearing: "auto"` uses it when it answers within 800 ms, else the energy VAD. It stays resident (PyTorch for Silero + parakeet, roughly 2.5–3 GB) **outside mux's memory budget**, like Nexus's audio service |
 | Words | the `transcribe` route (whisper large-v3-turbo, `language=en`), the turn's audio with 300 ms before speech began | mux route | Only with the energy VAD; the sidecar transcribes as it listens |
 | Think | Bloom's chat route through `runChat`, streamed, tools passed through | mux route | `x-mux-affinity` = the session, so its turns stay on one model and its prompt cache |
 | Speak | the `speak` route, one sentence at a time, `voice` (af_heart → Kokoro), WAV; each sentence synthesised as soon as it is complete and sent in order, 100 ms pieces, ≤ 400 ms ahead of real time | mux route | Markdown is not spoken; "e.g." and "9.30" do not end sentences |
@@ -201,6 +211,12 @@ them the energy VAD's silence: the turn decision is the biggest part of the budg
 
 ## How to test
 
+- **Here, against fakes (no models):** the hear sidecar's `Listener` with a stand-in Silero VAD and STT (two turns:
+  Smart Turn's "not yet" carries a pause over, the second turn's times stay on the session clock); `haru_server.py`
+  with a stand-in `haru_mlx`, through mux's `/v1/realtime` (the memory floor refused it with 7 GB free, then admitted
+  it; a spoken turn came back as a response; `response.create {say}` came back as forced words); and
+  `realtime-measure.mjs` against mux with fake stages (p50 1045 ms, 700 of them the energy VAD's silence; barge-in
+  112 ms). `minicpm_o_server.py` has not run at all.
 - **Here (no models):** `npm test` runs `server/test/realtime.test.ts` (the session with fake stages: a whole turn,
   the metrics' order, barge-in, tools, timeouts, cancel, Bloom's own `response.create`, a transcribing hearing, a
   duplex engine, pacing; WAV, the sentence splitter, the energy VAD) and `realtime-ws.test.ts` (a real socket: who may

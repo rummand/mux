@@ -5,7 +5,9 @@ import WebSocket, { WebSocketServer, type RawData } from "ws";
 import { config } from "../config.js";
 import { db, event, settings } from "../db.js";
 import { listProviders, type Provider } from "../providers.js";
-import { toMuxError } from "../router/errors.js";
+import { MuxError, toMuxError } from "../router/errors.js";
+import { listModels } from "../models.js";
+import { decide } from "../router/select.js";
 import { check } from "../router/limits.js";
 import { finish, newCtx, type Ctx } from "../router/metering.js";
 import { authenticate, type ApiKey, type Tenant } from "../tenants.js";
@@ -93,7 +95,11 @@ export function registerRealtime(app: FastifyInstance, opts: RealtimeOptions = {
   });
   app.server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     const path = (req.url ?? "").split("?")[0];
-    if (path !== REALTIME_PATH) return refuse(socket, 404, "not_found", `no WebSocket at ${path}; the voice session is ${REALTIME_PATH}`);
+    if (path !== REALTIME_PATH) {
+      // Another WebSocket on this server is its own listener's; with none, the upgrade is refused rather than left hanging
+      if (app.server.listenerCount("upgrade") > 1) return;
+      return refuse(socket, 404, "not_found", `no WebSocket at ${path}; the voice session is ${REALTIME_PATH}`);
+    }
     const who = authenticate(keyOf(req));
     if (!who) return refuse(socket, 401, "invalid_api_key", "a mux API key is required (Authorization: Bearer mux-sk-…, x-api-key, or the subprotocol mux-key.<key>)");
     if (!realtimeAllowed(who.tenant)) return refuse(socket, 403, "permission_denied", `${who.tenant.name} may not open voice sessions (settings.realtimeTenants)`);
@@ -188,6 +194,22 @@ function connected(ws: WebSocket, req: IncomingMessage, tenant: Tenant, key: Api
   });
 }
 
+/**
+ * On a gateway: the cascade's LLM for a session.start, as this gateway would route a chat call of the tenant (`llm`,
+ * else a `model` that is not a duplex engine, else the tenant's default route), narrowed to the models on the node
+ * that runs the session; returns that model's own name on the node. Undefined for a duplex engine.
+ */
+export function gatewayLlm(tenant: Tenant, e: { model?: string; llm?: string }, node: Provider): string | undefined {
+  const model = (e.model ?? "").trim();
+  const duplex = !!model && (model === "realtime" || listModels().some((m) => m.kind === "realtime" && (m.id === model || m.upstream_model === model)));
+  if (duplex && !e.llm) return undefined;
+  const name = e.llm?.trim() || (model && model !== "cascade" && !duplex ? model : "") || tenant.default_route || "auto";
+  const d = decide(tenant, name, "chat", null);
+  const here = d.candidates.find((m) => m.backend === "node" && m.provider_id === node.id && m.upstream_model);
+  if (!here) throw new MuxError(503, "llm_unavailable", `${name}: none of its models is on ${node.name}, where voice sessions run (${d.candidates.map((m) => m.id).join(", ") || "no candidates"})`);
+  return here.upstream_model!;
+}
+
 /** The node a gateway sends voice sessions to: the first online mux node it holds a key for. */
 export function realtimeNode(): Provider | null {
   return listProviders().find((p) => p.kind === "mux" && p.enabled && p.status === "online" && !!p.api_key) ?? null;
@@ -257,14 +279,26 @@ function relay(ws: WebSocket, ctx: Ctx, node: Provider | null) {
   ws.on("message", (data, binary) => {
     if (!binary) {
       try {
-        const e = JSON.parse(String(data)) as { type?: string; user?: string };
+        const e = JSON.parse(String(data)) as { type?: string; user?: string; model?: string; llm?: string };
         if (e.type === "session.start") {
           user = e.user?.trim() || user;
           ctx.endUser = user;
           live_.user = user;
           if (user) for (const [other, l] of live) if (other !== id && l.tenant.id === ctx.tenant.id && l.user === user) l.stop("replaced by a newer session of the same person");
+          // Bloom's LLM is chosen here, by this gateway's routes, aliases and allowed list for bloom's tenant, and named
+          // to the node as the node's own model: the node would otherwise resolve "agent" by its own routes, as the
+          // gateway's tenant there, and a voice answer would come from another model than a typed one
+          let llm: string | undefined;
+          try { llm = gatewayLlm(ctx.tenant, e, node); } catch (err) {
+            const m = toMuxError(err);
+            reason = m.message;
+            ws.send(JSON.stringify({ type: "error", code: m.type, message: m.message }));
+            ws.close(1008, "LLM not available");
+            return;
+          }
           // The node sees every gateway session as one tenant: the person is named per tenant there
-          if (user) { toUp(JSON.stringify({ ...e, user: `${ctx.tenant.id}:${user}` }), false); return; }
+          toUp(JSON.stringify({ ...e, ...(llm ? { llm } : {}), ...(user ? { user: `${ctx.tenant.id}:${user}` } : {}) }), false);
+          return;
         }
       } catch { /* the node says what is wrong */ }
     }

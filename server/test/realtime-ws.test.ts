@@ -6,7 +6,8 @@ import { db, saveSettings } from "../src/db.js";
 import { createKey, upsertTenant } from "../src/tenants.js";
 import { registerRealtime, keyOf, nodeSocketUrl } from "../src/realtime/server.js";
 import { INPUT_RATE } from "../src/realtime/audio.js";
-import type { Provider } from "../src/providers.js";
+import { saveProvider, type Provider } from "../src/providers.js";
+import { upsertModel, upsertRoute } from "../src/models.js";
 
 /** A real socket against a real listener, with fake model stages (no model is needed). */
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -25,8 +26,9 @@ const otherKey = createKey("rt-other", "test").key;
 const gwKey = createKey("rt-gateway", "test").key;
 saveSettings({ realtimeTenants: ["rt-bloom", "rt-gateway"], realtimeMaxSessions: 10 });
 
+const llmAsked: (string | undefined)[] = [];
 const fakes = () => ({
-  thinker: { stream: async (_r: unknown, _s: AbortSignal, onText: (d: string) => void) => { onText("Two meetings. "); onText("Both after lunch."); return { text: "Two meetings. Both after lunch.", toolCalls: [], usage: { prompt_tokens: 12, completion_tokens: 7 }, coldStart: false }; } },
+  thinker: { stream: async (r: { model?: string }, _s: AbortSignal, onText: (d: string) => void) => { llmAsked.push(r.model); onText("Two meetings. "); onText("Both after lunch."); return { text: "Two meetings. Both after lunch.", toolCalls: [], usage: { prompt_tokens: 12, completion_tokens: 7 }, coldStart: false }; } },
   speaker: { speak: async () => ({ pcm: Buffer.alloc(4800), rate: 24_000 }) },
   transcriber: { transcribe: async (pcm: Buffer) => (pcm.length > 8000 ? "What is on today?" : "") },
   leadMs: 1e9,
@@ -37,7 +39,12 @@ registerRealtime(node, { deps: fakes });
 await node.listen({ port: 0, host: "127.0.0.1" });
 const nodeUrl = `http://127.0.0.1:${(node.server.address() as { port: number }).port}`;
 
-// A gateway in front of it, as Railway is in front of the Mac
+// A gateway in front of it, as Railway is in front of the Mac: it knows the node's models as mac/<model>, and its own
+// route "agent" starts with a cloud model, then the node's qwen-test
+saveProvider({ id: "mac", name: "mac-studio", kind: "mux", base_url: nodeUrl, api_key: gwKey, enabled: true, status: "online" });
+upsertModel({ id: "cloud/big", backend: "external", kind: "chat", base_url: "https://example.invalid/v1", upstream_model: "big" });
+upsertModel({ id: "mac/qwen-test", backend: "node", kind: "chat", provider_id: "mac", upstream_model: "qwen-test" });
+upsertRoute({ name: "agent", kind: "chat", strategy: "priority", candidates: ["cloud/big", "mac/qwen-test"] });
 const gateway = Fastify();
 registerRealtime(gateway, { relayTo: () => ({ id: "mac", name: "mac-studio", kind: "mux", base_url: nodeUrl, api_key: gwKey, enabled: true, status: "online" } as Provider) });
 await gateway.listen({ port: 0, host: "127.0.0.1" });
@@ -135,11 +142,13 @@ test("one voice session per person: a second session of the same person ends the
 test("through a gateway: frames pass both ways, the person is named per tenant on the node, and tokens are metered at the gateway", async () => {
   const ws = sock(gwUrl, { authorization: `Bearer ${bloomKey}` });
   const { events } = await open(ws);
-  ws.send(JSON.stringify({ type: "session.start", user: "dee", hearing: "energy" }));
+  ws.send(JSON.stringify({ type: "session.start", user: "dee", hearing: "energy", llm: "agent" }));
   await until(events, "session.created");
   await sayIt(ws);
   const done = await until(events, "response.done");
   assert.deepEqual(done.usage, { prompt_tokens: 12, completion_tokens: 7 });
+  // The gateway chose bloom's LLM by its own route, and named it to the node as the node's model
+  assert.equal(llmAsked.at(-1), "qwen-test");
   ws.close();
   await wait(150);
   // The node ran the session as the gateway's tenant, for "rt-bloom:dee"
@@ -153,6 +162,16 @@ test("through a gateway: frames pass both ways, the person is named per tenant o
   assert.equal(atGw.prompt_tokens, 12);
   assert.equal(typeof atGw.seconds, "number");
   assert.equal(atGw.engine, "cascade");
+});
+
+test("through a gateway: an LLM with no model on the node is refused before the session starts", async () => {
+  upsertRoute({ name: "cloud-only", kind: "chat", strategy: "priority", candidates: ["cloud/big"] });
+  const ws = sock(gwUrl, { authorization: `Bearer ${bloomKey}` });
+  const { events } = await open(ws);
+  ws.send(JSON.stringify({ type: "session.start", llm: "cloud-only" }));
+  const err = await until(events, "error");
+  assert.equal(err.code, "llm_unavailable");
+  assert.match(String(err.message), /none of its models is on mac-studio/);
 });
 
 test("a gateway with no node online says so on the socket", async () => {
