@@ -9,6 +9,7 @@ import { cleanRunner, failed, gh, hardenRunner, localRunners, onPolled, parse, r
 import { config } from "./config.js";
 import { db, event, now, settings } from "./db.js";
 import { asActor, journal } from "./journal.js";
+import { contention, setKeeperState, shouldPauseCi, voiceOpen } from "./priority.js";
 
 /**
  * The build keeper: the agent that runs the build server (owner, 2026-11-25: "it's your task to secure that the build
@@ -334,33 +335,50 @@ export async function runningSteps(): Promise<{ pid: number; runner: string; pro
 
 export const signal = (pids: number[], sig: "SIGSTOP" | "SIGCONT") => { for (const p of pids) try { process.kill(p, sig); } catch { /* gone */ } };
 
+/**
+ * Live work first: Record's (above), and since 27 November 2026 a person in a voice session with Bloom (owner: "give
+ * Bloom's live answers priority"; one voice turn waited 2.9 s for qwen3.6 while the 9 runners built). The same pause and
+ * the same limits; the reason is said in the event and the journal. A voice session opening asks for a check at once.
+ */
+let checking: Promise<void> | null = null;
 async function recordFirst() {
-  const busyNow = await recordBusy().catch(() => false);
-  const t = now();
-  // Resume what should run again: Record is clear, the step has waited 20 minutes, or it ended.
-  for (const [pid, p] of paused) {
-    const over = t - p.since > 20 * 60_000;
-    if (!busyNow || over) {
-      signal(p.procs, "SIGCONT");
-      paused.delete(pid);
-      if (over) spared.set(pid, t);
-      event("info", "build", `resumed the CI step on ${p.runner} after ${Math.round((t - p.since) / 1000)} s${over ? " (20-minute limit; Record still busy)" : ": Record is clear"}`);
+  if (checking) return checking;
+  checking = (async () => {
+    const record = await recordBusy().catch(() => false);
+    const decision = shouldPauseCi({ recordBusy: record, voiceSessions: voiceOpen(), pauseForVoice: settings().pauseCiForVoice });
+    const busyNow = decision.pause;
+    const t = now();
+    // Resume what should run again: live work is clear, the step has waited 20 minutes, or it ended.
+    for (const [pid, p] of paused) {
+      const over = t - p.since > 20 * 60_000;
+      if (!busyNow || over) {
+        signal(p.procs, "SIGCONT");
+        paused.delete(pid);
+        if (over) spared.set(pid, t);
+        event("info", "build", `resumed the CI step on ${p.runner} after ${Math.round((t - p.since) / 1000)} s${over ? ` (20-minute limit; still ${decision.why})` : ": live work is clear"}`);
+      }
     }
-  }
-  if (!busyNow) return;
-  for (const s of await runningSteps()) {
-    if (paused.has(s.pid) || t - (spared.get(s.pid) ?? 0) < 10 * 60_000) continue;
-    signal(s.procs, "SIGSTOP");
-    paused.set(s.pid, { ...s, since: t });
-    event("warn", "build", `paused the CI step on ${s.runner} (${s.procs.length} processes): Record has ${recordState.streams ? `${recordState.streams} live meeting(s)` : `${recordState.waiting} part(s) waiting to be written down`}`);
-    journal({ who: "build-keeper", kind: "build", ref: s.runner, title: `Build keeper: paused a CI step on ${s.runner} for Record's live work` });
-  }
-  for (const [pid, at] of spared) if (t - at > 3600_000) spared.delete(pid);
+    if (busyNow) {
+      const why = decision.why === "Record's live work"
+        ? `Record has ${recordState.streams ? `${recordState.streams} live meeting(s)` : `${recordState.waiting} part(s) waiting to be written down`}`
+        : decision.why;
+      for (const s of await runningSteps()) {
+        if (paused.has(s.pid) || t - (spared.get(s.pid) ?? 0) < 10 * 60_000) continue;
+        signal(s.procs, "SIGSTOP");
+        paused.set(s.pid, { ...s, since: t });
+        event("warn", "build", `paused the CI step on ${s.runner} (${s.procs.length} processes): ${why}`);
+        journal({ who: "build-keeper", kind: "build", ref: s.runner, title: `Build keeper: paused a CI step on ${s.runner} for live work (${why})` });
+      }
+    }
+    for (const [pid, at] of spared) if (t - at > 3600_000) spared.delete(pid);
+    setKeeperState({ recordBusy: record, ciPaused: paused.size });
+  })().finally(() => { checking = null; });
+  return checking;
 }
 
 /** Resume every paused step (mux is stopping — index.ts — or the owner asks): a build is never left stopped behind. */
 export function resumeAll() { for (const [pid, p] of paused) { signal(p.procs, "SIGCONT"); paused.delete(pid); } }
-export const recordFirstState = () => ({ ...recordState, paused: [...paused.values()].map((p) => ({ runner: p.runner, since: p.since, processes: p.procs.length })) });
+export const recordFirstState = () => ({ ...recordState, voiceSessions: voiceOpen(), paused: [...paused.values()].map((p) => ({ runner: p.runner, since: p.since, processes: p.procs.length })) });
 
 export function startBuildKeeper(a: FastifyInstance) {
   app = a;
@@ -369,6 +387,8 @@ export function startBuildKeeper(a: FastifyInstance) {
   // A mux that was killed outright (no stop()) may have left steps paused: wake every running step once at start.
   void runningSteps().then((steps) => { for (const st of steps) signal(st.procs, "SIGCONT"); }).catch(() => undefined);
   setInterval(() => void recordFirst().catch((e) => event("warn", "build", `record first: ${(e as Error).message}`)), 15_000).unref();
+  // A voice session opening (or the last one closing) is checked at once, not within 15 s
+  contention.on("voice", () => void recordFirst().catch((e) => event("warn", "build", `live first: ${(e as Error).message}`)));
 }
 
 /** For the Agents page. */

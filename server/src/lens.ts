@@ -219,7 +219,7 @@ async function modelFindings(rows: Row[], criteria: string, modelId: string | un
   if (!pick) return { findings: [], rejected: [], model: null };
   const top = (k: (r: Row) => string | null) => [...groupBy(rows, (r) => k(r) ?? "")].sort((a, b) => b[1].length - a[1].length).slice(0, 5).map(([v]) => v).filter(Boolean).join(" ");
   const mem = await recall(`${criteria} ${top((r) => r.tenant_id)} ${top((r) => r.model_id)}`, 6);
-  const up = await acquire(pick);
+  const up = await acquire(pick, { priority: "background" });
   try {
     const r = await fetch(`${up.baseUrl}/chat/completions`, { method: "POST", headers: { "content-type": "application/json", ...up.headers }, signal: AbortSignal.timeout(240_000), body: JSON.stringify({
       model: up.model, temperature: 0.2, max_tokens: 2500,
@@ -243,7 +243,7 @@ ${mem.block}` },
     const findings: Finding[] = [], rejected: Rejected[] = [];
     for (const f of raw) { const g = ground(f, rows); if ("finding" in g) findings.push(g.finding); else rejected.push(g.rejected); }
     return { findings, rejected, model: pick.id };
-  } finally { release(pick.id); }
+  } finally { release(pick.id, "background"); }
 }
 
 /* ── Runs ───────────────────────────────────────────────────────────────────────────────────────────────────── */

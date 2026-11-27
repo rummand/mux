@@ -1,4 +1,6 @@
-import { acquire, release } from "../runtime/manager.js";
+import { acquire, newAcquireStats, release } from "../runtime/manager.js";
+import { settings } from "../db.js";
+import { competing } from "../speed.js";
 import { affinityKey } from "./affinity.js";
 import { intentRoute } from "./intent.js";
 import type { Model } from "../models.js";
@@ -82,22 +84,27 @@ export async function runChat(ctx: Ctx, body: ChatBody, signal: AbortSignal, onC
     if (i > 0) ctx.fallbacks = i;
     const tq = performance.now();
     let up;
-    try { up = await acquire(m); } catch (e) {
+    ctx.acq ??= newAcquireStats();
+    try { up = await acquire(m, { priority: ctx.priority, signal, stats: ctx.acq }); } catch (e) {
+      ctx.queueMs = (ctx.queueMs ?? 0) + (performance.now() - tq);
+      if (signal.aborted) throw e; // the caller went away while waiting: not the model's failure
       recordFailure(m.id);
       lastErr = e as Error;
-      ctx.queueMs = (ctx.queueMs ?? 0) + (performance.now() - tq);
       continue;
     }
     ctx.queueMs = (ctx.queueMs ?? 0) + (performance.now() - tq);
+    ctx.competing = competing();
     ctx.coldStart = up.coldStartMs > 0;
     ctx.modelId = m.id;
     const url = `${up.baseUrl}/chat/completions`;
+    const headers = m.backend === "node" ? { ...up.headers, ...forwardHeaders(ctx) } : up.headers;
+    const sent = { ...shapeFor(ctx, m, body), model: up.model };
     const tu = performance.now();
     try {
       const out = forced
-        ? await forcedCall(ctx, m, url, up.headers, { ...body, model: up.model }, forced, signal, onChunk)
-        : onChunk ? await streamCall(ctx, m, url, up.headers, { ...body, model: up.model }, signal, onChunk)
-        : await plainCall(ctx, m, url, up.headers, { ...body, model: up.model }, signal);
+        ? await forcedCall(ctx, m, url, headers, sent, forced, signal, onChunk)
+        : onChunk ? await streamCall(ctx, m, url, headers, sent, signal, onChunk)
+        : await plainCall(ctx, m, url, headers, sent, signal);
       ctx.upstreamMs = performance.now() - tu;
       recordSuccess(m.id, ctx.ttftMs ?? null, ctx.tps ?? null);
       return out;
@@ -106,14 +113,38 @@ export async function runChat(ctx: Ctx, body: ChatBody, signal: AbortSignal, onC
       if (e instanceof Retryable) { recordFailure(m.id); lastErr = e; continue; }
       throw e;
     } finally {
-      release(m.id);
+      release(m.id, ctx.priority);
     }
   }
   const msg = lastErr?.message ?? "no model could take the request";
   throw new MuxError(503, "all_models_failed", d.candidates.length > 1 ? `every model on the route failed; the last: ${msg}` : msg);
 }
 
+/** What a node is told along with the call: the class, the caller's trace (else this gateway's request id), its stages. */
+export function forwardHeaders(ctx: Ctx): Record<string, string> {
+  return {
+    "x-mux-priority": ctx.priority ?? "normal", "x-mux-trace": ctx.trace ?? ctx.id,
+    ...(ctx.stageHeader ? { "x-mux-stage": ctx.stageHeader } : {}),
+  };
+}
+
+/**
+ * The request as a local llama-server gets it. An interactive turn to a model that reasons is asked not to think
+ * (settings.interactiveNoThinking: a person is waiting; background and deep work keep thinking), unless the caller said
+ * how it wants thinking; and the prompt cache is asked for, so a follow-up turn reuses the conversation's prefix.
+ */
+export function shapeFor(ctx: Pick<Ctx, "priority">, m: Pick<Model, "backend" | "reasoning">, body: ChatBody): ChatBody {
+  if (m.backend !== "llamacpp") return body;
+  const out: ChatBody = { ...body };
+  if (out.cache_prompt === undefined) out.cache_prompt = true;
+  const kw = (out.chat_template_kwargs ?? {}) as Record<string, unknown>;
+  const said = "enable_thinking" in kw || "reasoning_effort" in out || "thinking" in out || "reasoning" in out;
+  if (ctx.priority === "interactive" && m.reasoning !== "off" && settings().interactiveNoThinking && !said) out.chat_template_kwargs = { ...kw, enable_thinking: false };
+  return out;
+}
+
 function meter(ctx: Ctx, usage: Usage | undefined | null, timings: Timings | undefined, firstAt: number | null, endAt: number) {
+  if (timings?.prompt_ms != null) ctx.prefillMs = timings.prompt_ms;
   ctx.promptTokens = usage?.prompt_tokens ?? timings?.prompt_n ?? ctx.promptTokens ?? 0;
   ctx.completionTokens = usage?.completion_tokens ?? timings?.predicted_n ?? ctx.completionTokens ?? 0;
   ctx.cachedTokens = usage?.prompt_tokens_details?.cached_tokens ?? timings?.cache_n ?? 0;
@@ -147,7 +178,10 @@ async function streamCall(ctx: Ctx, m: Model, url: string, headers: Record<strin
     if (c.usage) usage = c.usage;
     if (c.timings) timings = c.timings;
     const delta = c.choices?.[0]?.delta;
-    if (delta && first === null && (delta.content || delta.tool_calls || delta.reasoning_content)) {
+    // The first token a person can read (words or a tool call) is the TTFT; thinking before it is counted apart, so a
+    // model that reasons first does not look fast (turn stats: reasoning_ms)
+    if (delta && ctx.firstReasoningMs == null && delta.reasoning_content) ctx.firstReasoningMs = performance.now() - ctx.t0;
+    if (delta && first === null && (delta.content || delta.tool_calls)) {
       first = performance.now();
       ctx.ttftMs = first - ctx.t0;
     }

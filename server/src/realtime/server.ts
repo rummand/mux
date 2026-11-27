@@ -14,6 +14,8 @@ import { authenticate, type ApiKey, type Tenant } from "../tenants.js";
 import { duplexFor, faceFor, hearingFor, routeSpeaker, routeThinker, routeTranscriber, type Caller } from "./adapters.js";
 import { PROTOCOL_VERSION, ProtocolError, parseClient, type ServerEvent } from "./protocol.js";
 import { Session, type SessionDeps } from "./session.js";
+import { voiceClosed, voiceOpened } from "../priority.js";
+import { recordRealtimeTurn, type RealtimeMetrics } from "../speed.js";
 
 /**
  * WebSocket /v1/realtime: one socket, one person's voice conversation (docs/realtime.md).
@@ -138,7 +140,12 @@ function connected(ws: WebSocket, req: IncomingMessage, tenant: Tenant, key: Api
   if (config.role === "gateway" && !opts.deps) return relay(ws, ctx, realtimeNode());
 
   const caller: Caller = { tenant, key, ip: ctx.ip, userAgent: ctx.userAgent, user: ctx.endUser ?? null, sessionId: "" };
-  const send = (e: ServerEvent) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(e)); };
+  let sessionRef: Session | null = null;
+  const send = (e: ServerEvent) => {
+    // Each voice turn's own marks are a row of turn stats (speed.ts), beside its inner LLM call's
+    if (e.type === "metrics" && sessionRef) recordRealtimeTurn({ tenant: tenant.id, user: caller.user, session: sessionRef.id, llm: sessionRef.llm ?? null, via: "node", metrics: e as unknown as RealtimeMetrics });
+    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(e));
+  };
   let closedBy = "";
   const s: Session = new Session({
     ...(opts.deps ? opts.deps(caller) : {
@@ -151,6 +158,8 @@ function connected(ws: WebSocket, req: IncomingMessage, tenant: Tenant, key: Api
     close: (reason) => { closedBy = reason; if (ws.readyState === WebSocket.OPEN) ws.close(1000, reason.slice(0, 120)); },
   });
   caller.sessionId = s.id;
+  sessionRef = s;
+  voiceOpened();
   let user: string | null = ctx.endUser ?? null;
   const limit = setTimeout(() => s.stop("time limit"), settings().realtimeMaxMinutes * 60_000);
   limit.unref();
@@ -184,6 +193,7 @@ function connected(ws: WebSocket, req: IncomingMessage, tenant: Tenant, key: Api
   });
   ws.on("close", () => {
     clearTimeout(limit);
+    voiceClosed();
     s.stop(closedBy || "the caller closed the socket");
     live.delete(s.id);
     record(ctx, {
@@ -270,6 +280,8 @@ function relay(ws: WebSocket, ctx: Ctx, node: Provider | null) {
           t.promptTokens = e.usage.prompt_tokens ?? 0; t.completionTokens = e.usage.completion_tokens ?? 0;
           usage = { prompt_tokens: usage.prompt_tokens + t.promptTokens, completion_tokens: usage.completion_tokens + t.completionTokens };
           finish(t, 200);
+        } else if (e.type === "metrics") {
+          recordRealtimeTurn({ tenant: ctx.tenant.id, user: ctx.endUser ?? null, session: id, llm: llm ?? engine, via: "gateway", metrics: e as unknown as RealtimeMetrics });
         } else if (e.type === "session.ended") { turns = e.turns ?? turns; inMs = e.input_ms ?? 0; outMs = e.output_ms ?? 0; reason ||= e.reason ?? ""; }
       } catch { /* not ours to judge */ }
     }

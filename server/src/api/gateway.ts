@@ -15,6 +15,7 @@ import { cancelReconstruction, createReconstruction, measureName, reconstruction
 import { CONVERT_BODY_LIMIT, runConvert } from "../router/convert.js";
 import { BACKDROP_FILES, backdropFile, backdropStatus, cancelBackdrop, createBackdrop, type BackdropFile } from "../router/backdrop.js";
 import { authenticate } from "../tenants.js";
+import { classify, parseStages } from "../priority.js";
 import { anthropicErrorType, fromOpenAI, StreamTranslator, toOpenAI, type MessagesBody } from "./anthropic.js";
 
 type Flavour = "openai" | "anthropic";
@@ -53,6 +54,14 @@ function begin(req: FastifyRequest, reply: FastifyReply, endpoint: string, flavo
   ctx.agent = header(req, "x-mux-agent");
   ctx.endUser = body.user ?? body.metadata?.user_id ?? header(req, "x-mux-user");
   ctx.noFallback = header(req, "x-mux-no-fallback") === "1";
+  // Turn stats and priority (speed.ts, priority.ts): the caller's trace for this turn and its own stages, and its class
+  ctx.trace = header(req, "x-mux-trace") ?? header(req, "x-mux-trace-id");
+  ctx.traceId ??= header(req, "x-mux-trace");
+  ctx.stageHeader = header(req, "x-mux-stage");
+  ctx.stages = parseStages(ctx.stageHeader);
+  const requestedModel = typeof (body as { model?: unknown }).model === "string" ? (body as { model: string }).model : null;
+  const cls = classify({ header: header(req, "x-mux-priority"), tenant: who.tenant.id, endpoint, agent: ctx.agent, tags, model: requestedModel });
+  ctx.priority = cls.priority; ctx.priorityWhy = cls.why;
   ctx.bodyReq = logBody ? req.body : null;
   try { check(who.tenant, who.key); enter(who.tenant); ctx.rate = rateLeft(who.tenant); } catch (e) {
     const err = toMuxError(e);
@@ -69,6 +78,7 @@ function muxHeaders(ctx: Ctx): Record<string, string> {
   return {
     "x-mux-request-id": ctx.id, "x-mux-model": ctx.modelId ?? "", "x-mux-route": ctx.route ?? "",
     "x-mux-fallbacks": String(ctx.fallbacks ?? 0), "x-mux-cold-start": ctx.coldStart ? "1" : "0",
+    "x-mux-priority": ctx.priority ?? "normal", "x-mux-queue-ms": String(Math.round(ctx.queueMs ?? 0)),
     ...(ctx.rate ? { "x-ratelimit-limit-requests": String(ctx.rate.limit), "x-ratelimit-remaining-requests": String(ctx.rate.remaining) } : {}),
   };
 }

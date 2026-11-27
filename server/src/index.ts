@@ -27,6 +27,7 @@ import { startProviderSync } from "./providers.js";
 import { freeIdle, startRuntime, status, stopAll } from "./runtime/manager.js";
 import { liveAverages, startLive } from "./runtime/live.js";
 import { systemStats } from "./runtime/system.js";
+import { startSpeed } from "./speed.js";
 
 /** First boot: the routes every SaaS can name, and Laya for System One. Models are added by download or import. */
 function seed() {
@@ -35,6 +36,7 @@ function seed() {
       ["auto", "mux picks per request: tools, code, reasoning, Danish, images, length — and what is already loaded", "chat", "auto"],
       ["fast", "Short answers, classification, extraction: the fastest model that can do it", "chat", "fastest"],
       ["agent", "Agents with tools: reliable tool calls first", "chat", "priority"],
+      ["interactive", "A person is waiting (Bloom's chat bar, Ask Bloom, Talk): the always-hot model with thinking off, first words fastest (deploy/speed.sh)", "chat", "priority"],
       ["smart", "The best answer this Mac can give, at the speed it takes", "chat", "quality"],
       ["code", "Coding agents and code questions", "chat", "priority"],
       ["multilingual", "Danish and other languages, customer-facing", "chat", "priority"],
@@ -92,7 +94,7 @@ function samplers() {
 }
 
 const app = Fastify({ logger: false, bodyLimit: 64 * 1024 * 1024, trustProxy: true, keepAliveTimeout: 75_000, requestTimeout: 0 });
-await app.register(cors, { origin: true, exposedHeaders: ["x-mux-request-id", "x-mux-model", "x-mux-route", "x-mux-fallbacks", "x-mux-cold-start"] });
+await app.register(cors, { origin: true, exposedHeaders: ["x-mux-request-id", "x-mux-model", "x-mux-route", "x-mux-fallbacks", "x-mux-cold-start", "x-mux-priority", "x-mux-queue-ms"] });
 
 app.get("/health", async () => ({ ok: true, models: listModels().length, loaded: (await status()).filter((i) => i.state === "ready").map((i) => i.id) }));
 if (config.role === "gateway") {
@@ -119,6 +121,7 @@ seed();
 if (config.role !== "gateway") { adoptDownloaded(); startRuntime(); startPresence(freeIdle); }
 startProviderSync();
 samplers();
+startSpeed();
 await app.listen({ port: config.port, host: config.host });
 startHealer(app);
 startKeeper(app);

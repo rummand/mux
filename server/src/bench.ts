@@ -98,7 +98,7 @@ async function execute(id: string, m: Model) {
   const t0 = performance.now();
   let up;
   try {
-    up = await acquire(m);
+    up = await acquire(m, { priority: "background" });
     const load = Math.round(performance.now() - t0);
     const results: Check[] = [];
     let tps = 0, ttft = 0, ptps: number | null = null;
@@ -140,6 +140,6 @@ async function execute(id: string, m: Model) {
     event("error", "bench", `${m.id}: ${(e as Error).message}`);
     benchBus.emit("update", { id, modelId: m.id, status: "error", error: (e as Error).message });
   } finally {
-    if (up) release(m.id);
+    if (up) release(m.id, "background");
   }
 }

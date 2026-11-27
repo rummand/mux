@@ -74,6 +74,15 @@ Optional headers: `x-mux-affinity` (keeps one run's calls on one model; without 
 also `x-ratelimit-limit-requests` and `x-ratelimit-remaining-requests` (what is left of this minute, refusals included),
 so a caller paces itself instead of meeting 429s (2026-11-14).
 
+Speed and priority (2026-11-27, `docs/speed.md` "Turn stats and priority"): `x-mux-priority: interactive | normal |
+background` (a person waiting, the rest, nobody waiting; without it `settings.priorityRules` decide: Bloom's chat and
+voice are interactive, its batch writers and indexers background, Record's live work interactive and its batch work
+background, CI background), `x-mux-trace` (this turn's id in the caller's own logs) and `x-mux-stage` (the caller's
+own stages before the call, Server-Timing style: `prompt_build;dur=120`). Answers also carry `x-mux-priority` and
+`x-mux-queue-ms`. The route `interactive` is the always-hot model with thinking off, for a person's turns.
+Every chat, messages and voice turn is a row of turn stats (no words kept, 30 days): the Speed page, and
+`GET /api/admin/speed`, `/speed/turns`, `/speed/turns/:id`, `/speed/trace/:trace`, `/speed/live` (admin token).
+
 ## Web search and the page reader
 
 Every product searches and reads the web through mux with its own key, metered and limited like any call (rate,

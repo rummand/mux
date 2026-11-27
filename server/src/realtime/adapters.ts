@@ -35,6 +35,9 @@ function innerCtx(c: Caller, endpoint: string): Ctx {
   ctx.affinity = c.sessionId; // one session's turns stay on one model (its prompt cache stays warm)
   ctx.endUser = c.user;
   ctx.bodyReq = null;
+  // A person is listening: every model call of a voice turn is interactive (priority.ts)
+  ctx.priority = "interactive"; ctx.priorityWhy = "voice";
+  ctx.trace = c.sessionId;
   return ctx;
 }
 const done = (ctx: Ctx, status: number, err?: MuxError) => { ctx.bodyReq = null; ctx.bodyRes = null; finish(ctx, status, err && { type: err.type, message: err.message }); };

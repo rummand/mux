@@ -50,7 +50,7 @@ export async function runSystemOne(ctx: Ctx, body: { model?: string; state: unkn
     ctx.fallbacks = i;
     const tq = performance.now();
     let up;
-    try { up = await acquire(m); } catch (e) { recordFailure(m.id); last = (e as Error).message; continue; } finally { ctx.queueMs = performance.now() - tq; }
+    try { up = await acquire(m, { priority: ctx.priority, signal }); } catch (e) { if (signal.aborted) throw e; recordFailure(m.id); last = (e as Error).message; continue; } finally { ctx.queueMs = performance.now() - tq; }
     ctx.modelId = m.id;
     ctx.coldStart = up.coldStartMs > 0;
     const url = /systemone\/?$/.test(up.baseUrl) ? up.baseUrl : `${up.baseUrl.replace(/\/v1$/, "")}/v1/systemone`;
@@ -73,7 +73,7 @@ export async function runSystemOne(ctx: Ctx, body: { model?: string; state: unkn
     } catch (e) {
       if (e instanceof MuxError || (e as Error).name === "AbortError") throw e;
       recordFailure(m.id); last = (e as Error).message;
-    } finally { release(m.id); }
+    } finally { release(m.id, ctx.priority); }
   }
   throw new MuxError(503, "all_models_failed", last || "no System One model could answer");
 }

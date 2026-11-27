@@ -110,7 +110,8 @@ export async function intentRoute(msgs: Msg[], affinity: string | null, vision: 
   const t0 = Date.now();
   let up: Awaited<ReturnType<typeof acquire>> | null = null;
   try {
-    up = await acquire(m);
+    // Part of a turn and on a 2 s budget: it never waits in the slot queue past that (it falls back to scoring)
+    up = await acquire(m, { priority: "interactive", signal: AbortSignal.timeout(BUDGET_MS) });
     const r = await fetch(`${up.baseUrl}/chat/completions`, {
       method: "POST", headers: { "content-type": "application/json", ...up.headers }, signal: AbortSignal.timeout(BUDGET_MS),
       body: JSON.stringify({ model: up.model, temperature: 0, max_tokens: 24, messages: [{ role: "user", content: prompt(routes, convo) }] }),
@@ -127,6 +128,6 @@ export async function intentRoute(msgs: Msg[], affinity: string | null, vision: 
     stats.failed++; stats.lastError = `${new Date().toISOString()} ${(e as Error).message}`.slice(0, 200);
     return null;
   } finally {
-    if (up) release(m.id);
+    if (up) release(m.id, "interactive");
   }
 }

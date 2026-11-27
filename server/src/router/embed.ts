@@ -1,3 +1,4 @@
+import { forwardHeaders } from "./chat.js";
 import { acquire, release } from "../runtime/manager.js";
 import { MuxError } from "./errors.js";
 import { recordFailure, recordSuccess } from "./health.js";
@@ -17,12 +18,12 @@ export async function runEmbeddings(ctx: Ctx, body: { model?: string; input?: un
     ctx.fallbacks = i;
     const tq = performance.now();
     let up;
-    try { up = await acquire(m); } catch (e) { recordFailure(m.id); last = (e as Error).message; continue; } finally { ctx.queueMs = performance.now() - tq; }
+    try { up = await acquire(m, { priority: ctx.priority, signal }); } catch (e) { if (signal.aborted) throw e; recordFailure(m.id); last = (e as Error).message; continue; } finally { ctx.queueMs = performance.now() - tq; }
     ctx.modelId = m.id;
     ctx.coldStart = up.coldStartMs > 0;
     const tu = performance.now();
     try {
-      const res = await fetch(`${up.baseUrl}/${kind === "rerank" ? "rerank" : "embeddings"}`, { method: "POST", headers: { "content-type": "application/json", ...up.headers }, body: JSON.stringify({ ...body, model: up.model }), signal });
+      const res = await fetch(`${up.baseUrl}/${kind === "rerank" ? "rerank" : "embeddings"}`, { method: "POST", headers: { "content-type": "application/json", ...up.headers, ...(m.backend === "node" ? forwardHeaders(ctx) : {}) }, body: JSON.stringify({ ...body, model: up.model }), signal });
       ctx.upstreamMs = performance.now() - tu;
       noteHeaders(m.id, res.status, res.headers);
       if (!res.ok) {
@@ -39,7 +40,7 @@ export async function runEmbeddings(ctx: Ctx, body: { model?: string; input?: un
     } catch (e) {
       if (e instanceof MuxError || (e as Error).name === "AbortError") throw e;
       recordFailure(m.id); last = (e as Error).message;
-    } finally { release(m.id); }
+    } finally { release(m.id, ctx.priority); }
   }
   throw new MuxError(503, "all_models_failed", last || `no ${kind} model could take the request`);
 }

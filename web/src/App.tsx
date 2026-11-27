@@ -16,6 +16,7 @@ import JournalPage from "./pages/Journal";
 import RoutesPage from "./pages/RoutesPage";
 import RequestsPage from "./pages/Requests";
 import TracesPage from "./pages/Traces";
+import SpeedPage from "./pages/Speed";
 import LensPage from "./pages/Lens";
 import BenchmarksPage from "./pages/Benchmarks";
 import SystemPage from "./pages/System";
@@ -39,6 +40,7 @@ const NAV: { to: string; label: string; icon: ReactNode; group?: string }[] = [
   { to: "/tenants", label: "Tenants", icon: icon("M4 20v-1a5 5 0 0 1 5-5h0a5 5 0 0 1 5 5v1M9 10a3 3 0 1 0 0-6 3 3 0 0 0 0 6M17 11a2.5 2.5 0 1 0 0-5M20 20v-1a4 4 0 0 0-3-3.9") },
   { to: "/requests", label: "Requests", icon: icon("M4 6h16M4 12h16M4 18h10") },
   { to: "/traces", label: "Traces", icon: icon("M4 5h6v4H4zM14 15h6v4h-6zM7 9v4a2 2 0 0 0 2 2h5") },
+  { to: "/speed", label: "Speed", icon: icon("M12 13l4-4M3.5 17a9 9 0 1 1 17 0M12 13h.01") },
   { to: "/health", label: "Health", icon: icon("M3 12h4l3-8 4 16 3-8h4") },
   { to: "/lens", label: "Lens", icon: icon("M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM21 21l-5-5") },
   { to: "/providers", label: "Providers", group: "Compute", icon: icon("M4 6h16v5H4zM4 13h16v5H4zM8 8.5h.01M8 15.5h.01") },
@@ -157,6 +159,7 @@ function Shell() {
             <Route path="/tenants/:id" element={<TenantDetailPage />} />
             <Route path="/requests" element={<RequestsPage />} />
             <Route path="/traces" element={<TracesPage />} />
+            <Route path="/speed" element={<Scoped page={SpeedPage} />} />
             <Route path="/lens" element={<LensPage />} />
             <Route path="/health" element={<Scoped page={HealthPage} />} />
             <Route path="/models" element={<Scoped page={ModelsPage} />} />

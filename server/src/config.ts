@@ -110,6 +110,41 @@ export const defaultSettings = {
   realtimeHearUrl: "ws://127.0.0.1:8326/hear",
   /** The voice a session speaks with when session.start names none: Kokoro's af_heart (bloom's English voice). */
   realtimeVoice: "af_heart",
+  /**
+   * Priority for a person waiting (owner, 27 November 2026: "yes, give Bloom's live answers priority"; server/src/priority.ts,
+   * runtime/slots.ts). Off: every local model admits first come, first served (still measured), for before/after numbers.
+   * Off by default: a node turns it on (deploy/speed.sh) once its gateway sends x-mux-priority, or the gateway's calls
+   * would all arrive here as `normal` and share what is left beside the reserved slot.
+   */
+  priorityEnabled: false,
+  /** Slots of a local model with 2+ slots that only `interactive` requests may take (a person never waits behind a batch). */
+  priorityReserveSlots: 1,
+  /** A `background` request yields to interactive turns on its model for at most this long, then runs as `normal`. */
+  priorityBackgroundMaxWaitMs: 60_000,
+  /** A request waiting this long for a slot is refused (503 queue_timeout) and the route's next model is tried. */
+  priorityQueueTimeoutMs: 600_000,
+  /**
+   * How a request without `x-mux-priority` is classed: the first rule whose every given field matches (each a regular
+   * expression, whole value; `tag` matches any one of the request's tags), else `normal`. Checked against Bloom's and
+   * Record's own code (2026-11-27): Bloom calls as tenant bloom-for-business with `x-mux-agent` naming the part of Bloom
+   * (its batch writers and indexers by name); Record calls with `x-mux-agent: record` and `x-mux-tags: record,<purpose>`.
+   */
+  priorityRules: [
+    { endpoint: "realtime\\..*", priority: "interactive" },
+    { model: "interactive|(mac-studio/)?interactive", priority: "interactive" },
+    { tag: "ci|build|batch|index|background", priority: "background" },
+    { agent: "bloom-(note-writer|library-index|library-sorter|site-reader|document-reader|document-pictures|story-near|story-judge|composer-judge|composer-check)(-\\d+)?", priority: "background" },
+    { agent: "(bloom-desk-)?research|bloom-research-matrix", priority: "normal" },
+    { agent: "record", tag: "live-.*|ask|dictate|delegate", priority: "interactive" },
+    { agent: "record", priority: "background" },
+    { tenant: "bloom-for-business|bloom-design-composer-test", endpoint: "openai\\.chat|anthropic\\.messages", priority: "interactive" },
+  ] as { tenant?: string; endpoint?: string; agent?: string; tag?: string; model?: string; priority: "interactive" | "normal" | "background" }[],
+  /** The build keeper pauses CI steps on this Mac while a voice session is open, as it does for Record's live work. */
+  pauseCiForVoice: true,
+  /** Interactive requests to a local reasoning model ask it not to think (chat_template_kwargs.enable_thinking false), unless the caller says otherwise. */
+  interactiveNoThinking: true,
+  /** Turn stats (server/src/speed.ts) are kept this many days. */
+  speedRetentionDays: 30,
 };
 export type Settings = typeof defaultSettings;
 

@@ -38,6 +38,7 @@ import { registerServices } from "../services.js";
 import { registerBuild, registerBuildGateway } from "../build.js";
 import { registerBuildKeeper } from "../buildKeeper.js";
 import { registerAgents } from "../agents.js";
+import { registerSpeed } from "../speed.js";
 import { choices as intentChoices, intentOf, intentStats } from "../router/intent.js";
 import { computerStatus, screenshot, sweepScreenshots } from "../computer.js";
 
@@ -104,7 +105,7 @@ export function registerAdmin(app: FastifyInstance) {
       if (changed.length) journal({ kind: "model", ref: id, title: `Model ${id}: ${changed.join(", ")}`, before: Object.fromEntries(changed.map((k) => [k, (prev as unknown as Record<string, unknown>)[k]])), after: Object.fromEntries(changed.map((k) => [k, (b as Record<string, unknown>)[k]])) });
       // Flags that change how the server starts take effect on its next load.
       const restart = ["path", "mmproj", "ctx", "parallel", "extra_args", "reasoning", "backend", "server_bin"].some((k) => k in b && JSON.stringify((b as Record<string, unknown>)[k]) !== JSON.stringify((prev as unknown as Record<string, unknown>)[k]));
-      if (restart) await unload(id);
+      if (restart) await unload(id, `settings changed: ${changed.join(", ")}`);
       return publicModel(next);
     });
     api.delete("/models/:id", async (req) => {
@@ -130,7 +131,7 @@ export function registerAdmin(app: FastifyInstance) {
       const id = (req.params as { id: string }).id;
       try { await warm(id); return { ok: true }; } catch (e) { return reply.code(503).send({ error: (e as Error).message }); }
     });
-    api.post("/models/:id/unload", async (req) => ({ ok: await unload((req.params as { id: string }).id) }));
+    api.post("/models/:id/unload", async (req) => ({ ok: await unload((req.params as { id: string }).id, "unloaded from the admin API") }));
     api.get("/models/:id/log", async (req) => {
       const p = join(config.logsDir, "models", `${(req.params as { id: string }).id}.log`);
       if (!existsSync(p)) return { log: "" };
@@ -329,6 +330,7 @@ export function registerAdmin(app: FastifyInstance) {
     registerBrain(api);
     registerKeeper(api);
     registerServices(api);
+    registerSpeed(api);
     // A gateway runs no runners: its Build server tab is the node's.
     if (config.role === "gateway") registerBuildGateway(api);
     else { registerBuild(api); registerBuildKeeper(api); }

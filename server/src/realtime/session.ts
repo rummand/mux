@@ -37,6 +37,8 @@ export interface SessionDeps {
   leadMs?: number;
   toolTimeoutMs?: number;
   maxToolRounds?: number;
+  /** The first clause of an answer is spoken once it has this many characters (0: whole sentences only; default 24). */
+  firstClauseChars?: number;
   defaultLlm?: string;
   defaultVoice?: string;
 }
@@ -433,7 +435,8 @@ export class Session {
       } else {
         const rounds = this.deps.maxToolRounds ?? 8;
         for (let round = 0; ; round++) {
-          const split = new SentenceSplitter();
+          // The first round may speak its first clause at once (sentences.ts); later rounds go by sentences
+          const split = new SentenceSplitter(80, round === 0 ? (this.deps.firstClauseChars ?? 24) : 0);
           const messages: Message[] = [...(this.instructions ? [{ role: "system", content: this.instructions }] : []), ...this.history];
           const out = await this.deps.thinker.stream({ model: this.llm, messages, tools: this.tools, tool_choice: this.toolChoice }, signal, (delta) => {
             if (signal.aborted || !delta) return;

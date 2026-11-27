@@ -5,6 +5,9 @@ import { getModel } from "../models.js";
 import type { ApiKey, Tenant } from "../tenants.js";
 import { addTokens } from "./limits.js";
 import { countRequest } from "../quota.js";
+import type { Priority } from "../priority.js";
+import type { AcquireStats } from "../runtime/manager.js";
+import { recordTurn, type Competing } from "../speed.js";
 
 /** One call's record, filled in as it goes and written once at the end. */
 export interface Ctx {
@@ -21,6 +24,12 @@ export interface Ctx {
   bodyReq?: unknown; bodyRes?: unknown;
   /** The experiment (and arm) the router put this request in, if any. */
   experiment?: { id: string; arm: "A" | "B" } | null;
+  /** Turn stats (speed.ts): the request's class and why, the caller's trace and its own stages, and the breakdown. */
+  priority?: Priority; priorityWhy?: string;
+  trace?: string | null; stages?: Record<string, number> | null; stageHeader?: string | null;
+  acq?: AcquireStats; prefillMs?: number | null; competing?: Competing | null;
+  /** ms to the first reasoning token, when the model thought before it answered (ttftMs is the first answer token). */
+  firstReasoningMs?: number | null;
 }
 
 export const live = new EventEmitter();
@@ -65,4 +74,5 @@ export function finish(ctx: Ctx, status: number, error?: { type: string; message
   addTokens(ctx.tenant.id, row.prompt_tokens + row.completion_tokens);
   const { body_req: _q, body_res: _r, ...summary } = row;
   live.emit("request", { ...summary, tenant_name: ctx.tenant.name, tenant_color: ctx.tenant.color });
+  recordTurn(ctx, row);
 }

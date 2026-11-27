@@ -8,8 +8,13 @@ const ABBREV = /\b(?:e\.g|i\.e|etc|vs|mr|mrs|ms|dr|prof|no|fig|approx|inc|ltd|st
 
 export class SentenceSplitter {
   private buf = "";
-  /** At or past this many characters, a clause end (: ; —) counts as a sentence end. */
-  constructor(private longClause = 80) {}
+  private first = true;
+  /**
+   * At or past `longClause` characters, a clause end (: ; —) counts as a sentence end. The answer's first piece may end
+   * earlier, at a clause (, : ; —) once it has `firstClause` characters (0: off), so the voice starts on the first clause
+   * rather than waiting for the whole first sentence (owner, 27 November 2026: Bloom's first words sooner).
+   */
+  constructor(private longClause = 80, private firstClause = 0) {}
 
   /** Add streamed text; returns the sentences it completed. */
   push(text: string): string[] {
@@ -20,7 +25,7 @@ export class SentenceSplitter {
       if (cut < 0) break;
       const s = clean(this.buf.slice(0, cut));
       this.buf = this.buf.slice(cut).replace(/^\s+/, "");
-      if (s) out.push(s);
+      if (s) { out.push(s); this.first = false; }
     }
     return out;
   }
@@ -44,6 +49,7 @@ export class SentenceSplitter {
         return i + 1;
       }
       if (":;—".includes(c) && /\s/.test(next) && i >= this.longClause) return i + 1;
+      if (this.first && this.firstClause > 0 && ",:;—".includes(c) && /\s/.test(next) && i + 1 >= this.firstClause && !/\d/.test(b[i - 1] ?? "")) return i + 1;
     }
     return -1;
   }

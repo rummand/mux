@@ -105,7 +105,7 @@ const wanted = (id: string) => { const m = getModel(id); return !!m && m.enabled
 
 async function restart(id: string, i: Incident, why: string) {
   try {
-    await unload(id);
+    await unload(id, `healer: ${why}`);
     clearFailure(id);
     await warm(id);
     act(i, "healer", `restarted ${id} (${why})`, true);
@@ -126,7 +126,9 @@ function onCrash({ id, code, tail }: { id: string; code: unknown; tail: string }
   const i = raise("crash", id, list.length >= 3 ? "high" : "medium", `${id} crashed (${code})${list.length > 1 ? ` — ${list.length}× in 15 min` : ""}`, tail);
   if (list.length >= 4) return escalate(i, "crash loop: 4 crashes in 15 minutes; automatic restarts stopped");
   if (!wanted(id)) return act(i, "healer", `not restarting ${id}: not pinned and not used in 15 min (it loads on the next request)`, true);
-  const wait = backoff(list.length - 1);
+  // A pinned model is wanted hot (owner, 27 November 2026: "the model should always be hot"): its first crash is
+  // restarted at once; a second within 15 minutes waits as any other.
+  const wait = getModel(id)?.pinned && list.length === 1 ? 500 : backoff(list.length - 1);
   setTimeout(() => void restart(id, i, `after a crash, waited ${Math.round(wait / 1000)} s`).then((ok) => ok && resolve("crash", id, "running again")), wait).unref();
 }
 
@@ -250,7 +252,7 @@ async function memory() {
   if (critical >= 3) {
     const idle = probeTargets().filter((t) => t.state === "ready" && t.inflight === 0 && !getModel(t.id)?.pinned);
     const i = raise("memory", "system", "high", `memory pressure critical (${sys.memFreeGb.toFixed(1)} GB free, ${sys.swapGb.toFixed(1)} GB swap)`);
-    if (idle[0]) { await unload(idle[0].id); act(i, "healer", `unloaded idle ${idle[0].id}`, true); fixed++; }
+    if (idle[0]) { await unload(idle[0].id, "healer: memory"); act(i, "healer", `unloaded idle ${idle[0].id}`, true); fixed++; }
     else escalate(i, "nothing idle left to unload");
     critical = 0;
   } else if (sys.pressure < 2 && sys.memFreeGb > s.memoryHeadroomGb) resolve("memory", "system", "pressure is back to normal");

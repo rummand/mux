@@ -9,6 +9,8 @@ import { getModel, listModels, type Model } from "../models.js";
 import { getProvider } from "../providers.js";
 import { rssGb, systemStats } from "./system.js";
 import { admit, presence, Resting, setLoadReader } from "../presence.js";
+import type { Priority } from "../priority.js";
+import { QueueTimeout, SlotGate } from "./slots.js";
 
 const GB = 1024 ** 3;
 const RUN_DIR = join(config.home, "run");
@@ -187,7 +189,7 @@ async function roomForService(m: Model): Promise<void> {
         + `(with ${headroom} GB kept for everything else); every other model is in use or pinned, so try again later`, 503, "memory_busy");
     }
     event("info", "runtime", `unloading ${victim.id} to make room for ${m.id} (~${need.toFixed(0)} GB, ${sys.memFreeGb.toFixed(1)} GB free)`);
-    await unload(victim.id);
+    await unload(victim.id, `room for ${m.id}`);
   }
 }
 
@@ -212,7 +214,7 @@ async function makeRoom(needGb: number, except: string): Promise<{ ok: boolean; 
     if (!victim) return { ok: false, why };
     event("info", "runtime", `unloading ${victim.id} to make room: ${why}`);
     const before = sys.memFreeGb, freed = victim.estimateGb;
-    await unload(victim.id);
+    await unload(victim.id, `room: ${why}`);
     // macOS reports a big model's memory as free some seconds after its process has gone: wait for most of it to show
     // before judging again, or the check sees the old figure and refuses (2026-11-20: Qwen3-Coder-Next's 50 GB showed
     // as 26.9 GB free right after the unload, and the swap to qwen3.6 failed).
@@ -251,6 +253,7 @@ async function load(m: Model): Promise<Instance> {
     if (instances.get(m.id) !== inst) return;
     instances.delete(m.id);
     if (inst.state === "ready") {
+      noteUnload(m.id, `crashed (${code ?? signal})`, inst.readyAt);
       lastFailure.set(m.id, { at: Date.now(), error: `exited (${code ?? signal})` });
       event("error", "runtime", `${m.id} exited unexpectedly (${code ?? signal})`, { tail: logTail(m.id) });
       runtimeBus.emit("crash", { id: m.id, code: code ?? signal, tail: logTail(m.id, 30) });
@@ -261,6 +264,7 @@ async function load(m: Model): Promise<Instance> {
       inst.state = "ready"; inst.readyAt = Date.now();
       lastFailure.delete(m.id);
       event("info", "runtime", `${m.id} ready in ${((inst.readyAt - inst.startedAt) / 1000).toFixed(1)} s`, { ms: inst.readyAt - inst.startedAt });
+      if (m.pinned && m.kind === "chat" && m.backend === "llamacpp") void warmUp(m, inst.port);
     },
     (e: Error) => {
       inst.state = "failed"; inst.error = e.message;
@@ -289,8 +293,13 @@ export function upstreamFor(m: Model): Upstream {
   return { baseUrl: base.replace(/\/$/, ""), model: m.upstream_model || m.id, headers, coldStartMs: 0 };
 }
 
+/** What one acquire went through, for turn stats: presence, a cold load, the wait for a slot and why. */
+export interface AcquireStats { admitMs: number; loadMs: number; slotWaitMs: number; reasons: string[]; concurrent: number; ahead: number }
+export const newAcquireStats = (): AcquireStats => ({ admitMs: 0, loadMs: 0, slotWaitMs: 0, reasons: [], concurrent: 0, ahead: 0 });
+export interface AcquireOptions { priority?: Priority; signal?: AbortSignal; stats?: AcquireStats; noSlot?: boolean }
+
 /** Load a model if it is not, and say where to reach it. Pair every call with `release`. */
-export async function acquire(m: Model): Promise<Upstream> {
+export async function acquire(m: Model, opts: AcquireOptions = {}): Promise<Upstream> {
   if (!m.enabled) throw new ModelUnavailable(`${m.id} is disabled`, 403, "model_disabled");
   if (m.backend === "external" || m.backend === "jev" || m.backend === "node") {
     const p = m.provider_id ? getProvider(m.provider_id) : undefined;
@@ -308,9 +317,11 @@ export async function acquire(m: Model): Promise<Upstream> {
     return upstreamFor(m);
   }
   const t0 = Date.now();
+  const st = opts.stats;
   // This machine's presence first: a person at it, or its owner, may keep it from new work (presence.ts).
   try { await admit(m.id, () => !!instances.get(m.id) && instances.get(m.id)!.state !== "failed", () => instances.get(m.id)?.inflight ?? 0); }
   catch (e) { if (e instanceof Resting) throw new ModelUnavailable(e.message, 503, "node_resting"); throw e; }
+  if (st) { st.admitMs += Date.now() - t0; if (Date.now() - t0 > 50) st.reasons.push("presence: polite, one at a time"); }
   let inst = instances.get(m.id);
   if (!inst) {
     const failed = lastFailure.get(m.id);
@@ -324,21 +335,43 @@ export async function acquire(m: Model): Promise<Upstream> {
   inst.inflight++;
   inst.lastUsed = Date.now();
   try { await inst.ready; } catch (e) { inst.inflight--; throw e; }
-  inst.requests++;
   const cold = inst.readyAt && inst.readyAt > t0 ? Date.now() - t0 : 0;
+  if (st && cold) { st.loadMs += cold; st.reasons.push("cold: the model was loading"); }
+  // A slot, by priority (slots.ts): the wait for it is the queue a person would otherwise sit in inside llama-server.
+  if (!opts.noSlot) {
+    const prio = opts.priority ?? "normal";
+    try {
+      const g = await gate.take(m.id, slotsOf(m), settings().priorityReserveSlots, prio, opts.signal);
+      granted.set(m.id, [...(granted.get(m.id) ?? []), prio]);
+      if (st) { st.slotWaitMs += g.waitMs; st.reasons.push(...g.reasons); st.concurrent = g.concurrent; st.ahead = g.position; }
+    } catch (e) {
+      inst.inflight = Math.max(0, inst.inflight - 1);
+      if (e instanceof QueueTimeout) throw new ModelUnavailable(e.message, 503, "queue_timeout");
+      throw e;
+    }
+  }
+  inst.requests++;
   return { baseUrl: `http://127.0.0.1:${inst.port}${m.backend === "laya" ? "" : "/v1"}`, model: m.backend === "mlx" ? (m.path ?? m.id) : m.id, headers: {}, coldStartMs: cold };
 }
 
-export function release(id: string) {
+/** A request done: its slot back to the gate (its own class, else the newest), unless it never took one (`slot` false: warm). */
+export function release(id: string, priority?: Priority | null, slot = true) {
+  const list = slot ? granted.get(id) : undefined;
+  if (list?.length) {
+    const i = priority ? list.lastIndexOf(priority) : -1;
+    const p = list.splice(i >= 0 ? i : list.length - 1, 1)[0];
+    gate.give(id, p);
+  }
   const n = serviceInflight.get(id);
   if (n !== undefined) { if (n <= 1) serviceInflight.delete(id); else serviceInflight.set(id, n - 1); }
   const inst = instances.get(id);
   if (inst) { inst.inflight = Math.max(0, inst.inflight - 1); inst.lastUsed = Date.now(); }
 }
 
-export async function unload(id: string) {
+export async function unload(id: string, why = "asked") {
   const inst = instances.get(id);
   if (!inst) return false;
+  noteUnload(id, why, inst.readyAt);
   inst.state = "unloading";
   instances.delete(id);
   inst.proc.kill("SIGTERM");
@@ -359,15 +392,63 @@ setLoadReader(() => Object.fromEntries([...instances.keys()].map((id) => [id, lo
 
 /** Unload every model nobody is using that is not pinned: for the person at a busy machine, or one turned off. */
 export async function freeIdle() {
-  for (const i of [...instances.values()].filter((x) => x.state === "ready" && x.inflight === 0 && !getModel(x.id)?.pinned)) await unload(i.id);
+  for (const i of [...instances.values()].filter((x) => x.state === "ready" && x.inflight === 0 && !getModel(x.id)?.pinned)) await unload(i.id, "freed for the person at the machine");
 }
 
 export async function warm(id: string) {
   const m = getModel(id);
   if (!m) throw new ModelUnavailable(`no model ${id}`, 404, "not_found");
   if (!isLocal(m)) return;
-  await acquire(m);
-  release(id);
+  await acquire(m, { noSlot: true });
+  release(id, null, false);
+}
+
+/** A pinned chat model's first real turn should not be its first: one tiny request once it is ready fills its caches. */
+async function warmUp(m: Model, port: number) {
+  try {
+    const r = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+      method: "POST", headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(60_000),
+      body: JSON.stringify({ model: m.id, max_tokens: 1, temperature: 0, messages: [{ role: "user", content: "Hi" }], chat_template_kwargs: { enable_thinking: false } }),
+    });
+    event(r.ok ? "info" : "warn", "runtime", `${m.id} warmed up (${r.status})`);
+  } catch (e) { event("warn", "runtime", `${m.id} warm-up failed: ${(e as Error).message}`); }
+}
+
+/* -- Slots by priority, and whether a model stayed hot ---------------------------------------------------------- */
+
+export const gate = new SlotGate({
+  enabled: () => settings().priorityEnabled,
+  backgroundMaxWaitMs: () => settings().priorityBackgroundMaxWaitMs,
+  timeoutMs: () => settings().priorityQueueTimeoutMs,
+});
+/** The classes holding each model's slots now, in grant order (release gives back the caller's own, else the newest). */
+const granted = new Map<string, Priority[]>();
+
+/** The model's llama-server slots: its `parallel`, unless its own flags set --parallel / -np. */
+export function slotsOf(m: Model): number {
+  const at = m.extra_args.findIndex((a) => a === "--parallel" || a === "-np");
+  const n = at >= 0 ? Number(m.extra_args[at + 1]) : m.parallel;
+  return Math.max(1, Number.isFinite(n) && n > 0 ? Math.floor(n) : 1);
+}
+
+const unloads = new Map<string, { at: number; why: string; upMs: number | null }[]>();
+function noteUnload(id: string, why: string, readyAt: number | null) {
+  const list = unloads.get(id) ?? [];
+  list.push({ at: Date.now(), why, upMs: readyAt ? Date.now() - readyAt : null });
+  unloads.set(id, list.slice(-20));
+}
+
+/** Per model mux runs, has run, or holds pinned: loaded since when, and the last times it went and why (Speed: "hot"). */
+export function hotness() {
+  const ids = new Set([...instances.keys(), ...unloads.keys(), ...listModels().filter((m) => m.pinned && m.enabled && isLocal(m)).map((m) => m.id)]);
+  return [...ids].map((id) => {
+    const i = instances.get(id), m = getModel(id), u = unloads.get(id) ?? [];
+    return {
+      id, pinned: !!m?.pinned, state: i?.state ?? "unloaded", hot: i?.state === "ready", loadedSince: i?.readyAt ?? null,
+      lastUnload: u.length ? u[u.length - 1] : null, unloads24h: u.filter((x) => x.at > Date.now() - 86400_000).length, slots: m ? slotsOf(m) : null,
+      inflight: i?.inflight ?? 0,
+    };
+  });
 }
 
 export const isLoaded = (id: string) => instances.get(id)?.state === "ready";
@@ -416,11 +497,11 @@ async function sweep() {
   const s = settings();
   for (const inst of [...instances.values()]) {
     const m = getModel(inst.id);
-    if (!m) { await unload(inst.id); continue; }
+    if (!m) { await unload(inst.id, "model removed"); continue; }
     const keep = (m.keep_alive_min ?? s.keepAliveMin) * 60_000;
     if (!m.pinned && inst.state === "ready" && inst.inflight === 0 && keep > 0 && Date.now() - inst.lastUsed > keep) {
       event("info", "runtime", `${inst.id} idle for ${Math.round((Date.now() - inst.lastUsed) / 60_000)} min; unloading`);
-      await unload(inst.id);
+      await unload(inst.id, "idle past its keep-alive");
     }
   }
   if (s.pressureGuard) {
@@ -432,7 +513,7 @@ async function sweep() {
       const victim = [...instances.values()].filter((i) => i.inflight === 0 && i.state === "ready" && !getModel(i.id)?.pinned && Date.now() - i.lastUsed >= idleFor).sort((a, b) => a.lastUsed - b.lastUsed)[0];
       if (victim) {
         event("warn", "runtime", `macOS reports memory pressure (${sys.pressure === 4 ? "critical" : "warn"}); unloading idle ${victim.id}`);
-        await unload(victim.id);
+        await unload(victim.id, "memory pressure");
       }
     }
   }
@@ -459,5 +540,5 @@ export function startRuntime() {
 }
 
 export async function stopAll() {
-  await Promise.all([...instances.keys()].map((id) => unload(id)));
+  await Promise.all([...instances.keys()].map((id) => unload(id, "mux stopping")));
 }
