@@ -1,0 +1,37 @@
+{
+  "name": "bloom",
+  "image": "face.png",
+  "provenance": {
+    "what": "a synthetic person generated for Bloom; not any real individual",
+    "made": "2026-11-27T07:57:52.970Z",
+    "route": "image",
+    "model": "flux2-klein-4b-q4",
+    "seed": 20261127,
+    "size": "1024x1024",
+    "prompt": "Studio portrait photograph of a fictional woman in her early thirties, an original synthetic person who is not any real or famous individual. Head and shoulders, facing the camera straight on, eyes open looking into the lens, a calm friendly expression, mouth gently closed, lips together. Warm brown eyes, natural light-brown hair tied back, a few freckles, no glasses, no jewellery, a plain dark-teal top. Even soft front light, no harsh shadows, plain light warm-grey background, sharp focus, natural skin texture.",
+    "sha256": "f5807867b339062e588fd8ac0e23e2460d1dd15409f031a958d7235bf9e05645",
+    "blink_prompt": "The same woman, the same photograph, with both eyes gently closed as in a blink. Nothing else changes: same face, head position, hair, light and background.",
+    "licence": "output of mux image route (see docs/face.md)"
+  },
+  "box": [
+    240,
+    176,
+    793,
+    743
+  ],
+  "eyes": [
+    [
+      369,
+      313,
+      458,
+      402
+    ],
+    [
+      557,
+      307,
+      655,
+      405
+    ]
+  ],
+  "blink": "blink.png"
+}
