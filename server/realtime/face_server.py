@@ -13,7 +13,7 @@ model (AVTR-1 and Avatar Forcing are, and need CUDA; docs/face.md).
 One WebSocket per voice session at ws://127.0.0.1:8324/face, one session at a time (a second is refused: MuseTalk at
 ~34 faces/s on the Mac covers one real-time stream). mux sends
 
-    {"type":"start","size":384,"fps":25,"format":"jpeg"|"webp"}
+    {"type":"start","size":256,"fps":25,"format":"jpeg"|"webp"}
     {"type":"state","mode":"idle"|"listening"}           the person's speech (vad.start → listening, turn.end → idle)
     {"type":"speech","response_id":…,"sample_rate":24000,"audio":base64 pcm16}   Bloom's speech, as the caller got it
     {"type":"speech.end","response_id":…}                that answer's speech is complete
@@ -371,8 +371,19 @@ class Answer:
 class FaceSession:
     """One session's face: idle and listening frames in real time, speaking frames as Bloom's audio arrives."""
 
-    def __init__(self, renderer, identity: Identity, pool: concurrent.futures.ThreadPoolExecutor, send, size=384, fps=25, fmt="jpeg", first_batch=2, batch=8):
+    def __init__(self, renderer, identity: Identity, pool: concurrent.futures.ThreadPoolExecutor, send, size=256, fps=25, fmt="jpeg", first_batch=2, batch=8,
+                 lip_stride=3, fallback_lag_ms=400):
         self.r, self.pool, self.send = renderer, pool, send
+        # Keeping up (measured 2026-11-27: MuseTalk 1.5 q8 renders 13–15 mouths a second on the M3 Ultra, 25 were asked,
+        # and the lips drifted 2–15 s behind the voice). A mouth is rendered every `lip_stride`-th frame (3: 8.3 a second
+        # at 25 fps; 2 still drifted to 1 s on the bench, 2026-11-27) and held for the frames between, which keep their own head motion and clock; and when the frames
+        # still fall more than `fallback_lag_ms` behind their audio, the session's mouth falls back to the still renderer
+        # (the reference's mouth; the head, blinks and nods go on) rather than drifting out of sync. 0 turns it off.
+        self.stride = max(1, int(lip_stride))
+        self.fallback_lag_ms = float(fallback_lag_ms)
+        self.still = StillRenderer(identity) if renderer is not None and getattr(renderer, "name", "") != "still" else None
+        self.fell_back = False
+        self.behind = 0  # batches in a row behind by more than fallback_lag_ms
         self.fps = int(fps)
         self.comp = Composer(identity, int(size), fmt)
         self.fmt = fmt
@@ -515,20 +526,39 @@ class FaceSession:
             a.base = (time.monotonic() - self.t0) - ids[0] * per_ms / 1000
             a.resume = False
         loop = asyncio.get_running_loop()
-        crops = await loop.run_in_executor(self.pool, self.r.lips, audio, ids, self.fps)
+        r = self.still if self.fell_back and self.still is not None else self.r
+        # Every stride-th frame's mouth (and the batch's first, so a batch never starts on a held mouth from elsewhere)
+        keyed = [i for i in ids if i % self.stride == 0 or i == ids[0]]
+        made = dict(zip(keyed, await loop.run_in_executor(self.pool, r.lips, audio, keyed, self.fps)))
         if a.cancelled or self.closed:
             return  # barge-in while the batch rendered: thrown away
-        for i, crop in zip(ids, crops):
+        crops, held = [], None
+        for i in ids:
+            held = made.get(i, held)
+            crops.append(held)
+        # The poses in order (the motion keeps its own state), then the batch's frames composed side by side: OpenCV's warp
+        # and the JPEG encode release the GIL, and one at a time they took ~39 ms of a 40 ms frame (2026-11-27)
+        poses = []
+        for i in ids:
             pts = i * per_ms
             s0, s1 = int(pts * SR / 1000), int((pts + per_ms) * SR / 1000)
             loud = float(np.sqrt(np.mean(a.audio[s0:s1] ** 2))) if s1 > s0 and s0 < len(a.audio) else 0.0
-            t = a.base + pts / 1000
-            picture = await loop.run_in_executor(None, self.comp.compose, crop, 1.0, self.motion.pose(t, "speaking", loud))
+            poses.append(self.motion.pose(a.base + pts / 1000, "speaking", loud))
+        pictures = await asyncio.gather(*(loop.run_in_executor(None, self.comp.compose, crop, 1.0, pose) for crop, pose in zip(crops, poses)))
+        for i, crop, picture in zip(ids, crops, pictures):
             if a.cancelled or self.closed:
                 return
-            await self._frame(a.rid, pts, "speaking", picture)
+            await self._frame(a.rid, i * per_ms, "speaking", picture)
             self.last_lips = crop
         a.made += n
+        # How far this batch's last frame is behind its audio, on the answer's clock (audio arrives up to the lead early)
+        lag_ms = (time.monotonic() - a.started_wall) * 1000 - (ids[-1] + 1) * per_ms
+        # Three batches in a row over the lead: a mouth that cannot keep up, not one slow batch (the bench's single
+        # 813 ms spike in 18.6 s at stride 3 would otherwise have cost the session its lips)
+        self.behind = self.behind + 1 if lag_ms > self.fallback_lag_ms else 0
+        if not self.fell_back and self.still is not None and self.fallback_lag_ms > 0 and a.made > self.first_batch and self.behind >= 3:
+            self.fell_back = True
+            print(f"[face] {lag_ms:.0f} ms behind the voice at frame {ids[-1]}: the mouth falls back to the still renderer (head motion only) for this session", file=sys.stderr, flush=True)
 
     async def _finish(self, a: Answer):
         self.answers.pop(a.rid, None)
@@ -577,10 +607,10 @@ class Server:
                     await ws.send(json.dumps({"type": "error", "message": "send start first"}))
                     return
                 await self.ensure()
-                size = int(min(512, max(256, int(first.get("size") or 384))))
+                size = int(min(512, max(256, int(first.get("size") or 256))))
                 fps = int(min(30, max(10, int(first.get("fps") or 25))))
                 fmt = "webp" if first.get("format") == "webp" else "jpeg"
-                sess = FaceSession(self.renderer, self.identity, self.pool, ws.send, size, fps, fmt)
+                sess = FaceSession(self.renderer, self.identity, self.pool, ws.send, size, fps, fmt, lip_stride=getattr(self.args, "lip_stride", 3), fallback_lag_ms=getattr(self.args, "fallback_lag_ms", 400))
                 await ws.send(json.dumps({"type": "ready", "fps": fps, "width": size, "height": size, "format": fmt, "identity": self.identity.name, "model": self.renderer.name}))
                 runner = asyncio.create_task(sess.run())
                 async for msg in ws:
@@ -685,7 +715,7 @@ async def bench(args):
     for run in range(args.bench_runs):
         got.clear()
         done.clear()
-        sess = FaceSession(srv.renderer, srv.identity, srv.pool, send, args.size, args.fps, args.format)
+        sess = FaceSession(srv.renderer, srv.identity, srv.pool, send, args.size, args.fps, args.format, lip_stride=args.lip_stride, fallback_lag_ms=args.fallback_lag_ms)
         task = asyncio.create_task(sess.run())
         await asyncio.sleep(0.3)  # a few idle frames first, as in a session
         rid = f"bench_{run}"
@@ -766,7 +796,9 @@ def main():
     p.add_argument("--bench", help="a WAV of speech: measure first-frame latency and fps, then exit")
     p.add_argument("--bench-runs", type=int, default=2, help="the first run is warm-up for the GPU's kernels")
     p.add_argument("--lead-ms", type=int, default=400, help="how far ahead of real time the audio is sent (mux's leadMs)")
-    p.add_argument("--size", type=int, default=384)
+    p.add_argument("--size", type=int, default=256)
+    p.add_argument("--lip-stride", type=int, default=3, help="render the mouth every n-th frame and hold it between (3: 8.3 mouths a second at 25 fps)")
+    p.add_argument("--fallback-lag-ms", type=float, default=400, help="frames further behind their audio than this: the session's mouth falls back to the still renderer (0: never)")
     p.add_argument("--fps", type=int, default=25)
     p.add_argument("--format", choices=("jpeg", "webp"), default="jpeg")
     p.add_argument("--setup-identity", action="store_true", help="find the face and eye boxes in <identity>/face.png and write identity.json (keeps its provenance)")

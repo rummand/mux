@@ -9,6 +9,7 @@ import argparse
 import asyncio
 import base64
 import json
+import time
 import os
 import struct
 import sys
@@ -63,13 +64,26 @@ class Sink:
             self.texts.append(json.loads(m))
 
 
-def session(sink, fps=25, delay_s=0.0, blink=True):
+def session(sink, fps=25, delay_s=0.0, blink=True, lip_stride=1, renderer=None, fallback_lag_ms=400):
     import concurrent.futures
 
     idn = synthetic_identity(blink)
-    r = fs.StillRenderer(idn, delay_s)
-    s = fs.FaceSession(r, idn, concurrent.futures.ThreadPoolExecutor(max_workers=1), sink, 256, fps, "jpeg")
+    r = renderer(idn) if renderer else fs.StillRenderer(idn, delay_s)
+    s = fs.FaceSession(r, idn, concurrent.futures.ThreadPoolExecutor(max_workers=1), sink, 256, fps, "jpeg", lip_stride=lip_stride, fallback_lag_ms=fallback_lag_ms)
     return s, r
+
+
+class SlowMouth(fs.StillRenderer):
+    """A stand-in for MuseTalk that cannot keep up: 120 ms for each mouth (25 fps needs 40)."""
+
+    name = "slow"
+
+    def __init__(self, identity):
+        super().__init__(identity)
+
+    def lips(self, audio, ids, fps):
+        time.sleep(0.12 * len(ids))  # like MuseTalk: the time grows with the mouths asked for
+        return super().lips(audio, ids, fps)
 
 
 class FaceSessionTest(unittest.IsolatedAsyncioTestCase):
@@ -204,6 +218,41 @@ class PictureTest(unittest.TestCase):
         listening = [lm.pose(t / 25, "listening") for t in range(250)]
         self.assertGreater(max(p.dy for p in listening), max(p.dy for p in idle) + 1.5, "a nod")
         self.assertAlmostEqual(len(fs.resample_to_16k(np.zeros(24000, "<i2"), 24000)), 16000)
+
+
+class KeepingUpTest(unittest.IsolatedAsyncioTestCase):
+    async def test_a_mouth_every_second_frame_held_between(self):
+        sink = Sink()
+        s, r = session(sink, lip_stride=2)
+        task = asyncio.create_task(s.run())
+        s.speech("r1", (np.sin(np.arange(24_000) / 7) * 8000).astype("<i2").tobytes(), 24000)  # 1 s of sound
+        s.speech_end("r1")
+        for _ in range(200):
+            await asyncio.sleep(0.02)
+            if any(t.get("type") == "speech.done" for t in sink.texts):
+                break
+        s.closed = True
+        task.cancel()
+        asked = sorted({i for c in r.calls for i in c})
+        speaking = [h for h in sink.frames if h["mode"] == "speaking"]
+        self.assertEqual(len(speaking), 25, "every frame of the second is still sent, each with its own clock")
+        self.assertTrue(all(i % 2 == 0 or i in [c[0] for c in r.calls] for i in asked), f"mouths only on every second frame (or a batch's first): {asked}")
+        self.assertLessEqual(len(asked), 16, f"about half the mouths rendered: {len(asked)}")
+
+    async def test_falls_back_to_head_motion_when_the_mouth_cannot_keep_up(self):
+        sink = Sink()
+        s, r = session(sink, lip_stride=1, renderer=SlowMouth, fallback_lag_ms=400)
+        task = asyncio.create_task(s.run())
+        s.speech("r1", (np.sin(np.arange(24_000 * 3) / 7) * 8000).astype("<i2").tobytes(), 24000)  # 3 s, all at once
+        s.speech_end("r1")
+        for _ in range(500):
+            await asyncio.sleep(0.02)
+            if any(t.get("type") == "speech.done" for t in sink.texts):
+                break
+        s.closed = True
+        task.cancel()
+        self.assertTrue(s.fell_back, "120 ms a mouth at 25 fps falls behind by more than 400 ms")
+        self.assertTrue(any(t.get("type") == "speech.done" for t in sink.texts), "and the answer still ends")
 
 
 class ServerTest(unittest.IsolatedAsyncioTestCase):

@@ -1,6 +1,6 @@
 #!/bin/sh
 # MiniCPM-o 4.5 full duplex on this Mac, a trial behind /v1/realtime (model "minicpm-o-4.5"; docs/minicpm-o.md).
-#   ./deploy/minicpm-o.sh            llama.cpp-omni (MIT, branch feat/web-demo, Metal) built in ~/.mux/minicpm-o,
+#   ./deploy/minicpm-o.sh            llama.cpp-omni (MIT, app/comni-1.0, Metal) built in ~/.mux/minicpm-o,
 #                                    the GGUFs (openbmb/MiniCPM-o-4_5-gguf: LLM Q4_K_M + audio, vision, TTS, Token2Wav,
 #                                    ~8.3 GB), the official demo's worker (OpenBMB/MiniCPM-o-Demo, branch Comni) with
 #                                    its venv and a config for the C++ backend, the wrapper
@@ -37,13 +37,20 @@ FREE_GB=$(df -g "$MUX_HOME" | awk 'NR == 2 { print $4 }')
 [ -d "$DIR/gguf" ] || [ "$FREE_GB" -ge 25 ] || { echo "only $FREE_GB GB free on disk; 25 GB wanted (GGUFs ~8.3 GB, the build, PyTorch for the worker's venv)"; exit 1; }
 command -v cmake >/dev/null || HOMEBREW_NO_AUTO_UPDATE=1 brew install cmake
 
-echo "→ llama.cpp-omni (feat/web-demo) in $DIR/llama.cpp-omni"
+# The demo's README names llama.cpp-omni's feat/web-demo, which is gone upstream (2026-11-27); app/comni-1.0 is its
+# partner of the same weeks (the demo's Comni is from 11 May, comni-1.0 from 18 May). master at 49dc920 does not fit:
+# its streaming /v1/stream/decode never ends after a spoken turn, so the worker waited on the first chunk for good.
+# Pinned; a fetch that fails stops the script (with `a && b` it did not, and master was built instead).
+OMNI_BRANCH=app/comni-1.0 OMNI_COMMIT=89caceb DEMO_COMMIT=9af4308
+echo "→ llama.cpp-omni ($OMNI_BRANCH @ $OMNI_COMMIT) in $DIR/llama.cpp-omni"
 [ -d "$DIR/llama.cpp-omni/.git" ] || git clone -q https://github.com/tc-mb/llama.cpp-omni.git "$DIR/llama.cpp-omni"
-git -C "$DIR/llama.cpp-omni" fetch -q origin feat/web-demo && git -C "$DIR/llama.cpp-omni" checkout -q FETCH_HEAD
+git -C "$DIR/llama.cpp-omni" fetch -q origin "$OMNI_BRANCH" || { echo "✗ llama.cpp-omni has no $OMNI_BRANCH"; exit 1; }
+git -C "$DIR/llama.cpp-omni" checkout -q "$OMNI_COMMIT" || { echo "✗ llama.cpp-omni has no commit $OMNI_COMMIT"; exit 1; }
 echo "  at $(git -C "$DIR/llama.cpp-omni" rev-parse --short HEAD)"
-(cd "$DIR/llama.cpp-omni" && cmake -B build -DCMAKE_BUILD_TYPE=Release >/dev/null && cmake --build build --target llama-omni-server --target llama-omni-cli -j >/dev/null)
-# The Comni worker runs build/bin/llama-server (its README); the target is llama-omni-server: give it both names
-[ -x "$DIR/llama.cpp-omni/build/bin/llama-server" ] || ln -sf llama-omni-server "$DIR/llama.cpp-omni/build/bin/llama-server"
+# app/comni-1.0's server is tools/server's llama-server (the Comni worker runs build/bin/llama-server); an older build
+# here linked that name to master's llama-omni-server: drop the link so the build does not write through it.
+[ -L "$DIR/llama.cpp-omni/build/bin/llama-server" ] && rm "$DIR/llama.cpp-omni/build/bin/llama-server"
+(cd "$DIR/llama.cpp-omni" && cmake -B build -DCMAKE_BUILD_TYPE=Release >/dev/null && cmake --build build --target llama-server --target llama-omni-cli -j >/dev/null) || { echo "✗ llama.cpp-omni did not build"; exit 1; }
 
 echo "→ GGUFs from $GGUF_REPO (~8.3 GB)"
 PY="$(command -v python3.11 || command -v python3.12 || true)"
@@ -55,7 +62,8 @@ ls "$DIR/gguf/MiniCPM-o-4_5-Q4_K_M.gguf" "$DIR/gguf/token2wav-gguf/prompt_cache.
 
 echo "→ the demo's worker (OpenBMB/MiniCPM-o-Demo, Comni) in $DIR/demo"
 [ -d "$DIR/demo/.git" ] || git clone -q https://github.com/OpenBMB/MiniCPM-o-Demo.git "$DIR/demo"
-git -C "$DIR/demo" fetch -q origin Comni && git -C "$DIR/demo" checkout -q FETCH_HEAD
+git -C "$DIR/demo" fetch -q origin Comni || { echo "✗ MiniCPM-o-Demo has no Comni branch"; exit 1; }
+git -C "$DIR/demo" checkout -q "$DEMO_COMMIT" || { echo "✗ MiniCPM-o-Demo has no commit $DEMO_COMMIT"; exit 1; }
 echo "  at $(git -C "$DIR/demo" rev-parse --short HEAD)"
 [ -x "$DIR/demo/.venv/base/bin/python" ] || (cd "$DIR/demo" && PYTHON="$PY" bash install.sh)
 "$DIR/demo/.venv/base/bin/pip" install -q "websockets>=14,<16"

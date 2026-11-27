@@ -48,5 +48,16 @@ and Chinese; voice cloning from a reference clip. Assistant-tuned (unlike Haru).
   `tts_output_chunk_N.wav` ("no valid WAV files to merge"), and Token2Wav runs from `./tools/omni/pyt2w/token2wav`,
   which may not be in this checkout. The branch `feat/web-demo` and the Comni worker do not fit together as installed;
   next: read llama.cpp-omni's TTS output naming at the pinned commit.
+- **Later the same day: the names were not the cause.** The demo reads `wav_N.wav` itself (the "merge" warning is a C++
+  path it does not use). The worker hung on its first chunk: llama.cpp-omni's `/v1/stream/decode` never ended its
+  stream after the spoken greeting, so every later chunk queued and was dropped (`processed=0`, 357 dropped). Cause:
+  the script fetched `feat/web-demo` (gone upstream) with `a && b`, which `set -e` does not stop on, and built
+  `master` (49dc920) instead. Now pinned: llama.cpp-omni `app/comni-1.0` @ 89caceb (the demo's partner of the same
+  weeks; its server target is `llama-server`), the demo `Comni` @ 9af4308, and a failed fetch stops the script.
+- **Measured with that (5 turns): real time, but no answer.** Each 1 s chunk takes ~120 ms (prefill ~30 ms), nothing is
+  dropped; but the model chose LISTEN 488 times and SPEAK 6, and its SPEAK steps made no audio (`llm=0`, `tts_tokens=0`;
+  one said " Two."). The audio is right (16 kHz float32 in 1 s chunks, as the demo's API says) and an empty `config`
+  takes the defaults (`generate_audio: true`). Not yet known: whether it needs the demo's `prefix_system_prompt` and a
+  reference voice (`ref_audio_path`) to answer, or the CookBook's "M1/M2/M3 lack the bandwidth" shows here as silence.
 - Nothing ran before 27 November: no Metal, no worker. The wrapper compiles; its protocol is the one the Haru wrapper proved
   through mux against a fake model.

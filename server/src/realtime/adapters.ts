@@ -286,7 +286,7 @@ export function connectFace(model: string, base: string, opts: FaceOptions, onEv
     const timer = setTimeout(() => { ws.terminate(); reject(new Error(`the face did not get ready within ${Math.round(readyMs / 1000)} s`)); }, readyMs);
     signal.addEventListener("abort", () => { clearTimeout(timer); if (!ready) reject(new Error("the session ended")); send({ type: "end" }); close(); }, { once: true });
     ws.once("error", (e) => { clearTimeout(timer); if (!ready) reject(e); });
-    ws.once("open", () => send({ type: "start", size: opts.size ?? 384, fps: opts.fps ?? 25, format: opts.format ?? "jpeg" }));
+    ws.once("open", () => send({ type: "start", size: opts.size ?? 256, fps: opts.fps ?? 25, format: opts.format ?? "jpeg" }));
     ws.on("close", (_code, why) => { if (ready && !closed) onEvent({ type: "closed", reason: String(why) || "the face went away" }); if (!ready) { clearTimeout(timer); reject(new Error(String(why) || "the face closed")); } closed = true; free(); });
     ws.on("message", (data, binary) => {
       if (binary) {

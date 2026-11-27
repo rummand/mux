@@ -236,8 +236,20 @@ services, the CI runners.
 - **Through `/v1/realtime` (5 turns, face on):** voice unchanged (end of speech → first audio p50 878 ms, p90 1052 ms);
   first frame p50 201 ms, p90 209 ms after the first audio; 25 frames per audio second delivered, but lag p50 2.4 s,
   worst 4.2 s.
-- So: the first frame is fast enough; the frame rate is not. Next: fewer frames (12.5 fps with each shown twice),
-  a smaller face (256 px), or `--still` (the reference's mouth, motion only) until MuseTalk is faster here.
+- So: the first frame is fast enough; the frame rate is not.
+
+**After the fix (2026-11-27, later):** `face_server.py` renders a mouth every third frame (`--lip-stride 3`: 8.3 mouths a
+second at 25 fps; the frames between hold it with their own head motion and clock), composes a batch's frames side by
+side (the warp and JPEG encode release the GIL; one at a time they took ~39 of 40 ms), defaults to 256 px, and falls
+back to the still renderer (head motion only) for the session when three batches in a row are more than the 400 ms
+lead behind (`--fallback-lag-ms`).
+
+- **The bench (3 runs, 13.6 s):** lag p50 258–271 ms, p90 360–375 ms, max 533–546 ms; "keeps up" every run; 512 px
+  the same (p90 375 ms). Stride 2 still reached p90 612–711 ms, max ~1 s.
+- **Through `/v1/realtime` (5 turns, face on):** first frame 142–148 ms after the first audio; lag p50 325–361 ms, max
+  541–560 ms; no fallback; voice end of speech → first audio unchanged.
+- Peaks of ~550 ms are ~150 ms past the lead: a client that holds its audio back 150 ms more stays in exact lip sync.
+  A first try with stride 2 fell back at frame 118 of the first answer and showed motion only after that.
 
 ## What is unproven, and what comes next
 
