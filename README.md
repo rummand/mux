@@ -34,6 +34,7 @@ SaaS (OpenAI / Anthropic SDK, curl)          Nexus (Railway → Funnel → Caddy
    ├─ /v1/messages           Anthropic Messages, streaming, tool_use
    ├─ /v1/embeddings  /v1/rerank
    ├─ /v1/audio/transcriptions  /v1/audio/speech   OpenAI audio: Whisper in; out Piper (Danish) and Kokoro (English, af_heart), by voice
+   ├─ /v1/realtime           WebSocket: one person's voice conversation (VAD → STT → the chat route → speech, barge-in; duplex trials)
    ├─ /v1/images/generations  /v1/images/edits     OpenAI images: FLUX.2 klein 4B (Q4) through mflux, local
    ├─ /v1/videos/generations  /v1/videos/{id}      async video jobs: Wan2.1-VACE-1.3B (depth control), local
    ├─ /v1/depth  /v1/reconstruct  /v1/reconstruct/{id}   measure: Depth Pro; MapAnything (cameras, metric points), local
@@ -356,6 +357,16 @@ to Kokoro, `da_DK-talesyntese-medium` to Piper; a model that lists other voices 
 for an English voice (that failed and put Danish speech in cooldown). No voice, or one no model lists, keeps the
 route's order. `./deploy/speech-en.sh` sets the voices, keeps both on `speak`, allows `speak` for bloom's test tenant
 and speaks a sentence; `--railway` deploys the gateway, which gets the voices on its next sync.
+
+Talking to Bloom (2026-11-27, the owner: "cascade first with duplex as a trial; WebSocket first; everything hosted on
+mux; English only now; one voice session per person"): **WebSocket `/v1/realtime`** holds one person's voice
+conversation — hearing (an energy VAD, or the hear sidecar: Silero VAD + Smart Turn v3 + parakeet-mlx), words (the
+`transcribe` route), Bloom's LLM through the chat route with its tools passed through (`tool.call` → `tool.result`),
+speech through the `speak` route one sentence at a time, barge-in that stops the LLM and the speech at once, and
+per-turn `metrics`. Allowed for `settings.realtimeTenants` only; one session per person; on Railway the gateway relays
+the socket to the Mac and meters it. `./deploy/realtime.sh` installs the sidecar and measures p50/p90
+(`deploy/realtime-measure.mjs`); `./deploy/haru.sh` and `./deploy/minicpm-o.sh` add the duplex trials `haru-4b` and
+`minicpm-o-4.5` (kind `realtime`). Protocol, pipeline, latency budget and licences: `docs/realtime.md`.
 
 Images: `./deploy/images.sh` first unloads every loaded model that is neither pinned nor first on `agent` (`--keep`
 skips that; nothing is deleted), then installs mflux in `~/.mux/images-venv`, fetches FLUX.2 [klein] 4B (Apache-2.0,

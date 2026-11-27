@@ -212,6 +212,7 @@ export class Session {
           this.preroll = [];
         }
         this.speechEndAt = null;
+        this.turnAt = null;
         if (this.current && this.bargeIn && this.engine === "cascade") this.interrupt(this.current, "interrupted");
         return;
       case "speech_end":
@@ -225,7 +226,7 @@ export class Session {
         this.turnAt = this.now();
         if (this.speechEndAt === null) this.speechEndAt = this.wallAt(h.atMs);
         this.send({ type: "turn.end", at_ms: Math.round(h.atMs), confidence: h.confidence });
-        if (this.engine !== "cascade") { this.endCapture(); return; }
+        if (this.engine !== "cascade") { this.endCapture(); this.turns++; return; }
         if (this.hearing?.transcribes) return; // its final follows
         const audio = Buffer.concat(this.endCapture());
         const marks = { speechEnd: this.speechEndAt, turnAt: this.turnAt };
@@ -465,7 +466,8 @@ export class Session {
       if (r) return r;
       r = {
         id: `resp_${randomBytes(6).toString("hex")}`, turn: this.turns, ac: new AbortController(), status: "in_progress", text: "", usage: { prompt_tokens: 0, completion_tokens: 0 },
-        coldStart: false, spoken: [], speechEnd: this.speechEndAt, turnAt: this.turnAt, sttAt: null, firstToken: null, firstAudio: null, done: Promise.resolve(), toolsWaiting: new Map(),
+        coldStart: false, spoken: [], speechEnd: this.speechEndAt, turnAt: this.speechEndAt !== null && this.turnAt !== null && this.turnAt >= this.speechEndAt ? this.turnAt : null,
+        sttAt: null, firstToken: null, firstAudio: null, done: Promise.resolve(), toolsWaiting: new Map(),
       };
       this.current = r;
       this.speechEndAt = null;
