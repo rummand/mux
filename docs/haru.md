@@ -18,8 +18,8 @@ authors say the small backbone limits response quality. **No tool use.** So it i
 
 - `./deploy/haru.sh`: `~/.mux/haru-venv` with `haru-speech-mlx==0.1.0` (or the repo's `haru_mlx` from git), the
   weights (~10 GB), the voice clip `~/.mux/haru/voice-en.wav` (Kokoro af_heart through the speak route, ~25 s), the
-  server `server/realtime/haru_server.py` as `com.mux.haru` on 127.0.0.1:8321 (8-bit by default; `--bf16`), the
-  model `haru-4b` (kind `realtime`, `base_url` http://127.0.0.1:8321/v1) on the route `realtime`.
+  server `server/realtime/haru_server.py` as `com.mux.haru` on 127.0.0.1:8327 (8-bit by default; `--bf16`), the
+  model `haru-4b` (kind `realtime`, `base_url` http://127.0.0.1:8327/v1) on the route `realtime`.
 - haru_mlx has no network server (only its app's Unix socket and offline inference), so `haru_server.py` is the
   wrapper: mux's engine protocol on `/duplex` (docs/realtime.md), one conversation at a time, every MLX call on
   haru_mlx's `MLXWorker` thread (MLX keeps GPU streams per thread). Caller audio is resampled 16 → 24 kHz and fed as

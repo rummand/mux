@@ -3,7 +3,7 @@
 #   ./deploy/haru.sh               haru_mlx (Apache-2.0, higurashi) in ~/.mux/haru-venv, the weights (~10 GB,
 #                                  higurashi-ai/Haru-4B), a voice clip in Bloom's voice (Kokoro af_heart through mux's
 #                                  speak route, ~25 s), the headless server server/realtime/haru_server.py as launchd
-#                                  agent com.mux.haru on 127.0.0.1:8321 (8-bit; it loads on the first session and exits
+#                                  agent com.mux.haru on 127.0.0.1:8327 (8-bit; it loads on the first session and exits
 #                                  after 15 idle minutes), the model haru-4b (kind realtime) on the route realtime, and a
 #                                  health check
 #   ./deploy/haru.sh --forced-text the deciding test after that: can Haru say a sentence an LLM wrote?
@@ -18,7 +18,7 @@ MUX_HOME="$HOME/.mux"
 AGENTS="$HOME/Library/LaunchAgents"
 VENV="$MUX_HOME/haru-venv"
 DIR="$MUX_HOME/haru"
-PORT=8321
+PORT=8327
 MODEL_ID=haru-4b
 REPO=higurashi-ai/Haru-4B
 PIP_PINS="haru-speech-mlx==0.1.0 websockets>=14,<16 scipy numpy"

@@ -181,7 +181,7 @@ export function isDuplexName(name: string): boolean {
 
 /**
  * A duplex engine (Haru-4B, MiniCPM-o 4.5): a model of kind realtime whose base_url is its wrapper on this Mac
- * (server/realtime/haru_server.py on :8321, minicpm_o_server.py on :8322). `acquire` admits it like any local service:
+ * (server/realtime/haru_server.py on :8327, minicpm_o_server.py on :8322). `acquire` admits it like any local service:
  * presence, and the memory floor (the wrapper's GET /models says what it needs free to load). The wrapper speaks
  * mux's engine protocol on /duplex (docs/realtime.md, "Duplex engines").
  */

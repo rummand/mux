@@ -21,7 +21,7 @@ Browser ──(Bloom's server on Railway: the conversation, tools, rights, the m
         cascade:  hearing ──► words ──► Bloom's LLM ──► speech
                   energy VAD           (transcribe)     (chat route)   (speak: Kokoro af_heart, by sentence)
                   or the hear sidecar: Silero VAD + Smart Turn v3 + parakeet-mlx streaming (com.mux.hear :8326)
-        duplex (trials): haru-4b (com.mux.haru :8321), minicpm-o-4.5 (com.mux.minicpm-o :8322)
+        duplex (trials): haru-4b (com.mux.haru :8327), minicpm-o-4.5 (com.mux.minicpm-o :8322)
 ```
 
 Bloom stays in the middle: it opens the socket from its server with its mux key, sends the conversation (`messages`),

@@ -1,9 +1,9 @@
 """A headless server for Haru-4B on MLX: the duplex engine `haru-4b` behind mux's /v1/realtime.
 
-    ~/.mux/haru-venv/bin/python server/realtime/haru_server.py --port 8321 [--quantize 8] [--voice ~/.mux/haru/voice-en.wav]
+    ~/.mux/haru-venv/bin/python server/realtime/haru_server.py --port 8327 [--quantize 8] [--voice ~/.mux/haru/voice-en.wav]
 
 haru_mlx ships a macOS app and a Unix-socket server for it, but no network server, so this is the wrapper: mux's
-engine protocol on ws://127.0.0.1:8321/duplex (docs/realtime.md, "Duplex engines"), one conversation at a time.
+engine protocol on ws://127.0.0.1:8327/duplex (docs/realtime.md, "Duplex engines"), one conversation at a time.
 
     mux → engine   {"type":"start","instructions":"…","voice":null|"/path.wav","input_sample_rate":16000}
                    binary: pcm16 mono at 16 kHz, any length (resampled to Haru's 24 kHz, 3200 samples a frame)
@@ -168,7 +168,7 @@ async def main_async(args):
 def main():
     p = argparse.ArgumentParser(description="Haru-4B (MLX) as mux's duplex engine haru-4b")
     p.add_argument("--host", default="127.0.0.1")
-    p.add_argument("--port", type=int, default=8321)
+    p.add_argument("--port", type=int, default=8327)
     p.add_argument("--hf-repo", default="higurashi-ai/Haru-4B")
     p.add_argument("--quantize", choices=("8", "none"), default="8")
     p.add_argument("--voice", default=os.path.expanduser("~/.mux/haru/voice-en.wav"), help="the voice clip (3 s–3 min, one speaker, rights cleared)")
