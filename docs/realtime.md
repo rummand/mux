@@ -20,7 +20,7 @@ Browser ──(Bloom's server on Railway: the conversation, tools, rights, the m
    Tailscale Funnel (TCP; HTTP upgrade passes through) ──► Mac Studio mux :7070 /v1/realtime
         cascade:  hearing ──► words ──► Bloom's LLM ──► speech
                   energy VAD           (transcribe)     (chat route)   (speak: Kokoro af_heart, by sentence)
-                  or the hear sidecar: Silero VAD + Smart Turn v3 + parakeet-mlx streaming (com.mux.hear :8320)
+                  or the hear sidecar: Silero VAD + Smart Turn v3 + parakeet-mlx streaming (com.mux.hear :8326)
         duplex (trials): haru-4b (com.mux.haru :8321), minicpm-o-4.5 (com.mux.minicpm-o :8322)
 ```
 
@@ -143,7 +143,7 @@ const ctx = new AudioContext({ sampleRate: 16000 });   // capture at 16 kHz; con
 | Stage | What | Where | Notes |
 | --- | --- | --- | --- |
 | Hearing | **energy VAD** (`vad.ts`): adaptive noise floor; speech after 120 ms voiced; ends after 250 ms quiet; the turn ends after `turn_silence_ms` (700) | in mux | Always there; a person pausing to think for > 700 ms is cut off |
-| Hearing | **hear sidecar**: Silero VAD (32 ms windows) + **Smart Turn v3** on every pause (P(complete) > 0.5 ends the turn; else 1.5 s of silence) + **parakeet-mlx** streaming (partials every 320 ms, the final at the turn's end) | `server/realtime/hear_server.py`, com.mux.hear :8320 | `hearing: "auto"` uses it when it answers within 800 ms, else the energy VAD. It stays resident (PyTorch for Silero + parakeet, roughly 2.5–3 GB) **outside mux's memory budget**, like Nexus's audio service |
+| Hearing | **hear sidecar**: Silero VAD (32 ms windows) + **Smart Turn v3** on every pause (P(complete) > 0.5 ends the turn; else 1.5 s of silence) + **parakeet-mlx** streaming (partials every 320 ms, the final at the turn's end) | `server/realtime/hear_server.py`, com.mux.hear :8326 | `hearing: "auto"` uses it when it answers within 800 ms, else the energy VAD. It stays resident (PyTorch for Silero + parakeet, roughly 2.5–3 GB) **outside mux's memory budget**, like Nexus's audio service |
 | Words | the `transcribe` route (whisper large-v3-turbo, `language=en`), the turn's audio with 300 ms before speech began | mux route | Only with the energy VAD; the sidecar transcribes as it listens |
 | Think | Bloom's chat route through `runChat`, streamed, tools passed through | mux route | `x-mux-affinity` = the session, so its turns stay on one model and its prompt cache |
 | Speak | the `speak` route, one sentence at a time, `voice` (af_heart → Kokoro), WAV; each sentence synthesised as soon as it is complete and sent in order, 100 ms pieces, ≤ 400 ms ahead of real time | mux route | Markdown is not spoken; "e.g." and "9.30" do not end sentences |

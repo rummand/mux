@@ -107,7 +107,7 @@ export const defaultSettings = {
   /** A voice session ends after this many minutes (session.ended reason "time limit"). */
   realtimeMaxMinutes: 30,
   /** The hear sidecar (Silero VAD + Smart Turn v3 + parakeet-mlx, server/realtime/hear_server.py); "" = the energy VAD and whisper only. */
-  realtimeHearUrl: "ws://127.0.0.1:8320/hear",
+  realtimeHearUrl: "ws://127.0.0.1:8326/hear",
   /** The voice a session speaks with when session.start names none: Kokoro's af_heart (bloom's English voice). */
   realtimeVoice: "af_heart",
 };

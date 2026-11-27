@@ -1,7 +1,7 @@
 #!/bin/sh
 # Talking to Bloom on this Mac: the cascade behind WebSocket /v1/realtime (docs/realtime.md).
 #   ./deploy/realtime.sh             the hear sidecar (Silero VAD + Smart Turn v3 + parakeet-mlx streaming) as launchd
-#                                    agent com.mux.hear on 127.0.0.1:8320, mux's settings for it, the routes a session
+#                                    agent com.mux.hear on 127.0.0.1:8326, mux's settings for it, the routes a session
 #                                    uses allowed for bloom's test tenant, then 5 English turns measured on this Mac
 #                                    (deploy/realtime-measure.mjs, p50/p90) with a one-day key, revoked after
 #   ./deploy/realtime.sh --no-hear   no sidecar: sessions use the energy VAD and whisper (transcribe route) only
@@ -16,7 +16,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MUX_HOME="$HOME/.mux"
 AGENTS="$HOME/Library/LaunchAgents"
 VENV="$MUX_HOME/realtime-venv"
-PORT=8320
+PORT=8326
 TURNS=5
 # Pinned to what this was written against (docs/realtime.md); change together and measure again.
 PIP_PINS="torch silero-vad>=5.1 onnxruntime transformers>=4.46,<5 parakeet-mlx>=0.4 websockets>=14,<16 huggingface_hub numpy"

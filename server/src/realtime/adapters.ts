@@ -120,7 +120,7 @@ export function routeTranscriber(c: Caller): Transcriber {
 }
 
 /**
- * The hear sidecar (server/realtime/hear_server.py, launchd com.mux.hear, ws://127.0.0.1:8320/hear): Silero VAD,
+ * The hear sidecar (server/realtime/hear_server.py, launchd com.mux.hear, ws://127.0.0.1:8326/hear): Silero VAD,
  * Smart Turn v3 and parakeet-mlx's streaming transcription on the Mac, one connection per session. `auto` uses it when
  * it answers within 800 ms and falls back to the energy VAD (and whisper on the transcribe route) when it does not.
  */

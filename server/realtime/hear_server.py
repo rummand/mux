@@ -1,8 +1,8 @@
 """mux's hear sidecar: the listening half of a /v1/realtime cascade, on the Mac.
 
-    ~/.mux/realtime-venv/bin/python server/realtime/hear_server.py --port 8320
+    ~/.mux/realtime-venv/bin/python server/realtime/hear_server.py --port 8326
 
-One WebSocket per voice session at ws://127.0.0.1:8320/hear. mux sends {"type":"start", "sample_rate":16000,
+One WebSocket per voice session at ws://127.0.0.1:8326/hear. mux sends {"type":"start", "sample_rate":16000,
 "language":"en", "turn_silence_ms"?} and then binary frames of pcm16 mono at 16 kHz; this answers with
 {"type":"ready","name":...} and then, as it hears:
 
@@ -242,7 +242,7 @@ def find_smart_turn(path: str | None) -> str:
 def main():
     p = argparse.ArgumentParser(description="mux hear sidecar: Silero VAD + Smart Turn v3 + parakeet-mlx streaming")
     p.add_argument("--host", default="127.0.0.1")
-    p.add_argument("--port", type=int, default=8320)
+    p.add_argument("--port", type=int, default=8326)
     p.add_argument("--smart-turn", default=None, help="path to the Smart Turn ONNX file (default: downloaded)")
     p.add_argument("--parakeet", default="mlx-community/parakeet-tdt-0.6b-v3")
     p.add_argument("--turn-silence-ms", type=int, default=1500, help="silence that ends a turn when Smart Turn says 'not yet'")
