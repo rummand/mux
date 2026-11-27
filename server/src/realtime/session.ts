@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { INPUT_RATE, msOf, resample, rms } from "./audio.js";
 import { ProtocolError, type ClientEvent, type ServerEvent, type SessionStart } from "./protocol.js";
 import { SentenceSplitter, clean } from "./sentences.js";
-import type { ChatTool, DuplexEngine, DuplexEvent, DuplexFactory, Message, Speaker, Thinker, ToolCall, Transcriber, Usage } from "./stages.js";
+import type { ChatTool, DuplexEngine, DuplexEvent, DuplexFactory, Face, FaceEvent, FaceFactory, FaceFrame, FaceOptions, Message, Speaker, Thinker, ToolCall, Transcriber, Usage } from "./stages.js";
 import { EnergyVad, type HearEvent, type Hearing, type HearingFactory } from "./vad.js";
 
 /**
@@ -28,6 +28,8 @@ export interface SessionDeps {
   hearing?: (want: SessionStart["hearing"], opts: { turnMs?: number }) => HearingFactory;
   /** A duplex engine by name, when the model names one (null: the name is not a duplex engine). */
   duplex?: (model: string) => DuplexFactory | null;
+  /** The talking face, for a session that asks for it (session.start face): null or absent when this mux has none. */
+  face?: FaceFactory | null;
   /** Wall clock, ms; and a wait that the tests can make instant. */
   now?: () => number;
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
@@ -50,7 +52,19 @@ interface Response {
   toolsWaiting: Map<string, (output: unknown) => void>;
 }
 
-const DEFAULT_SLEEP = (ms: number, signal: AbortSignal) => new Promise<void>((res) => {
+/** A response's speech as the face follows it: what was sent when, and what came back. */
+interface FaceTrack {
+  /** ms of this response's audio sent to the caller so far (the speaking frames' clock). */
+  audioMs: number;
+  /** [audio clock at the end of a delta, wall ms it was sent]: how far behind its audio a frame comes. */
+  sent: [number, number][];
+  firstAudioAt: number | null; firstFrameAt: number | null; frames: number; lags: number[];
+  /** Frames that came before the audio they show (a face must never run ahead of the voice): held until it is sent. */
+  early: FaceFrame[];
+  dropped: boolean; reported: boolean;
+}
+
+const DEFAULT_SLEEP =(ms: number, signal: AbortSignal) => new Promise<void>((res) => {
   if (signal.aborted || ms <= 0) return res();
   const t = setTimeout(res, ms);
   signal.addEventListener("abort", () => { clearTimeout(t); res(); }, { once: true });
@@ -90,6 +104,11 @@ export class Session {
   private pendingTurn: Promise<void> | null = null;
   private playEnd = 0; // wall ms the last speech sent ends playing at the caller
   private duplexSilentMs = 0;
+  private face: Face | null = null;
+  private faceTracks = new Map<string, FaceTrack>();
+  private faceMissed = new Set<string>();
+  /** Face frames sent in this session (session.ended). */
+  faceFrames = 0;
   private readonly now: () => number;
   private readonly sleep: (ms: number, signal: AbortSignal) => Promise<void>;
   private readonly end = new AbortController();
@@ -168,12 +187,95 @@ export class Session {
       this.hearing = await factory(onHear);
       this.hearingName = this.hearing.name;
     }
+    // The face is opt-in, and never holds the session up: it starts beside it (its model may have to load) and says
+    // face.ready when its frames begin; if it cannot, the conversation goes on with voice alone
+    const wantFace = !!e.face;
+    const faceStarting = wantFace && this.engine === "cascade" && !!this.deps.face;
     this.send({
       type: "session.created", session_id: this.id, protocol: "mux.realtime.v1", engine: this.engine, llm: this.llm ?? null, voice: this.voice,
       hearing: this.hearingName, auto_response: this.autoResponse, barge_in: this.bargeIn,
       input_audio: { format: "pcm16", sample_rate: INPUT_RATE, channels: 1, frame_ms: 20, binary_frames: true },
       output_audio: { format: "pcm16", sample_rate: this.duplex?.rate ?? null, channels: 1 },
+      face: faceStarting ? "starting" : null,
     });
+    if (!wantFace) return;
+    if (this.engine !== "cascade") return this.error("face_unsupported", `${this.engine} is a duplex trial; the face follows the cascade's speech only`);
+    if (!this.deps.face) return this.error("face_unavailable", "this mux has no talking face (docs/face.md); the session goes on with voice alone");
+    const opts: FaceOptions = typeof e.face === "object" ? e.face : {};
+    this.track(this.deps.face(opts, (ev) => this.fromFace(ev), this.end.signal).then((f) => {
+      if (this.ended) { f.close(); return; }
+      this.face = f;
+      this.send({ type: "face.ready", ...f.info });
+    }, (err) => {
+      if (!this.ended) this.error("face_unavailable", `the face did not start: ${(err as Error).message}; the session goes on with voice alone`);
+    }));
+  }
+
+  /** The face's frames and reports. A speaking frame is sent only for a response whose speech is still wanted, and
+   *  never before the audio it shows has been sent. */
+  private fromFace(ev: FaceEvent) {
+    if (this.ended) return;
+    if (ev.type === "error") return this.error("face_error", ev.message);
+    if (ev.type === "closed") {
+      this.face = null;
+      return this.error("face_unavailable", `the face stopped: ${ev.reason}; the session goes on with voice alone`);
+    }
+    if (ev.type === "speech.done") {
+      const t = this.faceTracks.get(ev.done.responseId);
+      if (!t || t.dropped) return;
+      for (const f of t.early.splice(0)) this.sendFrame(f, t); // the end of the speech: nothing is ahead of it now
+      this.faceReport(ev.done.responseId, t, "completed", ev.done.frames);
+      return;
+    }
+    const f = ev.frame;
+    if (f.responseId === null) return this.sendFrame(f, null);
+    const t = this.faceTracks.get(f.responseId);
+    if (!t || t.dropped) return; // a barge-in or a cancel: its frames stop at once, even those already on the way
+    if (f.ptsMs >= t.audioMs) { t.early.push(f); return; }
+    this.sendFrame(f, t);
+  }
+
+  private sendFrame(f: FaceFrame, t: FaceTrack | null) {
+    const now = this.now();
+    if (t) {
+      if (t.firstFrameAt === null) t.firstFrameAt = now;
+      t.frames++;
+      const covering = t.sent.find(([end]) => end > f.ptsMs);
+      if (covering) t.lags.push(now - covering[1]);
+    }
+    this.faceFrames++;
+    this.send({
+      type: "face.frame", response_id: f.responseId, index: f.index, mode: f.mode, format: f.format,
+      // speaking: on the response's audio clock; idle and listening: ms since session.start
+      pts_ms: t ? Math.round(f.ptsMs) : Math.round(now - this.t0), image: f.image.toString("base64"),
+    });
+  }
+
+  /** face.metrics for a response: how soon the face moved after its voice began, the frame rate it kept, and how far
+   *  its frames came behind their audio (compare with lead_ms, what the caller's audio buffer holds). */
+  private faceReport(responseId: string, t: FaceTrack, status: string, faceSaid?: number) {
+    if (t.reported) return;
+    t.reported = true;
+    const lags = [...t.lags].sort((a, b) => a - b);
+    const pct = (p: number) => (lags.length ? Math.round(lags[Math.min(lags.length - 1, Math.floor(p * lags.length))]) : null);
+    this.send({
+      type: "face.metrics", response_id: responseId, status, frames: t.frames, face_frames: faceSaid ?? null, audio_ms: Math.round(t.audioMs),
+      first_frame_ms: t.firstFrameAt !== null && t.firstAudioAt !== null ? Math.round(t.firstFrameAt - t.firstAudioAt) : null,
+      fps: t.audioMs > 0 ? Math.round((t.frames / (t.audioMs / 1000)) * 10) / 10 : null,
+      lag_p50_ms: pct(0.5), lag_max_ms: lags.length ? Math.round(lags[lags.length - 1]) : null, lead_ms: this.deps.leadMs ?? 400,
+    });
+    this.faceTracks.delete(responseId);
+  }
+
+  /** Barge-in or cancel: the face drops the response's frames, and so does mux, for those already on the way. */
+  private faceStop(r: Response, status: string) {
+    const t = this.faceTracks.get(r.id);
+    if (!t) return;
+    t.dropped = true;
+    t.early = [];
+    this.face?.cancel(r.id);
+    t.reported = false;
+    this.faceReport(r.id, t, status);
   }
 
   /** The caller's microphone: pcm16 at 16 kHz, any length. */
@@ -214,6 +316,8 @@ export class Session {
         this.speechEndAt = null;
         this.turnAt = null;
         if (this.current && this.bargeIn && this.engine === "cascade") this.interrupt(this.current, "interrupted");
+        // The face turns to listening unless Bloom goes on speaking over the person (barge_in false)
+        if (!this.current) this.face?.state("listening");
         return;
       case "speech_end":
         this.speechEndAt = this.wallAt(h.atMs);
@@ -226,6 +330,7 @@ export class Session {
         this.turnAt = this.now();
         if (this.speechEndAt === null) this.speechEndAt = this.wallAt(h.atMs);
         this.send({ type: "turn.end", at_ms: Math.round(h.atMs), confidence: h.confidence });
+        if (!this.current) this.face?.state("idle"); // the person is done: the face rests (thinking) until Bloom speaks
         if (this.engine !== "cascade") { this.endCapture(); this.turns++; return; }
         if (this.hearing?.transcribes) return; // its final follows
         const audio = Buffer.concat(this.endCapture());
@@ -368,7 +473,11 @@ export class Session {
       this.usage.prompt_tokens += r.usage.prompt_tokens;
       this.usage.completion_tokens += r.usage.completion_tokens;
       // An interrupted response has already said it is done (interrupt); the others say so now
-      if (r.status !== "interrupted" && r.status !== "cancelled") this.done(r);
+      if (r.status !== "interrupted" && r.status !== "cancelled") {
+        this.done(r);
+        // The face finishes the frames of this speech (they lag the audio) and reports them in face.metrics
+        if (this.faceTracks.has(r.id)) this.face?.speechEnd(r.id);
+      }
       if (this.current === r) this.current = null;
       finish();
     }
@@ -409,6 +518,31 @@ export class Session {
       this.playEnd += ms;
       this.outputMs += ms;
       this.send({ type: "response.audio.delta", response_id: r.id, audio: chunk.toString("base64"), sample_rate: a.rate, ms: Math.round(ms) });
+      this.toFace(r, chunk, a.rate, ms);
+    }
+  }
+
+  /** The face hears exactly what the caller was sent, when it was sent (so it is paced by leadMs as the voice is). */
+  private toFace(r: Response, chunk: Buffer, rate: number, ms: number) {
+    // An answer whose voice began before the face was ready is not shown: its frames would start at audio time 0
+    // while the caller had already played part of it (Bloom's greeting while MuseTalk loads)
+    if (!this.face) { if (this.cfg.face) this.faceMissed.add(r.id); return; }
+    if (this.faceMissed.has(r.id)) return;
+    let t = this.faceTracks.get(r.id);
+    if (!t) {
+      t = { audioMs: 0, sent: [], firstAudioAt: null, firstFrameAt: null, frames: 0, lags: [], early: [], dropped: false, reported: false };
+      this.faceTracks.set(r.id, t);
+    }
+    const now = this.now();
+    if (t.firstAudioAt === null) t.firstAudioAt = now;
+    t.audioMs += ms;
+    t.sent.push([t.audioMs, now]);
+    this.face.speech(r.id, chunk, rate);
+    // Frames that waited for this audio go now, in order
+    if (t.early.length) {
+      const ready = t.early.filter((f) => f.ptsMs < t!.audioMs);
+      t.early = t.early.filter((f) => f.ptsMs >= t!.audioMs);
+      for (const f of ready) this.sendFrame(f, t);
     }
   }
 
@@ -426,6 +560,7 @@ export class Session {
     if (last?.role === "assistant" && !last.tool_calls) last.content = heard;
     else if (heard) this.history.push({ role: "assistant", content: heard });
     this.done(r, heard);
+    this.faceStop(r, status); // same tick: no frame of this response is sent after its response.done
     if (this.current === r) this.current = null;
   }
 
@@ -510,7 +645,13 @@ export class Session {
     this.end.abort();
     this.hearing?.close();
     this.duplex?.close();
-    this.send({ type: "session.ended", reason, seconds: Math.round((this.now() - this.t0) / 100) / 10, turns: this.turns, usage: this.usage, input_ms: Math.round(this.inputMs), output_ms: Math.round(this.outputMs) });
+    this.face?.close();
+    this.face = null;
+    this.faceTracks.clear();
+    this.send({
+      type: "session.ended", reason, seconds: Math.round((this.now() - this.t0) / 100) / 10, turns: this.turns, usage: this.usage, input_ms: Math.round(this.inputMs), output_ms: Math.round(this.outputMs),
+      ...(this.cfg?.face ? { face_frames: this.faceFrames } : {}),
+    });
     this.deps.close(reason);
   }
 }

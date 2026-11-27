@@ -34,7 +34,7 @@ SaaS (OpenAI / Anthropic SDK, curl)          Nexus (Railway → Funnel → Caddy
    ├─ /v1/messages           Anthropic Messages, streaming, tool_use
    ├─ /v1/embeddings  /v1/rerank
    ├─ /v1/audio/transcriptions  /v1/audio/speech   OpenAI audio: Whisper in; out Piper (Danish) and Kokoro (English, af_heart), by voice
-   ├─ /v1/realtime           WebSocket: one person's voice conversation (VAD → STT → the chat route → speech, barge-in; duplex trials)
+   ├─ /v1/realtime           WebSocket: one person's voice conversation (VAD → STT → the chat route → speech, barge-in; duplex trials; opt-in talking face)
    ├─ /v1/images/generations  /v1/images/edits     OpenAI images: FLUX.2 klein 4B (Q4) through mflux, local
    ├─ /v1/videos/generations  /v1/videos/{id}      async video jobs: Wan2.1-VACE-1.3B (depth control), local
    ├─ /v1/depth  /v1/reconstruct  /v1/reconstruct/{id}   measure: Depth Pro; MapAnything (cameras, metric points), local
@@ -367,6 +367,18 @@ per-turn `metrics`. Allowed for `settings.realtimeTenants` only; one session per
 the socket to the Mac and meters it. `./deploy/realtime.sh` installs the sidecar and measures p50/p90
 (`deploy/realtime-measure.mjs`); `./deploy/haru.sh` and `./deploy/minicpm-o.sh` add the duplex trials `haru-4b` and
 `minicpm-o-4.5` (kind `realtime`). Protocol, pipeline, latency budget and licences: `docs/realtime.md`.
+
+Bloom's face (2026-11-27, Talking to Bloom Phase 4a; the owner: "an agent that really looks and feels just as real as"
+Nuance Labs' Emma, "for now the animation, the face later"): a session that sends `session.start {face: true}` also
+gets **`face.frame`** events, JPEG or WebP pictures of one synthetic face (Bloom's own, made once with mux's `image`
+route), lip-synced to Bloom's speech by **MuseTalk 1.5 on MLX** and tagged with the answer's audio clock, so the
+client shows each frame when its audio plays; between answers the face idles (blinks, a small sway) and, while the
+person talks, listens (small nods, a glance aside). Barge-in drops the answer's frames at once; `face.metrics` gives
+the first frame's delay, the frame rate kept and how far the frames came behind their audio. Opt-in only; a session
+whose face cannot start goes on with voice alone (`error face_unavailable`). The face server is
+`server/realtime/face_server.py` (launchd `com.mux.face`, :8324, kind and route `face`, model `musetalk-1.5-mlx`);
+`./deploy/face.sh` installs it and makes the face, `--measure` prints its fps and first-frame latency on the Mac.
+Protocol, identity, licences and what is unproven: `docs/face.md`.
 
 Images: `./deploy/images.sh` first unloads every loaded model that is neither pinned nor first on `agent` (`--keep`
 skips that; nothing is deleted), then installs mflux in `~/.mux/images-venv`, fetches FLUX.2 [klein] 4B (Apache-2.0,

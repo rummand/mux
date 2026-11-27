@@ -54,6 +54,7 @@ function seed() {
       ["reconstruct", "Cameras and a metric point cloud from 2–12 photos, as an async job: POST /v1/reconstruct, then poll /v1/reconstruct/{id}", "reconstruct", "priority"],
       ["convert", "Documents to PDF: a Word, PowerPoint, Excel or OpenDocument file in, its pages as a PDF out (LibreOffice headless on the Mac, its network denied by the OS): POST /v1/convert", "document", "priority"],
       ["realtime", "Duplex voice engines behind WebSocket /v1/realtime (Haru-4B, MiniCPM-o 4.5: trials); the cascade itself uses transcribe, a chat route and speak", "realtime", "priority"],
+      ["face", "Bloom's talking face for /v1/realtime sessions that ask for it (session.start face: true): MuseTalk 1.5 on MLX, Bloom's speech in, pictures out (docs/face.md)", "face", "priority"],
       ["backdrop", "A 360° panorama, its depth and a dome mesh from text or an image (Thread's Sets backdrops), as an async job: POST /v1/backdrops, then poll /v1/backdrops/{id}", "backdrop", "priority"],
     ];
     // Any route missing (a first boot, or one added in a newer mux) is created empty; existing ones are left as they are.

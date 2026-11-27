@@ -3,7 +3,7 @@
 //
 //   MUX_KEY=… node deploy/realtime-measure.mjs [--url http://127.0.0.1:7070] [--turns 10] [--hearing auto|energy]
 //                                              [--llm agent] [--engine cascade|haru-4b|minicpm-o-4.5] [--barge-in]
-//                                              [--key-file path] [--json out.json]
+//                                              [--key-file path] [--json out.json] [--face]
 //
 // Each turn is a spoken English question, made with mux's own speak route (Kokoro af_heart), resampled to 16 kHz and
 // sent at real time in 20 ms frames, then silence at real time until Bloom has answered — as a microphone would. Two
@@ -14,6 +14,9 @@
 //   server   mux's own metrics event: speech end → turn decided → transcript → first LLM token → first audio.
 // Cold starts (a model that had to load) are counted apart and left out of p50/p90. --barge-in adds one turn that
 // speaks over Bloom's answer and reports how long Bloom took to stop (response.done interrupted; target ≤ 150 ms).
+// --face asks for Bloom's talking face (session.start face: true, docs/face.md) and adds, per turn, the face's first
+// frame after the first audio (mux's face.metrics and the client's own clock), the frames per second of audio it kept,
+// and how far its frames came behind their audio (p50, max) against mux's lead; and the idle frame rate between turns.
 // The key is read from MUX_KEY or --key-file and never printed. Nothing said is kept.
 import { readFileSync, writeFileSync } from "node:fs";
 import WebSocket from "ws";
@@ -109,10 +112,18 @@ async function main() {
     waiter = (e) => { if (pred(e) && !e._seen) { e._seen = true; clearTimeout(t); waiter = null; res(e); } };
   });
   ws.send(JSON.stringify({ type: "session.start", model: args.engine, llm: args.llm, hearing: args.hearing ?? "auto",
-    instructions: "You are Bloom, a business assistant. This is a latency test: answer every question in one short, plausible sentence." }));
+    instructions: "You are Bloom, a business assistant. This is a latency test: answer every question in one short, plausible sentence.", ...(args.face ? { face: true } : {}) }));
   const created = await next((e) => e.type === "session.created" || e.type === "session.ended", 200_000);
   if (created.type === "session.ended") { console.error(`✗ the session did not start: ${created.reason}`); process.exit(1); }
   console.log(`  session ${created.session_id}: engine ${created.engine}, hearing ${created.hearing}, LLM ${created.llm ?? "(tenant default)"}`);
+  if (args.face) {
+    const r = await next((e) => e.type === "face.ready" || (e.type === "error" && /^face_/.test(e.code)), 180_000).catch(() => null);
+    if (!r || r.type !== "face.ready") { console.error("✗ the face did not start (see the error above)"); process.exit(1); }
+    console.log(`  face ${r.identity}: ${r.model}, ${r.width}×${r.height} ${r.format} at ${r.fps} fps`);
+    await new Promise((res) => setTimeout(res, 2000));
+    const idle = events.filter((e) => e.type === "face.frame" && !e.response_id && e._at > performance.now() - 2000);
+    console.log(`  idle face: ${(idle.length / 2).toFixed(1)} frames/s while nobody speaks`);
+  }
 
   // A microphone: real-time 20 ms frames, speech when there is some queued, silence otherwise
   let queue = Buffer.alloc(0);
@@ -140,7 +151,14 @@ async function main() {
       const done = await next((e) => e.type === "response.done", 120_000);
       const m = await next((e) => e.type === "metrics", 5_000);
       const client = lastVoiced === null ? null : Math.round(firstAudio._at - lastVoiced);
-      rows.push({ turn: i + 1, client, ...m, status: done.status, heard: events.filter((e) => e.type === "transcript.final").at(-1)?.text });
+      let face = null;
+      if (args.face) {
+        const fm = await next((e) => e.type === "face.metrics" && e.response_id === done.response_id, 15_000).catch(() => null);
+        const ff = events.find((e) => e.type === "face.frame" && e.response_id === done.response_id);
+        face = fm && { first_frame_ms: fm.first_frame_ms, client_first_frame_ms: ff ? Math.round(ff._at - firstAudio._at) : null, fps: fm.fps, lag_p50_ms: fm.lag_p50_ms, lag_max_ms: fm.lag_max_ms, lead_ms: fm.lead_ms, frames: fm.frames };
+      }
+      rows.push({ turn: i + 1, client, ...m, face, status: done.status, heard: events.filter((e) => e.type === "transcript.final").at(-1)?.text });
+      if (args.face) console.log(face ? `      face: first frame ${fmt(face.first_frame_ms)} (client ${fmt(face.client_first_frame_ms)}) after the first audio · ${face.fps} fps of audio · lag p50 ${fmt(face.lag_p50_ms)}, max ${fmt(face.lag_max_ms)} (lead ${face.lead_ms} ms)` : "      face: ✗ no face.metrics");
       console.log(`  ${String(i + 1).padStart(2)}. client ${fmt(client)} · server ${fmt(m.speech_end_to_first_audio_ms)} (turn ${fmt(m.speech_end_to_turn_ms)}, words ${fmt(m.speech_end_to_transcript_ms)}, token ${fmt(m.speech_end_to_first_token_ms)})${m.cold_start ? " · cold start" : ""} · ${JSON.stringify(rows.at(-1).heard ?? "")}`);
       // Let the answer play out before the next question
       await new Promise((r) => setTimeout(r, 1500));
@@ -178,6 +196,14 @@ async function main() {
     console.log(`  ${label.padEnd(24)} p50 ${fmt(pct(col(k), 50)).padStart(8)}   p90 ${fmt(pct(col(k), 90)).padStart(8)}`);
   }
   console.log("  target (proposal): p50 ≤ 1100 ms through Railway; stretch 600 ms. Barge-in ≤ 150 ms.");
+  if (args.face) {
+    const fr = rows.filter((r) => r.face).map((r) => r.face);
+    const fc = (k) => fr.map((f) => f[k]).filter((v) => typeof v === "number");
+    console.log(`\nThe face, ${fr.length} answers:`);
+    console.log(`  first frame after first audio p50 ${fmt(pct(fc("first_frame_ms"), 50))}, p90 ${fmt(pct(fc("first_frame_ms"), 90))} (client p50 ${fmt(pct(fc("client_first_frame_ms"), 50))})`);
+    console.log(`  frames per second of audio p50 ${pct(fc("fps"), 50) ?? "–"} (asked 25) · lag behind its audio p50 ${fmt(pct(fc("lag_p50_ms"), 50))}, worst ${fmt(Math.max(0, ...fc("lag_max_ms")))}, lead ${fr[0]?.lead_ms ?? "–"} ms`);
+    console.log("  lip sync holds while the worst lag stays under the lead; past it the client must hold its audio back by the difference (docs/face.md).");
+  }
   if (args.json) writeFileSync(args.json, JSON.stringify({ base: BASE, rows, bargeIn }, null, 2));
   process.exit(rows.some((r) => r.error) ? 1 : 0);
 }

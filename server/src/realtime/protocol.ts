@@ -4,7 +4,7 @@
  * 16 kHz mono (the same bytes `input.audio` carries as base64). The whole message list, with examples, is in
  * docs/realtime.md; the names are the ones bloom for business codes against, so they change only with a new version.
  */
-import type { ChatTool, Message } from "./stages.js";
+import type { ChatTool, FaceOptions, Message } from "./stages.js";
 
 export const PROTOCOL_VERSION = "mux.realtime.v1";
 
@@ -36,6 +36,9 @@ export interface SessionStart {
   turn_silence_ms?: number;
   /** "auto" (default): the hear sidecar when it answers, else the energy VAD. "energy": always the energy VAD. */
   hearing?: "auto" | "energy" | "sidecar";
+  /** Opt-in: Bloom's talking face (docs/face.md). true, or {size (256–512 px), fps (10–30), format "jpeg"|"webp"}:
+   *  mux then sends face.frame events, speaking frames in step with response.audio.delta. Off by default. */
+  face?: boolean | FaceOptions;
 }
 
 export type ClientEvent =
@@ -73,6 +76,13 @@ export function parseClient(raw: string): ClientEvent {
       for (const k of ["model", "llm", "voice", "instructions", "user"]) if (e[k] !== undefined && !isStr(e[k])) throw new ProtocolError("invalid_event", `session.start ${k} must be a string`);
       if (e.tools !== undefined && !Array.isArray(e.tools)) throw new ProtocolError("invalid_event", "session.start tools must be an array of OpenAI chat tools");
       if (e.messages !== undefined && !Array.isArray(e.messages)) throw new ProtocolError("invalid_event", "session.start messages must be an array of chat messages");
+      if (e.face !== undefined && typeof e.face !== "boolean") {
+        const f = e.face as Record<string, unknown> | null;
+        if (!f || typeof f !== "object" || Array.isArray(f)) throw new ProtocolError("invalid_event", "session.start face must be true, false or {size, fps, format}");
+        if (f.size !== undefined && !(typeof f.size === "number" && f.size >= 256 && f.size <= 512)) throw new ProtocolError("invalid_event", "session.start face.size must be 256–512 (px)");
+        if (f.fps !== undefined && !(typeof f.fps === "number" && f.fps >= 10 && f.fps <= 30)) throw new ProtocolError("invalid_event", "session.start face.fps must be 10–30");
+        if (f.format !== undefined && f.format !== "jpeg" && f.format !== "webp") throw new ProtocolError("invalid_event", "session.start face.format must be \"jpeg\" or \"webp\"");
+      }
       break;
     case "response.create":
       if (e.messages !== undefined && !Array.isArray(e.messages)) throw new ProtocolError("invalid_event", "response.create messages must be an array of chat messages");

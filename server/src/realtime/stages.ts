@@ -43,3 +43,39 @@ export interface DuplexEngine {
 }
 export type DuplexFactory = (opts: { model: string; instructions: string; voice?: string }, onEvent: (e: DuplexEvent) => void, signal: AbortSignal) =>
   Promise<DuplexEngine>;
+
+/** What a face is doing: at rest, listening to the person (small nods, gaze shifts), or speaking Bloom's audio. */
+export type FaceMode = "idle" | "listening" | "speaking";
+
+/**
+ * One picture of the face. Speaking frames carry their response and `ptsMs` on that response's own audio clock (ms of
+ * its response.audio.delta sent before the frame's moment); idle and listening frames carry `responseId` null and
+ * `ptsMs` on the session's wall clock (ms since session.start).
+ */
+export interface FaceFrame { responseId: string | null; index: number; ptsMs: number; mode: FaceMode; image: Buffer; format: "jpeg" | "webp" }
+
+/** The end of a response's speech, as the face saw it: the frames it made for it. */
+export interface FaceSpeechDone { responseId: string; frames: number; audioMs: number }
+
+export interface FaceInfo { fps: number; width: number; height: number; format: "jpeg" | "webp"; identity: string; model: string }
+
+/** The talking face (server/realtime/face_server.py: MuseTalk 1.5 on MLX): Bloom's speech in, pictures out. */
+export interface Face {
+  readonly info: FaceInfo;
+  /** The person started or stopped speaking (vad.start / vad.end): listening or idle. Speaking follows speech. */
+  state(mode: FaceMode): void;
+  /** A piece of a response's speech, exactly as it was sent to the caller (pcm16 mono at `rate`). */
+  speech(responseId: string, pcm: Buffer, rate: number): void;
+  /** That response's speech is complete: the face makes its last frames and answers speech.done. */
+  speechEnd(responseId: string): void;
+  /** Barge-in or cancel: that response's frames are dropped now. */
+  cancel(responseId: string): void;
+  close(): void;
+}
+export interface FaceOptions { size?: number; fps?: number; format?: "jpeg" | "webp" }
+export type FaceEvent =
+  | { type: "frame"; frame: FaceFrame }
+  | { type: "speech.done"; done: FaceSpeechDone }
+  | { type: "error"; message: string }
+  | { type: "closed"; reason: string };
+export type FaceFactory = (opts: FaceOptions, onEvent: (e: FaceEvent) => void, signal: AbortSignal) => Promise<Face>;

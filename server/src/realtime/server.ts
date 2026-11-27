@@ -11,7 +11,7 @@ import { decide } from "../router/select.js";
 import { check } from "../router/limits.js";
 import { finish, newCtx, type Ctx } from "../router/metering.js";
 import { authenticate, type ApiKey, type Tenant } from "../tenants.js";
-import { duplexFor, hearingFor, routeSpeaker, routeThinker, routeTranscriber, type Caller } from "./adapters.js";
+import { duplexFor, faceFor, hearingFor, routeSpeaker, routeThinker, routeTranscriber, type Caller } from "./adapters.js";
 import { PROTOCOL_VERSION, ProtocolError, parseClient, type ServerEvent } from "./protocol.js";
 import { Session, type SessionDeps } from "./session.js";
 
@@ -143,7 +143,7 @@ function connected(ws: WebSocket, req: IncomingMessage, tenant: Tenant, key: Api
   const s: Session = new Session({
     ...(opts.deps ? opts.deps(caller) : {
       thinker: routeThinker(caller), speaker: routeSpeaker(caller), transcriber: routeTranscriber(caller),
-      hearing: hearingFor(settings().realtimeHearUrl || null), duplex: duplexFor(caller),
+      hearing: hearingFor(settings().realtimeHearUrl || null), duplex: duplexFor(caller), face: faceFor(caller),
       defaultLlm: tenant.default_route || undefined,
     }),
     defaultVoice: settings().realtimeVoice,

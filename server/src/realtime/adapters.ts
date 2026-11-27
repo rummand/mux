@@ -10,7 +10,7 @@ import { finish, newCtx, type Ctx } from "../router/metering.js";
 import { decide } from "../router/select.js";
 import { INPUT_RATE, parseWav, resample, wavOf } from "./audio.js";
 import type { SessionStart } from "./protocol.js";
-import type { DuplexEngine, DuplexEvent, DuplexFactory, Speaker, Thinker, ToolCall, Transcriber } from "./stages.js";
+import type { DuplexEngine, DuplexEvent, DuplexFactory, Face, FaceEvent, FaceFactory, FaceFrame, FaceOptions, Speaker, Thinker, ToolCall, Transcriber } from "./stages.js";
 import { EnergyVad, type HearEvent, type Hearing, type HearingFactory } from "./vad.js";
 
 /**
@@ -238,6 +238,78 @@ function connectDuplex(name: string, base: string, opts: { instructions: string;
         });
       } else if (m.type === "text" && m.text) onEvent({ type: "text", text: m.text });
       else if (m.type === "error") { if (!ready) { clearTimeout(timer); reject(new Error(m.message ?? "engine error")); } else onEvent({ type: "error", message: m.message ?? "engine error" }); }
+    });
+  });
+}
+
+/**
+ * The talking face (server/realtime/face_server.py, launchd com.mux.face, :8324): a model of kind `face` on the route
+ * `face` (musetalk-1.5-mlx), admitted like any local service: presence, and the memory floor (its GET /v1/models says
+ * `need_gb` until MuseTalk is loaded). One session at a time; a second one is refused by the sidecar, and the session
+ * then goes on with voice alone. Its protocol on ws://127.0.0.1:8324/face is in docs/face.md.
+ */
+export function faceFor(c: Caller): FaceFactory {
+  return async (opts, onEvent, signal) => {
+    const tenant = { ...c.tenant, data_border: c.tenant.data_border === "servers" ? "servers" as const : "own" as const };
+    const d = decide(tenant, "face", "face", null);
+    let last = "";
+    for (const m of d.candidates) {
+      let up;
+      try { up = await acquire(m); } catch (e) { last = `${m.id}: ${(e as Error).message}`; continue; }
+      // connectFace releases the model however its socket ends, a refusal included
+      try { return await connectFace(m.id, up.baseUrl, opts, onEvent, signal, () => release(m.id)); } catch (e) { last = `${m.id}: ${(e as Error).message}`; }
+    }
+    throw new MuxError(503, "face_unavailable", last || "no model is on the route face");
+  };
+}
+
+/** A frame from the sidecar: 4 bytes (big-endian) of JSON header length, the header, then the picture's bytes. */
+export function parseFaceFrame(buf: Buffer): FaceFrame | null {
+  if (buf.length < 4) return null;
+  const n = buf.readUInt32BE(0);
+  if (4 + n > buf.length) return null;
+  let h: { response_id?: string | null; index?: number; pts_ms?: number; mode?: string; format?: string };
+  try { h = JSON.parse(buf.subarray(4, 4 + n).toString("utf8")); } catch { return null; }
+  const mode = h.mode === "speaking" || h.mode === "listening" ? h.mode : "idle";
+  return { responseId: h.response_id ?? null, index: Number(h.index ?? 0), ptsMs: Number(h.pts_ms ?? 0), mode, format: h.format === "webp" ? "webp" : "jpeg", image: buf.subarray(4 + n) };
+}
+
+export function connectFace(model: string, base: string, opts: FaceOptions, onEvent: (e: FaceEvent) => void, signal: AbortSignal, onClose: () => void, readyMs = 120_000): Promise<Face> {
+  const url = `${base.replace(/^http/, "ws").replace(/\/v1$/, "").replace(/\/$/, "")}/face`;
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(url, { perMessageDeflate: false });
+    let ready = false, closed = false, released = false;
+    const free = () => { if (!released) { released = true; onClose(); } }; // the model is released once, however it ends
+    const close = () => { if (closed) return; closed = true; try { ws.close(); } catch { /* gone */ } free(); };
+    const send = (m: object) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(m)); };
+    // MuseTalk loads on the first session (~2 GB of weights, the reference face's latents)
+    const timer = setTimeout(() => { ws.terminate(); reject(new Error(`the face did not get ready within ${Math.round(readyMs / 1000)} s`)); }, readyMs);
+    signal.addEventListener("abort", () => { clearTimeout(timer); if (!ready) reject(new Error("the session ended")); send({ type: "end" }); close(); }, { once: true });
+    ws.once("error", (e) => { clearTimeout(timer); if (!ready) reject(e); });
+    ws.once("open", () => send({ type: "start", size: opts.size ?? 384, fps: opts.fps ?? 25, format: opts.format ?? "jpeg" }));
+    ws.on("close", (_code, why) => { if (ready && !closed) onEvent({ type: "closed", reason: String(why) || "the face went away" }); if (!ready) { clearTimeout(timer); reject(new Error(String(why) || "the face closed")); } closed = true; free(); });
+    ws.on("message", (data, binary) => {
+      if (binary) {
+        const f = parseFaceFrame(Buffer.from(data as Buffer));
+        if (f && ready) onEvent({ type: "frame", frame: f });
+        return;
+      }
+      let m: { type?: string; fps?: number; width?: number; height?: number; format?: string; identity?: string; model?: string; message?: string; response_id?: string; frames?: number; audio_ms?: number };
+      try { m = JSON.parse(String(data)); } catch { return; }
+      if (m.type === "ready" && !ready) {
+        ready = true;
+        clearTimeout(timer);
+        const info = { fps: Number(m.fps ?? opts.fps ?? 25), width: Number(m.width ?? 0), height: Number(m.height ?? 0), format: m.format === "webp" ? "webp" as const : "jpeg" as const, identity: String(m.identity ?? "bloom"), model: String(m.model ?? model) };
+        resolve({
+          info,
+          state: (mode) => send({ type: "state", mode }),
+          speech: (id, pcm, rate) => send({ type: "speech", response_id: id, sample_rate: rate, audio: pcm.toString("base64") }),
+          speechEnd: (id) => send({ type: "speech.end", response_id: id }),
+          cancel: (id) => send({ type: "cancel", response_id: id }),
+          close: () => { send({ type: "end" }); close(); },
+        });
+      } else if (m.type === "speech.done" && m.response_id) onEvent({ type: "speech.done", done: { responseId: m.response_id, frames: Number(m.frames ?? 0), audioMs: Number(m.audio_ms ?? 0) } });
+      else if (m.type === "error") { if (!ready) { clearTimeout(timer); reject(new Error(m.message ?? "face error")); ws.terminate(); } else onEvent({ type: "error", message: m.message ?? "face error" }); }
     });
   });
 }

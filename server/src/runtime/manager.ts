@@ -60,7 +60,7 @@ const isLocal = (m: Model) => m.backend === "llamacpp" || m.backend === "mlx" ||
  * or the backdrop server (server/backdrop/backdrop_server.py, com.mux.backdrop) on a loopback address. It loads its
  * model on the first request and lets it go when idle, and says which in GET /v1/models (`loaded`).
  */
-const SERVICE_KINDS = new Set(["image", "video", "video-camera", "video-subject", "depth", "reconstruct", "backdrop", "realtime"]);
+const SERVICE_KINDS = new Set(["image", "video", "video-camera", "video-subject", "depth", "reconstruct", "backdrop", "realtime", "face"]);
 export const isLocalService = (m: Model) => m.backend === "external" && SERVICE_KINDS.has(m.kind) && config.role !== "gateway"
   && /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:|\/|$)/i.test(m.base_url ?? "");
 const serviceInflight = new Map<string, number>();

@@ -9,8 +9,8 @@ The owner's decisions (accepted 27 November 2026): **cascade first, duplex as a 
 hosted on mux; English only now; one voice session per person.**
 
 Code: `server/src/realtime/` (protocol, session, stages, adapters, server), the sidecars in `server/realtime/`, the
-deploys `deploy/realtime.sh`, `deploy/haru.sh`, `deploy/minicpm-o.sh`, the measurement `deploy/realtime-measure.mjs`.
-Model notes: [`haru.md`](haru.md), [`minicpm-o.md`](minicpm-o.md).
+deploys `deploy/realtime.sh`, `deploy/haru.sh`, `deploy/minicpm-o.sh`, `deploy/face.sh`, the measurement
+`deploy/realtime-measure.mjs`. Model notes: [`haru.md`](haru.md), [`minicpm-o.md`](minicpm-o.md); the face: [`face.md`](face.md).
 
 ## The path
 
@@ -65,7 +65,7 @@ Speech comes back as pcm16 at the rate in each `response.audio.delta` (24 kHz fo
 
 | Event | Fields | |
 | --- | --- | --- |
-| `session.start` | `model?` (`"cascade"` default, `"haru-4b"`, `"minicpm-o-4.5"`, `"realtime"`, or a chat model = the LLM), `llm?` (chat route or model; default the tenant's default route), `voice?` (`af_heart`), `instructions?`, `tools?` (OpenAI chat tools), `tool_choice?`, `messages?` (the conversation so far, no system message), `auto_response?` (default true), `barge_in?` (default true), `user?`, `input_audio_format?` (`"pcm16"` only), `turn_silence_ms?` (300–3000), `hearing?` (`auto` · `energy` · `sidecar`) | First, once |
+| `session.start` | `model?` (`"cascade"` default, `"haru-4b"`, `"minicpm-o-4.5"`, `"realtime"`, or a chat model = the LLM), `llm?` (chat route or model; default the tenant's default route), `voice?` (`af_heart`), `instructions?`, `tools?` (OpenAI chat tools), `tool_choice?`, `messages?` (the conversation so far, no system message), `auto_response?` (default true), `barge_in?` (default true), `user?`, `input_audio_format?` (`"pcm16"` only), `turn_silence_ms?` (300–3000), `hearing?` (`auto` · `energy` · `sidecar`), `face?` (`true`, or `{size 256–512, fps 10–30, format "jpeg"\|"webp"}`: Bloom's talking face, [`face.md`](face.md); off by default) | First, once |
 | binary frame / `input.audio` | pcm16 16 kHz / `{audio: base64}` | The microphone |
 | `input.text` | `text` | Typing mid-call: a user turn (interrupts Bloom if it is speaking) |
 | `response.create` | `messages?` (replaces the history: Bloom's masked conversation), `instructions?`, `say?` (speak this sentence, no LLM) | Ask for an answer now; with `auto_response: false` this is how every answer starts |
@@ -78,7 +78,7 @@ Speech comes back as pcm16 at the rate in each `response.audio.delta` (24 kHz fo
 
 | Event | Fields |
 | --- | --- |
-| `session.created` | `session_id`, `protocol`, `engine`, `llm`, `voice`, `hearing`, `auto_response`, `barge_in`, `input_audio {format, sample_rate, channels, frame_ms, binary_frames}`, `output_audio {format, sample_rate (null until the first sentence for the cascade), channels}` |
+| `session.created` | `session_id`, `protocol`, `engine`, `llm`, `voice`, `hearing`, `auto_response`, `barge_in`, `input_audio {format, sample_rate, channels, frame_ms, binary_frames}`, `output_audio {format, sample_rate (null until the first sentence for the cascade), channels}`, `face` (`"starting"` when asked for and this mux has one, else null) |
 | `vad.start` / `vad.end` | `at_ms` on the session's input clock (ms of audio received) |
 | `turn.end` | `at_ms` (the end of the last voiced audio), `confidence` (Smart Turn's probability; 0.5 for a silence) |
 | `transcript.partial` / `transcript.final` | `text` (+ `turn` on final) |
@@ -88,8 +88,11 @@ Speech comes back as pcm16 at the rate in each `response.audio.delta` (24 kHz fo
 | `tool.call` | `response_id`, `call_id`, `name`, `arguments` (JSON text): run it, answer `tool.result` |
 | `response.done` | `response_id`, `status` (`completed` · `interrupted` · `cancelled` · `failed`), `text` (all the LLM wrote), `spoken_text` (what was heard), `usage {prompt_tokens, completion_tokens}` |
 | `metrics` | per response: `speech_end_to_turn_ms`, `speech_end_to_transcript_ms`, `speech_end_to_first_token_ms`, `speech_end_to_first_audio_ms`, `first_token_to_first_audio_ms`, `cold_start`, `engine`, `hearing`, `status` (all from the end of the last voiced frame, so the hangover is counted; null for a typed turn) |
-| `error` | `code`, `message`: the session goes on (a fatal one is followed by `session.ended`) |
-| `session.ended` | `reason`, `seconds`, `turns`, `usage`, `input_ms`, `output_ms` |
+| `face.ready` | `fps`, `width`, `height`, `format`, `identity`, `model`: the face's frames begin ([`face.md`](face.md)) |
+| `face.frame` | `response_id` (null for idle and listening), `index`, `pts_ms` (speaking: on that response's audio clock, the ms of its `response.audio.delta` before the frame's moment; else ms since session.start), `mode` (`idle` · `listening` · `speaking`), `format`, `image` (base64) |
+| `face.metrics` | per response, after its `response.done`: `status`, `frames`, `audio_ms`, `first_frame_ms` (first audio sent → first frame sent), `fps` (frames per second of audio), `lag_p50_ms`, `lag_max_ms` (a frame's send time minus its audio's), `lead_ms` |
+| `error` | `code`, `message`: the session goes on (a fatal one is followed by `session.ended`); `face_unavailable`, `face_unsupported` (a duplex engine) and `face_error` never end it |
+| `session.ended` | `reason`, `seconds`, `turns`, `usage`, `input_ms`, `output_ms`, `face_frames` (when the face was asked for) |
 
 The deck's draft names map to these: `audio.append` → binary frame / `input.audio`; `text.send` → `input.text`;
 `vad {speaking}` → `vad.start` / `vad.end`; `turn.end` = `turn.end`; `text.delta` / `audio.delta` →
@@ -244,4 +247,5 @@ p90, barge-in, hearing), with the date and what was loaded.
 | Kokoro-82M, voice af_heart | Apache-2.0 (already on mux) | huggingface.co/hexgrad/Kokoro-82M |
 | Haru-4B, haru_mlx | Apache-2.0 | [`haru.md`](haru.md) |
 | MiniCPM-o 4.5, llama.cpp-omni, the Comni demo | Apache-2.0, MIT, no licence file | [`minicpm-o.md`](minicpm-o.md) |
+| The face: MuseTalk 1.5, its MLX port, sd-vae-ft-mse, whisper-tiny, OpenCV | MIT, MIT (stated; no LICENSE file), MIT, Apache-2.0, Apache-2.0 | [`face.md`](face.md) |
 | `ws` (Node WebSocket) | MIT | npm |

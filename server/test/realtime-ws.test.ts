@@ -8,6 +8,7 @@ import { registerRealtime, keyOf, nodeSocketUrl } from "../src/realtime/server.j
 import { INPUT_RATE } from "../src/realtime/audio.js";
 import { saveProvider, type Provider } from "../src/providers.js";
 import { upsertModel, upsertRoute } from "../src/models.js";
+import type { FaceEvent } from "../src/realtime/stages.js";
 
 /** A real socket against a real listener, with fake model stages (no model is needed). */
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -32,6 +33,16 @@ const fakes = () => ({
   speaker: { speak: async () => ({ pcm: Buffer.alloc(4800), rate: 24_000 }) },
   transcriber: { transcribe: async (pcm: Buffer) => (pcm.length > 8000 ? "What is on today?" : "") },
   leadMs: 1e9,
+  // A face that makes one frame per piece of speech it is sent (used only by a session that asks: face true)
+  face: async (_o: unknown, onEvent: (e: FaceEvent) => void) => {
+    let n = 0; const heard = new Map<string, number>();
+    return {
+      info: { fps: 25, width: 256, height: 256, format: "jpeg" as const, identity: "bloom-test", model: "fake-face" },
+      state: () => undefined, cancel: () => undefined, close: () => undefined,
+      speech: (id: string, pcm: Buffer, rate: number) => { const at = heard.get(id) ?? 0; heard.set(id, at + (pcm.length / 2 / rate) * 1000); onEvent({ type: "frame", frame: { responseId: id, index: n++, ptsMs: at, mode: "speaking", format: "jpeg", image: Buffer.from("jpg") } }); },
+      speechEnd: (id: string) => onEvent({ type: "speech.done", done: { responseId: id, frames: n, audioMs: heard.get(id) ?? 0 } }),
+    };
+  },
 });
 
 const node = Fastify();
@@ -162,6 +173,25 @@ test("through a gateway: frames pass both ways, the person is named per tenant o
   assert.equal(atGw.prompt_tokens, 12);
   assert.equal(typeof atGw.seconds, "number");
   assert.equal(atGw.engine, "cascade");
+});
+
+test("through a gateway with face true: face.ready, face.frame after its audio, and face.metrics pass to the caller", async () => {
+  const ws = sock(gwUrl, { authorization: `Bearer ${bloomKey}` });
+  const { events } = await open(ws);
+  ws.send(JSON.stringify({ type: "session.start", user: "face-person", llm: "agent", hearing: "energy", face: true }));
+  assert.equal((await until(events, "session.created")).face, "starting");
+  assert.equal((await until(events, "face.ready")).identity, "bloom-test");
+  ws.send(JSON.stringify({ type: "input.text", text: "Show me your face." }));
+  const m = await until(events, "face.metrics");
+  assert.equal(m.status, "completed");
+  const frames = events.filter((e) => e.type === "face.frame");
+  assert.ok(frames.length >= 2);
+  const firstAudio = events.findIndex((e) => e.type === "response.audio.delta");
+  assert.ok(events.indexOf(frames[0]) > firstAudio, "the first frame comes after the first audio");
+  assert.equal(Buffer.from(frames[0].image as string, "base64").toString(), "jpg");
+  ws.send(JSON.stringify({ type: "session.end" }));
+  assert.equal((await until(events, "session.ended")).face_frames, frames.length);
+  ws.close();
 });
 
 test("through a gateway: an LLM with no model on the node is refused before the session starts", async () => {
