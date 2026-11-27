@@ -40,5 +40,13 @@ and Chinese; voice cloning from a reference clip. Assistant-tuned (unlike Haru).
 
 - The output sample rate is taken as 24 kHz (the card's duplex example writes 24 kHz); check the first take.
 - The Comni worker's `/ws/duplex` messages were read from its `worker.py` on 27 November; the branch moves.
-- Nothing has run here: no Metal, no worker. The wrapper compiles; its protocol is the one the Haru wrapper proved
+- **Tried on the Mac, 2026-11-27: no speech came out.** First run: `deploy/minicpm-o.sh` wrote the worker's
+  config with its `node -e` arguments off by one (`process.argv` has no script path under `-e`), so the worker port
+  was empty and the worker crashed at start (`service.worker_base_port: Input should be a valid integer`); its
+  "measurement" heard nothing and is not a result. Fixed. Second run: the worker and llama.cpp-omni start (LLM, TTS,
+  Token2Wav load), but every turn timed out (5 of 5): the TTS step writes `wav_0.wav`… while the merge looks for
+  `tts_output_chunk_N.wav` ("no valid WAV files to merge"), and Token2Wav runs from `./tools/omni/pyt2w/token2wav`,
+  which may not be in this checkout. The branch `feat/web-demo` and the Comni worker do not fit together as installed;
+  next: read llama.cpp-omni's TTS output naming at the pinned commit.
+- Nothing ran before 27 November: no Metal, no worker. The wrapper compiles; its protocol is the one the Haru wrapper proved
   through mux against a fake model.

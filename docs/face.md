@@ -225,15 +225,19 @@ the motion before the model.
 
 ## Measured
 
-Nothing on the Mac yet. Put the first numbers of `./deploy/face.sh --measure` here, with the date and what else was
-loaded:
+2026-11-27, MuseTalk 1.5 q8 on MLX, 384 px JPEG at 25 fps, the face made with flux2-klein-4b-q4 (seed 20261127;
+awaiting the owner's approval, `docs/face/` not committed yet). Loaded at the time: qwen3.6, Haru (idle), Record's
+services, the CI runners.
 
-- first-frame latency, p50 and p90;
-- fps (wall, and per second of audio);
-- lag p50 and max, against the 400 ms lead;
-- peak memory;
-- the size;
-- the client's first-frame delay through `/v1/realtime`.
+- **The bench (`face_server.py --bench`, 13.6 s of speech, 3 runs):** first frame 190–193 ms after the first audio
+  (2.1 s on the cold first run); **13–15 frames/s of wall time** against the 25 needed; lag behind its audio p50
+  5.3–8.9 s, max 10–15 s against mux's 400 ms lead; peak MLX memory 5.3 GB; load 1.7 s. **It does not keep up with
+  real time**: every answer longer than a second or two drifts out of lip sync.
+- **Through `/v1/realtime` (5 turns, face on):** voice unchanged (end of speech → first audio p50 878 ms, p90 1052 ms);
+  first frame p50 201 ms, p90 209 ms after the first audio; 25 frames per audio second delivered, but lag p50 2.4 s,
+  worst 4.2 s.
+- So: the first frame is fast enough; the frame rate is not. Next: fewer frames (12.5 fps with each shown twice),
+  a smaller face (256 px), or `--still` (the reference's mouth, motion only) until MuseTalk is faster here.
 
 ## What is unproven, and what comes next
 

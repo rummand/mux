@@ -42,7 +42,14 @@ Haru speaks).
 `transcribe` route, WER against the sentence, and the step time. **PASS** when the better forced mode has WER ≤ 0.25
 on every sentence. The control tells a broken setup from a FAIL. Takes in `~/.mux/haru/forced/`.
 
-**Result:** not run yet (needs the Mac). Put the printed table here.
+**Result (2026-11-27, 8-bit, on the Mac): FAIL.** Best forced WER per sentence: 0.73 ("You have three invoices that
+are more than thirty days late."), 0.36 ("Your next meeting is with Anna at two o'clock on Thursday."), 1.38 ("I have
+drafted the reply and put it on your desk for review."); the pass mark is ≤ 0.25 on every sentence. The text stream
+does follow the sentence, but the voice does not: Haru opens with its own "Hello, I am …" and runs on past the end
+into words of its own ("I will be your assistant and I will try to answer …"). The control (unforced) is WER 1.38
+too, so the setup works: Haru simply does not speak a given sentence faithfully. A forced step costs 16.7 ms p50 of a
+133 ms frame, so speed is not the problem. Takes in `~/.mux/haru/forced/`, log in `~/.mux/logs/haru-forced-text.log`.
+Haru is installed (com.mux.haru on :8327, model haru-4b on the route realtime) as a trial.
 
 ## Known limits
 

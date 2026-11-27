@@ -59,7 +59,7 @@ git -C "$DIR/demo" fetch -q origin Comni && git -C "$DIR/demo" checkout -q FETCH
 echo "  at $(git -C "$DIR/demo" rev-parse --short HEAD)"
 [ -x "$DIR/demo/.venv/base/bin/python" ] || (cd "$DIR/demo" && PYTHON="$PY" bash install.sh)
 "$DIR/demo/.venv/base/bin/pip" install -q "websockets>=14,<16"
-node -e 'const [,,root,gguf,cpp,wp]=process.argv; console.log(JSON.stringify({backend:"cpp",cpp_backend:{llamacpp_root:root,model_dir:gguf,llm_model:"MiniCPM-o-4_5-Q4_K_M.gguf",cpp_server_port:Number(cpp),ctx_size:8192,n_gpu_layers:99},audio:{playback_delay_ms:200},service:{gateway_port:8040,worker_base_port:Number(wp),num_workers:1,max_queue_size:10,request_timeout:300.0,data_dir:"data"},duplex:{pause_timeout:60.0},recording:{enabled:false}},null,2))' \
+node -e 'const [,root,gguf,cpp,wp]=process.argv; console.log(JSON.stringify({backend:"cpp",cpp_backend:{llamacpp_root:root,model_dir:gguf,llm_model:"MiniCPM-o-4_5-Q4_K_M.gguf",cpp_server_port:Number(cpp),ctx_size:8192,n_gpu_layers:99},audio:{playback_delay_ms:200},service:{gateway_port:8040,worker_base_port:Number(wp),num_workers:1,max_queue_size:10,request_timeout:300.0,data_dir:"data"},duplex:{pause_timeout:60.0},recording:{enabled:false}},null,2))' \
   "$DIR/llama.cpp-omni" "$DIR/gguf" "$CPP_PORT" "$WORKER_PORT" > "$DIR/demo/config.json"
 
 echo "→ launchd agent com.mux.minicpm-o on :$PORT"
