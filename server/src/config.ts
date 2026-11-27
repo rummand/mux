@@ -96,6 +96,20 @@ export const defaultSettings = {
    * on the Mac, and the gateway's own tenant on the Mac (Railway's calls arrive as it). The owner, 19 November 2026.
    */
   convertTenants: ["bloom-for-business", "bloom-design-composer-test", "gateway-railway"] as string[],
+  /**
+   * The tenants that may open a voice session (WebSocket /v1/realtime, docs/realtime.md): bloom for business on the
+   * gateway, its test tenant on the Mac, and the gateway's own tenant on the Mac (Railway's sessions arrive as it).
+   * The owner, 27 November 2026: Talking to Bloom, the bloom tenant only at first.
+   */
+  realtimeTenants: ["bloom-for-business", "bloom-design-composer-test", "gateway-railway"] as string[],
+  /** Voice sessions this mux holds at once (each holds a hearing, an LLM stream and speech on the Mac); then 503 realtime_busy. */
+  realtimeMaxSessions: 4,
+  /** A voice session ends after this many minutes (session.ended reason "time limit"). */
+  realtimeMaxMinutes: 30,
+  /** The hear sidecar (Silero VAD + Smart Turn v3 + parakeet-mlx, server/realtime/hear_server.py); "" = the energy VAD and whisper only. */
+  realtimeHearUrl: "ws://127.0.0.1:8320/hear",
+  /** The voice a session speaks with when session.start names none: Kokoro's af_heart (bloom's English voice). */
+  realtimeVoice: "af_heart",
 };
 export type Settings = typeof defaultSettings;
 

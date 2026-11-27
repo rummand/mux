@@ -7,6 +7,7 @@ import { db, event, now, settings } from "./db.js";
 import { getModel, getRoute, listModels, listRoutes, upsertModel, upsertRoute, type Kind } from "./models.js";
 import { registerGateway } from "./api/gateway.js";
 import { registerAdmin } from "./admin/routes.js";
+import { registerRealtime } from "./realtime/server.js";
 import { pruneSamples, sampleModels } from "./admin/resources.js";
 import { startHealer } from "./healer.js";
 import { startLens } from "./lens.js";
@@ -52,6 +53,7 @@ function seed() {
       ["depth", "Metric depth and focal length from one photo: POST /v1/depth (Thread's Reference Build, Measure)", "depth", "priority"],
       ["reconstruct", "Cameras and a metric point cloud from 2–12 photos, as an async job: POST /v1/reconstruct, then poll /v1/reconstruct/{id}", "reconstruct", "priority"],
       ["convert", "Documents to PDF: a Word, PowerPoint, Excel or OpenDocument file in, its pages as a PDF out (LibreOffice headless on the Mac, its network denied by the OS): POST /v1/convert", "document", "priority"],
+      ["realtime", "Duplex voice engines behind WebSocket /v1/realtime (Haru-4B, MiniCPM-o 4.5: trials); the cascade itself uses transcribe, a chat route and speak", "realtime", "priority"],
       ["backdrop", "A 360° panorama, its depth and a dome mesh from text or an image (Thread's Sets backdrops), as an async job: POST /v1/backdrops, then poll /v1/backdrops/{id}", "backdrop", "priority"],
     ];
     // Any route missing (a first boot, or one added in a newer mux) is created empty; existing ones are left as they are.
@@ -99,6 +101,7 @@ if (config.role === "gateway") {
   }
 }
 registerGateway(app);
+registerRealtime(app);
 registerAdmin(app);
 
 if (existsSync(config.webDir)) {

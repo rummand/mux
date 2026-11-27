@@ -157,6 +157,12 @@ CREATE TABLE IF NOT EXISTS brain_pages (
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
 );
 -- The assistant's conversations, kept on the server so every device sees them.
+CREATE TABLE IF NOT EXISTS realtime_sessions (
+  id TEXT PRIMARY KEY, ts INTEGER NOT NULL, ended_at INTEGER, tenant_id TEXT NOT NULL, key_id TEXT, end_user TEXT, engine TEXT, llm TEXT, hearing TEXT,
+  node TEXT, seconds REAL DEFAULT 0, turns INTEGER DEFAULT 0, prompt_tokens INTEGER DEFAULT 0, completion_tokens INTEGER DEFAULT 0,
+  input_ms INTEGER DEFAULT 0, output_ms INTEGER DEFAULT 0, reason TEXT
+);
+CREATE INDEX IF NOT EXISTS realtime_sessions_ts ON realtime_sessions(ts);
 CREATE TABLE IF NOT EXISTS assistant_conversations (
   id TEXT PRIMARY KEY, title TEXT NOT NULL, messages TEXT NOT NULL, page TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
 );
